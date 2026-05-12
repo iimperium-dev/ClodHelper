@@ -9,7 +9,7 @@
 
 ## Скачать
 
-[Последний релиз →](https://github.com/iimperium/clod-helper/releases/latest)
+[Последний релиз →](https://github.com/mogylnyy/Clod-Helper-v1/releases)
 
 Файл `Clod_Helper_*_x64-setup.exe` — ~10 МБ, Windows 10/11.
 
