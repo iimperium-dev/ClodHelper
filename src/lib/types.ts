@@ -52,3 +52,34 @@ export type WizardStep =
   | "deps"
   | "install"
   | "done";
+
+// ─── Dashboard / Shim ────────────────────────────────────────────
+
+export interface ShimStatus {
+  running: boolean;
+  pid?: number;
+  uptime_sec?: number;
+  listen?: string;
+  /** URL с замаскированным паролем: http://user:****@host:port */
+  upstream_masked?: string;
+  upstream_host?: string;
+  upstream_port?: number;
+}
+
+export interface ShimTestResult {
+  ok: boolean;
+  latency_ms?: number;
+  error?: string;
+  external_ip?: string;
+}
+
+// ─── App-level navigation ────────────────────────────────────────
+
+export type AppView = "dashboard" | "settings" | "wizard";
+
+// ─── Persistent settings (mirror of Rust Settings) ───────────────
+
+export interface AppSettings {
+  proxy_url?: string;
+  autostart_dashboard: boolean;
+}

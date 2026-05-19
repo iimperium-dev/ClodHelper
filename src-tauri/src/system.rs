@@ -80,3 +80,8 @@ pub fn detect_python() -> PythonInfo {
         command: None,
     }
 }
+
+/// Удобный shortcut: только команда (`py` / `python` / `python3`) если есть.
+pub fn detect_python_cmd() -> Option<String> {
+    detect_python().command
+}

@@ -50,6 +50,33 @@ def parse_upstream(url: str) -> tuple[str, int, str | None]:
     return p.hostname, p.port, auth
 
 
+def enable_keepalive(sock: socket.socket) -> None:
+    """Включить TCP keepalive: NAT/firewall между нами и upstream не должен
+    тихо убивать idle-соединение посреди долгого SSE-стрима Claude Code.
+
+    Идея: каждые 30 сек слать невидимый probe-пакет (заголовок TCP без
+    данных). Если 5 проб подряд не получили ACK — рвём соединение явно
+    (а не молча получаем RST через несколько минут).
+    """
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    except OSError:
+        return
+    # Платформо-специфичные опции — на Windows работают через TCP_KEEPIDLE
+    # с Python 3.7+. На Linux — те же константы. На macOS — TCP_KEEPALIVE.
+    try:
+        if hasattr(socket, "TCP_KEEPIDLE"):
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 30)
+        elif hasattr(socket, "TCP_KEEPALIVE"):
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPALIVE, 30)
+        if hasattr(socket, "TCP_KEEPINTVL"):
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
+        if hasattr(socket, "TCP_KEEPCNT"):
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 5)
+    except OSError:
+        pass
+
+
 def pipe(src: socket.socket, dst: socket.socket) -> None:
     """Перекачивать байты src → dst пока кто-то из них не закроется."""
     try:
@@ -90,6 +117,17 @@ def handle_client(
 
         # Подключаемся к upstream-прокси.
         upstream = socket.create_connection((upstream_host, upstream_port), timeout=30)
+
+        # Включаем TCP keepalive на оба сокета — Claude Code держит SSE-стрим
+        # минутами; без keepalive NAT/прокси-провайдер тихо убивают idle
+        # соединение → клиент получает "socket closed unexpectedly".
+        enable_keepalive(client)
+        enable_keepalive(upstream)
+
+        # Снимаем 30-сек timeout с client после прокидки заголовков —
+        # дальше идёт long-lived стрим, блокирующий recv() — это норма.
+        client.settimeout(None)
+        upstream.settimeout(None)
 
         # Если есть auth — нужно вставить Proxy-Authorization в первый запрос.
         # CONNECT-запрос и обычный HTTP-запрос обрабатываем одинаково: просто

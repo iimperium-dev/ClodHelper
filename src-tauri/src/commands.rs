@@ -6,6 +6,8 @@ use serde::Deserialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::proxy::{self, ProxyCheckResult, ProxyConfig};
+use crate::settings::{self, Settings};
+use crate::shim::{self, ShimStatus, ShimTestResult};
 use crate::system::{self, NodeInfo, PythonInfo};
 
 #[tauri::command]
@@ -205,6 +207,12 @@ pub async fn run_install(
         // не надо. Сообщение для пользователя:
         emit(&app, "");
         emit(&app, "✓ Claude Desktop настроен");
+    }
+
+    // Сохраняем proxy_url в settings.json чтобы при следующем запуске
+    // приложение открыло Dashboard (а не повторно Wizard).
+    if let Err(e) = settings::set_proxy_url(proxy_url.clone()) {
+        log_line(&log_file, &format!("WARN: settings save failed: {e}"));
     }
 
     emit(&app, "");
@@ -467,5 +475,81 @@ async fn run_ps_script(
     .map_err(|e| format!("Внутренняя ошибка: {e}"))?;
 
     result
+}
+
+// ─── Shim control (Dashboard) ────────────────────────────────────
+
+#[tauri::command]
+pub fn shim_status() -> ShimStatus {
+    shim::status()
+}
+
+#[tauri::command]
+pub async fn shim_start() -> Result<(), String> {
+    // Запуск через .vbs — синхронный shell, обернём в blocking чтобы не
+    // блокировать tokio executor.
+    tokio::task::spawn_blocking(shim::start)
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))?
+}
+
+#[tauri::command]
+pub async fn shim_stop() -> Result<usize, String> {
+    tokio::task::spawn_blocking(shim::stop)
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))?
+}
+
+#[tauri::command]
+pub async fn shim_restart() -> Result<(), String> {
+    tokio::task::spawn_blocking(shim::restart)
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))?
+}
+
+#[tauri::command]
+pub async fn shim_test() -> ShimTestResult {
+    shim::test().await
+}
+
+#[tauri::command]
+pub fn shim_script_path() -> Option<String> {
+    // Возвращаем путь только если файл фактически существует — это сигнал
+    // "шим установлен", по нему App.tsx решает Dashboard vs Wizard.
+    shim::shim_script_path()
+        .filter(|p| p.exists())
+        .map(|p| p.to_string_lossy().to_string())
+}
+
+// ─── Settings ────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn settings_get() -> Settings {
+    settings::load()
+}
+
+#[tauri::command]
+pub async fn settings_set_proxy(url: String) -> Result<Settings, String> {
+    // 1) Validate proxy first — fail fast.
+    proxy::parse(&url)?;
+
+    // 2) Persist to settings.json.
+    let saved = settings::set_proxy_url(url.clone())?;
+
+    // 3) Write VBS with new proxy URL.
+    let py = system::detect_python_cmd().unwrap_or_else(|| "python".to_string());
+    let url_for_vbs = url.clone();
+    tokio::task::spawn_blocking(move || {
+        shim::write_startup_vbs(&url_for_vbs, Some(&py))
+    })
+    .await
+    .map_err(|e| format!("Внутренняя ошибка: {e}"))??;
+
+    // 4) Restart shim so new URL applies immediately.
+    tokio::task::spawn_blocking(shim::restart)
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))??;
+
+    Ok(saved)
 }
 
