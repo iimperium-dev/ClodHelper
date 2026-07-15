@@ -84,6 +84,12 @@ pub fn status() -> KillswitchStatus {
 /// версионированный путь MSIX (Codex в WindowsApps), который пересобирается при
 /// каждом включении, поэтому апдейт Store не ломает killswitch.
 ///
+/// Граница по MSIX: правила по `-Program` надёжно матчат exe с обычным путём —
+/// это ВСЕ сетевые дети агента Codex (node.exe, codex*.exe в WindowsApps), т.е.
+/// именно тот трафик, что реально ходит наружу. Главный Electron-процесс MSIX
+/// (ChatGPT.exe) под пакетной идентичностью в редких случаях требует правила по
+/// `-Package` SID — но егресс-риск несёт агентный рантайм, а он покрыт путём.
+///
 /// Требует прав администратора → выполняется через elevated PowerShell (UAC).
 pub fn enable(program_paths: &[String]) -> Result<(), String> {
     if program_paths.is_empty() {
