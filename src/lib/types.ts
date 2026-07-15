@@ -95,4 +95,52 @@ export type AppView = "dashboard" | "settings" | "wizard";
 export interface AppSettings {
   proxy_url?: string;
   autostart_dashboard: boolean;
+  app_profiles?: AppProfile[];
+  killswitch_enabled?: boolean;
+}
+
+// ─── App profiles (проксируемые приложения) ──────────────────────
+
+export type LaunchKind = "exe_flag" | "msix" | "custom";
+
+export interface AppProfile {
+  id: string;
+  name: string;
+  kind: LaunchKind;
+  exe_path?: string;
+  app_id?: string;
+  process_names: string[];
+  enabled: boolean;
+  builtin: boolean;
+}
+
+/** Runtime-статус профиля (mirror of Rust AppProfileStatus). */
+export interface AppProfileStatus {
+  id: string;
+  name: string;
+  kind: LaunchKind;
+  enabled: boolean;
+  builtin: boolean;
+  installed: boolean;
+  location?: string;
+  desktop_shortcut: boolean;
+  process_names: string[];
+}
+
+export type ShortcutTarget = "desktop" | "taskbar";
+
+// ─── Killswitch ──────────────────────────────────────────────────
+
+export interface KillswitchStatus {
+  active: boolean;
+  rule_count: number;
+  blocked_processes: string[];
+}
+
+// ─── Global proxy env ────────────────────────────────────────────
+
+export interface GlobalProxyEnv {
+  present: boolean;
+  /** [name, value] пары. */
+  values: [string, string][];
 }

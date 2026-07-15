@@ -1,6 +1,6 @@
 [package]
 name = "clod-helper"
-version = "0.2.0"
+version = "0.3.0"
 description = "Установщик Claude Code и Claude Desktop через прокси"
 authors = ["iimperium"]
 edition = "2021"
@@ -30,6 +30,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 sysinfo = "0.32"
 dirs = "5"
+tauri-plugin-dialog = "2.7.1"
 
 [profile.release]
 panic = "abort"

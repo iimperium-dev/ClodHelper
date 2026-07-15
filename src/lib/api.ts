@@ -1,14 +1,19 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AppProfile,
+  AppProfileStatus,
   AppSettings,
   CursorInfo,
   CursorSetupResult,
+  GlobalProxyEnv,
+  KillswitchStatus,
   NodeInfo,
   ProxyCheckResult,
   ProxyConfig,
   PythonInfo,
   ShimStatus,
   ShimTestResult,
+  ShortcutTarget,
 } from "./types";
 
 export async function detectNode(): Promise<NodeInfo> {
@@ -83,4 +88,62 @@ export async function settingsGet(): Promise<AppSettings> {
 
 export async function settingsSetProxy(url: string): Promise<AppSettings> {
   return invoke<AppSettings>("settings_set_proxy", { url });
+}
+
+// ─── App profiles ────────────────────────────────────────────────
+
+export async function appsList(): Promise<AppProfileStatus[]> {
+  return invoke<AppProfileStatus[]>("apps_list");
+}
+
+export async function appsSet(
+  profiles: AppProfile[],
+): Promise<AppProfileStatus[]> {
+  return invoke<AppProfileStatus[]>("apps_set", { profiles });
+}
+
+export async function appsAddCustom(
+  name: string,
+  exePath: string,
+): Promise<AppProfileStatus[]> {
+  return invoke<AppProfileStatus[]>("apps_add_custom", { name, exePath });
+}
+
+export async function appsRemove(id: string): Promise<AppProfileStatus[]> {
+  return invoke<AppProfileStatus[]>("apps_remove", { id });
+}
+
+export async function appsLaunch(id: string): Promise<void> {
+  return invoke<void>("apps_launch", { id });
+}
+
+export async function appsCreateShortcut(
+  id: string,
+  target: ShortcutTarget,
+): Promise<string> {
+  return invoke<string>("apps_create_shortcut", { id, target });
+}
+
+// ─── Killswitch ──────────────────────────────────────────────────
+
+export async function killswitchStatus(): Promise<KillswitchStatus> {
+  return invoke<KillswitchStatus>("killswitch_status");
+}
+
+export async function killswitchEnable(): Promise<KillswitchStatus> {
+  return invoke<KillswitchStatus>("killswitch_enable");
+}
+
+export async function killswitchDisable(): Promise<KillswitchStatus> {
+  return invoke<KillswitchStatus>("killswitch_disable");
+}
+
+// ─── Global proxy env ────────────────────────────────────────────
+
+export async function globalProxyEnv(): Promise<GlobalProxyEnv> {
+  return invoke<GlobalProxyEnv>("global_proxy_env");
+}
+
+export async function clearGlobalProxyEnv(): Promise<GlobalProxyEnv> {
+  return invoke<GlobalProxyEnv>("clear_global_proxy_env");
 }

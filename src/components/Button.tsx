@@ -1,14 +1,23 @@
 import { type ButtonHTMLAttributes, forwardRef } from "react";
 import { cn } from "../lib/cn";
 
-type Variant = "primary" | "secondary" | "ghost";
+type Variant = "primary" | "secondary" | "ghost" | "danger";
+type Size = "sm" | "md";
 
 interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: Variant;
+  size?: Size;
 }
 
+/*
+  Кнопка по дизайн-правилам:
+  - press-feedback scale(0.97) на :active, 120ms ease-out-quint
+  - только transform+opacity в переходах
+  - focus-visible ring наследуется из base-стилей (index.css)
+  - акцент (emerald) редок — variant=primary только для одного CTA на экран
+*/
 export const Button = forwardRef<HTMLButtonElement, Props>(function Button(
-  { variant = "primary", className, children, ...rest },
+  { variant = "primary", size = "md", className, children, ...rest },
   ref,
 ) {
   return (
@@ -16,13 +25,19 @@ export const Button = forwardRef<HTMLButtonElement, Props>(function Button(
       ref={ref}
       {...rest}
       className={cn(
-        "inline-flex items-center justify-center gap-2 rounded-lg px-5 py-2.5 text-[14px] font-medium transition-all duration-150 disabled:cursor-not-allowed disabled:opacity-40",
+        "inline-flex items-center justify-center gap-2 rounded-[10px] font-medium",
+        "transition-[transform,background-color,border-color,filter,opacity] duration-[160ms] ease-[cubic-bezier(0.22,1,0.36,1)]",
+        "active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100",
+        size === "sm" && "px-3 py-1.5 text-[13px]",
+        size === "md" && "px-4 py-2.5 text-[14px]",
         variant === "primary" &&
-          "bg-vb-emerald text-black hover:brightness-110 active:scale-[0.98] shadow-[0_4px_16px_rgba(16,185,129,0.25)]",
+          "bg-vb-emerald text-black hover:bg-vb-emerald-bright shadow-[0_2px_12px_var(--color-vb-emerald-glow)]",
         variant === "secondary" &&
-          "bg-vb-surface text-vb-silver border border-vb-border hover:border-vb-silver-dim",
+          "bg-vb-surface-2 text-vb-silver border border-vb-border hover:border-vb-border-strong hover:bg-vb-surface-2/80",
         variant === "ghost" &&
-          "text-vb-silver-dim hover:text-vb-silver hover:bg-vb-surface/60",
+          "text-vb-silver-dim hover:text-vb-silver hover:bg-vb-surface-2/60",
+        variant === "danger" &&
+          "bg-vb-loss/10 text-vb-loss border border-vb-loss/30 hover:bg-vb-loss/15 hover:border-vb-loss/50",
         className,
       )}
     >

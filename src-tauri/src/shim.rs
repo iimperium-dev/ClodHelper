@@ -19,7 +19,7 @@ use std::time::Duration;
 use serde::Serialize;
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
 
-const LISTEN_PORT: u16 = 8889;
+pub const LISTEN_PORT: u16 = 8889;
 const SHIM_FILENAME: &str = "local-proxy.py";
 const INSTALL_DIR_REL: &str = "ClaudeDesktopProxy";
 const STARTUP_VBS_NAME: &str = "ClaudeDesktopProxy.vbs";

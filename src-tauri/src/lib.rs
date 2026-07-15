@@ -1,4 +1,7 @@
+mod apps;
 mod commands;
+mod env_proxy;
+mod firewall;
 mod proxy;
 mod settings;
 mod shim;
@@ -22,6 +25,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec!["--tray"]),
@@ -47,6 +51,20 @@ pub fn run() {
             // Settings
             commands::settings_get,
             commands::settings_set_proxy,
+            // App profiles
+            commands::apps_list,
+            commands::apps_set,
+            commands::apps_add_custom,
+            commands::apps_remove,
+            commands::apps_launch,
+            commands::apps_create_shortcut,
+            // Killswitch
+            commands::killswitch_status,
+            commands::killswitch_enable,
+            commands::killswitch_disable,
+            // Global env
+            commands::global_proxy_env,
+            commands::clear_global_proxy_env,
         ])
         .setup(|app| {
             setup_tray(app.handle())?;

@@ -30,7 +30,7 @@ export function WizardShell({ step, children, footer }: Props) {
               Установка Claude через прокси
             </div>
           </div>
-          <div className="text-[11px] font-mono text-vb-silver-dim">v0.1.0</div>
+          <div className="text-[11px] font-mono text-vb-silver-dim">v0.3.0</div>
         </div>
         <div className="mt-7 flex items-center gap-2">
           {STEPS.map((s, i) => (

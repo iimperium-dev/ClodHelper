@@ -5,6 +5,9 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::apps::{self, AppProfile, AppProfileStatus, ShortcutTarget};
+use crate::env_proxy::{self, GlobalProxyEnv};
+use crate::firewall::{self, KillswitchStatus};
 use crate::proxy::{self, ProxyCheckResult, ProxyConfig};
 use crate::settings::{self, Settings};
 use crate::shim::{self, ShimStatus, ShimTestResult};
@@ -672,6 +675,180 @@ pub fn shim_script_path() -> Option<String> {
 #[tauri::command]
 pub fn settings_get() -> Settings {
     settings::load()
+}
+
+// ─── App profiles (проксируемые приложения) ─────────────────────
+
+/// Список профилей + их runtime-статус (найдено ли приложение, есть ли ярлык).
+#[tauri::command]
+pub fn apps_list() -> Vec<AppProfileStatus> {
+    let s = settings::load_with_presets();
+    apps::statuses(&s.app_profiles)
+}
+
+/// Сохранить новое состояние профилей (enabled-галочки, добавленные свои).
+/// Если killswitch активен — правила файрвола НЕ пересобираются автоматически
+/// здесь (это делает отдельный killswitch_enable), чтобы не плодить UAC-промпты
+/// на каждый чих. UI подскажет «переприменить killswitch» если нужно.
+#[tauri::command]
+pub async fn apps_set(profiles: Vec<AppProfile>) -> Result<Vec<AppProfileStatus>, String> {
+    let saved = settings::set_profiles(profiles)?;
+    Ok(apps::statuses(&saved.app_profiles))
+}
+
+/// Добавить кастомный профиль (пользователь указал exe).
+#[tauri::command]
+pub async fn apps_add_custom(
+    name: String,
+    exe_path: String,
+) -> Result<Vec<AppProfileStatus>, String> {
+    if !std::path::Path::new(&exe_path).exists() {
+        return Err("Файл не найден по указанному пути".into());
+    }
+    let mut s = settings::load_with_presets();
+    // id = custom-<N>
+    let n = s
+        .app_profiles
+        .iter()
+        .filter(|p| p.id.starts_with("custom-"))
+        .count()
+        + 1;
+    let leaf = std::path::Path::new(&exe_path)
+        .file_name()
+        .map(|x| x.to_string_lossy().to_string())
+        .unwrap_or_else(|| "app.exe".into());
+    s.app_profiles.push(AppProfile {
+        id: format!("custom-{n}"),
+        name,
+        kind: apps::LaunchKind::Custom,
+        exe_path: Some(exe_path),
+        app_id: None,
+        process_names: vec![leaf],
+        enabled: true,
+        builtin: false,
+    });
+    let saved = settings::set_profiles(s.app_profiles)?;
+    Ok(apps::statuses(&saved.app_profiles))
+}
+
+/// Удалить кастомный профиль (builtin удалять нельзя — только выключить).
+#[tauri::command]
+pub async fn apps_remove(id: String) -> Result<Vec<AppProfileStatus>, String> {
+    let mut s = settings::load_with_presets();
+    if let Some(p) = s.app_profiles.iter().find(|p| p.id == id) {
+        if p.builtin {
+            return Err("Встроенный профиль нельзя удалить — только выключить".into());
+        }
+    }
+    s.app_profiles.retain(|p| p.id != id);
+    let saved = settings::set_profiles(s.app_profiles)?;
+    Ok(apps::statuses(&saved.app_profiles))
+}
+
+/// Запустить приложение через мост.
+#[tauri::command]
+pub async fn apps_launch(id: String) -> Result<(), String> {
+    let s = settings::load_with_presets();
+    let profile = s
+        .app_profiles
+        .iter()
+        .find(|p| p.id == id)
+        .ok_or_else(|| "Профиль не найден".to_string())?
+        .clone();
+    tokio::task::spawn_blocking(move || apps::launch(&profile))
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))?
+}
+
+/// Создать ярлык «<name> (proxy)» на рабочем столе или в панели задач.
+#[tauri::command]
+pub async fn apps_create_shortcut(
+    id: String,
+    target: ShortcutTarget,
+) -> Result<String, String> {
+    let s = settings::load_with_presets();
+    let profile = s
+        .app_profiles
+        .iter()
+        .find(|p| p.id == id)
+        .ok_or_else(|| "Профиль не найден".to_string())?
+        .clone();
+    tokio::task::spawn_blocking(move || apps::create_shortcut(&profile, target))
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))?
+}
+
+// ─── Killswitch (firewall) ──────────────────────────────────────
+
+/// Фактическое состояние killswitch (читает Windows Firewall, без UAC).
+#[tauri::command]
+pub async fn killswitch_status() -> KillswitchStatus {
+    tokio::task::spawn_blocking(firewall::status)
+        .await
+        .unwrap_or(KillswitchStatus {
+            active: false,
+            rule_count: 0,
+            blocked_processes: Vec::new(),
+        })
+}
+
+/// Включить killswitch: собрать пути процессов включённых профилей и
+/// поставить outbound-block правила (один UAC-промпт).
+#[tauri::command]
+pub async fn killswitch_enable() -> Result<KillswitchStatus, String> {
+    let s = settings::load_with_presets();
+    let paths = tokio::task::spawn_blocking({
+        let profiles = s.app_profiles.clone();
+        move || apps::resolve_process_paths(&profiles)
+    })
+    .await
+    .map_err(|e| format!("Внутренняя ошибка: {e}"))?;
+
+    if paths.is_empty() {
+        return Err(
+            "Не нашёл процессов для блокировки. Включите приложение (VS Code / Codex) \
+             и убедитесь что оно установлено."
+                .into(),
+        );
+    }
+
+    tokio::task::spawn_blocking(move || firewall::enable(&paths))
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))??;
+
+    let _ = settings::set_killswitch(true);
+    Ok(tokio::task::spawn_blocking(firewall::status)
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))?)
+}
+
+/// Выключить killswitch: снять все наши правила (один UAC-промпт).
+#[tauri::command]
+pub async fn killswitch_disable() -> Result<KillswitchStatus, String> {
+    tokio::task::spawn_blocking(firewall::disable)
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))??;
+    let _ = settings::set_killswitch(false);
+    Ok(tokio::task::spawn_blocking(firewall::status)
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))?)
+}
+
+// ─── Глобальные env-переменные ──────────────────────────────────
+
+/// Прочитать глобальные HTTP(S)_PROXY (User scope) — для подсказки «убрать».
+#[tauri::command]
+pub fn global_proxy_env() -> GlobalProxyEnv {
+    env_proxy::read()
+}
+
+/// Удалить глобальные HTTP(S)_PROXY из системы (User scope, без UAC).
+#[tauri::command]
+pub async fn clear_global_proxy_env() -> Result<GlobalProxyEnv, String> {
+    tokio::task::spawn_blocking(env_proxy::clear)
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))??;
+    Ok(env_proxy::read())
 }
 
 #[tauri::command]

@@ -1,31 +1,43 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { motion, useReducedMotion } from "framer-motion";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   Activity,
   Copy,
-  ExternalLink,
   Globe,
   Loader2,
-  MousePointer2,
   Pause,
   Play,
+  Plus,
   RotateCw,
   Settings as SettingsIcon,
   Wifi,
 } from "lucide-react";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { Button } from "../components/Button";
+import { AppRow } from "../components/AppRow";
+import { KillswitchCard } from "../components/KillswitchCard";
 import {
-  detectCursor,
-  launchCursor,
-  setupCursor,
+  appsCreateShortcut,
+  appsLaunch,
+  appsList,
+  appsRemove,
+  appsSet,
+  killswitchDisable,
+  killswitchEnable,
+  killswitchStatus,
   shimRestart,
   shimStart,
   shimStatus,
   shimStop,
   shimTest,
 } from "../lib/api";
-import type { CursorInfo, ShimStatus, ShimTestResult } from "../lib/types";
+import type {
+  AppProfileStatus,
+  KillswitchStatus,
+  ShimStatus,
+  ShimTestResult,
+  ShortcutTarget,
+} from "../lib/types";
+import { fadeInUp, staggerContainer } from "../lib/motion";
 import { cn } from "../lib/cn";
 
 const POLL_INTERVAL_MS = 5_000;
@@ -47,97 +59,43 @@ interface Props {
 export function Dashboard({ onOpenSettings }: Props) {
   const reduce = useReducedMotion();
   const [status, setStatus] = useState<ShimStatus | null>(null);
+  const [apps, setApps] = useState<AppProfileStatus[]>([]);
+  const [ks, setKs] = useState<KillswitchStatus | null>(null);
   const [busy, setBusy] = useState<"start" | "stop" | "restart" | "test" | null>(null);
   const [testResult, setTestResult] = useState<ShimTestResult | null>(null);
   const [copied, setCopied] = useState(false);
-  const [cursor, setCursor] = useState<CursorInfo | null>(null);
-  const [cursorBusy, setCursorBusy] = useState(false);
-  const [cursorMsg, setCursorMsg] = useState<string | null>(null);
   const intervalRef = useRef<number | null>(null);
 
   const refresh = useCallback(async () => {
-    try {
-      const s = await shimStatus();
-      setStatus(s);
-    } catch {
-      // ignore — leave stale
-    }
+    const [s, a, k] = await Promise.all([
+      shimStatus().catch(() => null),
+      appsList().catch(() => [] as AppProfileStatus[]),
+      killswitchStatus().catch(() => null),
+    ]);
+    if (s) setStatus(s);
+    setApps(a);
+    if (k) setKs(k);
   }, []);
-
-  const refreshCursor = useCallback(async () => {
-    try {
-      setCursor(await detectCursor());
-    } catch {
-      // ignore
-    }
-  }, []);
-
-  const handleCursorSetup = async () => {
-    setCursorBusy(true);
-    setCursorMsg(null);
-    try {
-      const r = await setupCursor();
-      setCursorMsg(r.message);
-      await refreshCursor();
-      if (r.ok) {
-        await launchCursor().catch(() => undefined);
-      }
-    } catch (e) {
-      setCursorMsg(String(e));
-    } finally {
-      setCursorBusy(false);
-    }
-  };
-
-  const handleCursorLaunch = async () => {
-    setCursorBusy(true);
-    setCursorMsg(null);
-    try {
-      await launchCursor();
-    } catch (e) {
-      setCursorMsg(String(e));
-    } finally {
-      setCursorBusy(false);
-    }
-  };
 
   useEffect(() => {
     void refresh();
-    void refreshCursor();
-    intervalRef.current = window.setInterval(() => {
-      void refresh();
-    }, POLL_INTERVAL_MS);
+    intervalRef.current = window.setInterval(() => void refresh(), POLL_INTERVAL_MS);
     return () => {
-      if (intervalRef.current) {
-        window.clearInterval(intervalRef.current);
-      }
+      if (intervalRef.current) window.clearInterval(intervalRef.current);
     };
-  }, [refresh, refreshCursor]);
+  }, [refresh]);
 
-  const handleStart = async () => {
-    setBusy("start");
-    try {
-      await shimStart();
-      await refresh();
-    } finally {
-      setBusy(null);
-    }
-  };
+  const running = status?.running ?? false;
+  const enabledCount = apps.filter((a) => a.enabled).length;
 
-  const handleStop = async () => {
-    setBusy("stop");
+  // ─── Bridge controls ───
+  const bridgeAction = async (
+    kind: "start" | "stop" | "restart",
+    fn: () => Promise<unknown>,
+  ) => {
+    setBusy(kind);
     try {
-      await shimStop();
-      await refresh();
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const handleRestart = async () => {
-    setBusy("restart");
-    try {
-      await shimRestart();
+      await fn();
       await refresh();
     } finally {
       setBusy(null);
@@ -148,8 +106,7 @@ export function Dashboard({ onOpenSettings }: Props) {
     setBusy("test");
     setTestResult(null);
     try {
-      const r = await shimTest();
-      setTestResult(r);
+      setTestResult(await shimTest());
     } finally {
       setBusy(null);
     }
@@ -162,268 +119,289 @@ export function Dashboard({ onOpenSettings }: Props) {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
     } catch {
-      // ignore
+      /* ignore */
     }
   };
 
-  const running = status?.running ?? false;
+  // ─── App controls ───
+  const toggleApp = async (id: string, enabled: boolean) => {
+    // Оптимистично обновляем UI, затем шлём полное состояние на бэкенд.
+    const next = apps.map((a) => (a.id === id ? { ...a, enabled } : a));
+    setApps(next);
+    try {
+      const saved = await appsSet(
+        next.map((a) => ({
+          id: a.id,
+          name: a.name,
+          kind: a.kind,
+          exe_path: a.location && a.kind !== "msix" ? a.location : undefined,
+          app_id: a.kind === "msix" ? a.location : undefined,
+          process_names: a.process_names,
+          enabled: a.enabled,
+          builtin: a.builtin,
+        })),
+      );
+      setApps(saved);
+    } catch {
+      await refresh();
+    }
+  };
+
+  const removeApp = async (id: string) => {
+    try {
+      setApps(await appsRemove(id));
+    } catch {
+      await refresh();
+    }
+  };
+
+  const launchApp = async (id: string) => {
+    await appsLaunch(id);
+  };
+
+  const shortcutApp = async (id: string, target: ShortcutTarget) => {
+    return appsCreateShortcut(id, target);
+  };
 
   return (
-    <div className="flex h-full flex-col gap-6 p-8 text-vb-silver">
-      {/* Header */}
-      <header className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-white">
-            Clod Helper
-          </h1>
-          <p className="mt-0.5 text-sm text-vb-silver-dim">
-            Прокси-мост для Claude Code, Claude Desktop и Cursor
-          </p>
-        </div>
-        <Button variant="ghost" onClick={onOpenSettings} aria-label="Настройки">
-          <SettingsIcon className="h-4 w-4" />
-          Настройки
-        </Button>
-      </header>
+    <div className="flex h-full flex-col overflow-y-auto">
+      <div className="mx-auto flex w-full max-w-2xl flex-col gap-5 p-7">
+        {/* Header */}
+        <header className="flex items-center justify-between">
+          <div>
+            <h1 className="text-[22px] font-bold tracking-tight text-vb-fg">
+              Clod Helper
+            </h1>
+            <p className="mt-0.5 text-[13px] text-vb-silver-dim">
+              Прокси-мост и killswitch для ваших приложений
+            </p>
+          </div>
+          <Button variant="ghost" size="sm" onClick={onOpenSettings}>
+            <SettingsIcon className="h-4 w-4" />
+            Настройки
+          </Button>
+        </header>
 
-      {/* Status card */}
-      <section className="rounded-2xl border border-white/[0.04] bg-[rgba(10,10,10,0.55)] p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] backdrop-blur-xl">
-        <div className="flex items-center gap-3">
-          <span className="relative inline-block h-2.5 w-2.5">
-            <span
-              className={cn(
-                "absolute inset-0 rounded-full",
-                running
-                  ? "bg-vb-emerald shadow-[0_0_12px_rgba(16,185,129,0.7)]"
-                  : "bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)]",
-              )}
-            />
-            {running && !reduce && (
-              <motion.span
-                className="absolute -inset-1 rounded-full bg-vb-emerald/40"
-                animate={{ scale: [1, 1.7, 1], opacity: [0.5, 0, 0.5] }}
-                transition={{
-                  duration: 2.4,
-                  repeat: Infinity,
-                  ease: "easeInOut",
-                }}
+        {/* Bridge status */}
+        <section className="glass-card p-5">
+          <div className="flex items-center gap-3">
+            <span className="relative inline-flex h-2.5 w-2.5">
+              <span
+                className={cn(
+                  "absolute inset-0 rounded-full",
+                  running
+                    ? "bg-vb-emerald shadow-[0_0_12px_var(--color-vb-emerald-glow)]"
+                    : "bg-vb-loss shadow-[0_0_8px_rgba(239,68,68,0.5)]",
+                )}
               />
-            )}
-          </span>
-          <span className="text-lg font-semibold text-white">
-            {running ? "Шим активен" : "Шим остановлен"}
-          </span>
-          {running && status?.pid !== undefined && (
-            <span className="ml-auto rounded-md border border-vb-border bg-vb-surface px-2 py-0.5 font-mono text-xs text-vb-silver-dim">
-              PID {status.pid}
+              {running && !reduce && (
+                <motion.span
+                  className="absolute -inset-1 rounded-full bg-vb-emerald/40"
+                  animate={{ scale: [1, 1.7, 1], opacity: [0.5, 0, 0.5] }}
+                  transition={{ duration: 2.4, repeat: Infinity, ease: "easeInOut" }}
+                />
+              )}
             </span>
-          )}
-        </div>
-
-        {/* Metrics grid */}
-        <dl className="mt-6 grid grid-cols-2 gap-x-6 gap-y-4 text-sm">
-          <div>
-            <dt className="flex items-center gap-1.5 text-vb-silver-dim">
-              <Activity className="h-3.5 w-3.5" />
-              Время работы
-            </dt>
-            <dd className="mt-1 font-mono text-white">
-              {running ? formatUptime(status?.uptime_sec) : "—"}
-            </dd>
-          </div>
-          <div>
-            <dt className="flex items-center gap-1.5 text-vb-silver-dim">
-              <Wifi className="h-3.5 w-3.5" />
-              Слушает
-            </dt>
-            <dd className="mt-1 font-mono text-white">
-              {status?.listen ?? "—"}
-            </dd>
-          </div>
-          <div className="col-span-2">
-            <dt className="flex items-center gap-1.5 text-vb-silver-dim">
-              <Globe className="h-3.5 w-3.5" />
-              Upstream-прокси
-            </dt>
-            <dd className="mt-1 flex items-center gap-2">
-              <span className="truncate font-mono text-white">
-                {status?.upstream_masked ?? "—"}
+            <span className="text-[15px] font-semibold text-vb-fg">
+              {running ? "Мост активен" : "Мост остановлен"}
+            </span>
+            {running && status?.pid !== undefined && (
+              <span className="tnum ml-auto rounded-md border border-vb-border bg-vb-surface-2 px-2 py-0.5 font-mono text-[11px] text-vb-silver-dim">
+                PID {status.pid}
               </span>
-              {status?.upstream_masked && (
-                <button
-                  type="button"
-                  onClick={copyUpstream}
-                  className="text-vb-silver-dim hover:text-vb-silver"
-                  title="Копировать"
-                >
-                  <Copy className="h-3.5 w-3.5" />
-                </button>
-              )}
-              {copied && (
-                <span className="text-xs text-vb-emerald">скопировано</span>
-              )}
-            </dd>
+            )}
           </div>
-        </dl>
 
-        {/* Action buttons */}
-        <div className="mt-6 flex flex-wrap gap-2">
-          {running ? (
-            <>
+          <dl className="mt-5 grid grid-cols-2 gap-x-6 gap-y-4 text-[13px]">
+            <div>
+              <dt className="flex items-center gap-1.5 text-vb-silver-dim">
+                <Activity className="h-3.5 w-3.5" />
+                Время работы
+              </dt>
+              <dd className="tnum mt-1 font-mono text-vb-fg">
+                {running ? formatUptime(status?.uptime_sec) : "—"}
+              </dd>
+            </div>
+            <div>
+              <dt className="flex items-center gap-1.5 text-vb-silver-dim">
+                <Wifi className="h-3.5 w-3.5" />
+                Слушает
+              </dt>
+              <dd className="tnum mt-1 font-mono text-vb-fg">
+                {status?.listen ?? "—"}
+              </dd>
+            </div>
+            <div className="col-span-2">
+              <dt className="flex items-center gap-1.5 text-vb-silver-dim">
+                <Globe className="h-3.5 w-3.5" />
+                Upstream-прокси
+              </dt>
+              <dd className="mt-1 flex items-center gap-2">
+                <span className="truncate font-mono text-[13px] text-vb-fg">
+                  {status?.upstream_masked ?? "—"}
+                </span>
+                {status?.upstream_masked && (
+                  <button
+                    type="button"
+                    onClick={copyUpstream}
+                    className="text-vb-silver-dim transition-colors hover:text-vb-silver"
+                    title="Копировать"
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                  </button>
+                )}
+                {copied && <span className="text-[12px] text-vb-emerald">скопировано</span>}
+              </dd>
+            </div>
+          </dl>
+
+          <div className="mt-5 flex flex-wrap gap-2">
+            {running ? (
+              <>
+                <Button variant="primary" size="sm" onClick={handleTest} disabled={busy !== null}>
+                  <Activity className="h-3.5 w-3.5" />
+                  {busy === "test" ? "Проверка…" : "Тест"}
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => bridgeAction("restart", shimRestart)}
+                  disabled={busy !== null}
+                >
+                  <RotateCw className="h-3.5 w-3.5" />
+                  Перезапустить
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => bridgeAction("stop", shimStop)}
+                  disabled={busy !== null}
+                >
+                  <Pause className="h-3.5 w-3.5" />
+                  Остановить
+                </Button>
+              </>
+            ) : (
               <Button
                 variant="primary"
-                onClick={handleTest}
+                size="sm"
+                onClick={() => bridgeAction("start", shimStart)}
                 disabled={busy !== null}
               >
-                <Activity className="h-4 w-4" />
-                {busy === "test" ? "Проверка…" : "Тест"}
+                <Play className="h-3.5 w-3.5" />
+                {busy === "start" ? "Запуск…" : "Запустить мост"}
               </Button>
-              <Button
-                variant="secondary"
-                onClick={handleRestart}
-                disabled={busy !== null}
-              >
-                <RotateCw className="h-4 w-4" />
-                Перезапустить
-              </Button>
-              <Button
-                variant="ghost"
-                onClick={handleStop}
-                disabled={busy !== null}
-              >
-                <Pause className="h-4 w-4" />
-                Остановить
-              </Button>
-            </>
-          ) : (
-            <Button
-              variant="primary"
-              onClick={handleStart}
-              disabled={busy !== null}
-            >
-              <Play className="h-4 w-4" />
-              {busy === "start" ? "Запуск…" : "Запустить шим"}
-            </Button>
-          )}
-        </div>
-      </section>
+            )}
+          </div>
 
-      {/* Test result */}
-      {testResult && (
-        <section
-          className={cn(
-            "rounded-2xl border p-5 backdrop-blur-xl",
-            testResult.ok
-              ? "border-vb-emerald/30 bg-vb-emerald/[0.04]"
-              : "border-red-500/30 bg-red-500/[0.04]",
-          )}
-        >
-          <div className="flex items-center gap-2 text-sm">
-            <span
-              className={cn(
-                "h-2 w-2 rounded-full",
-                testResult.ok ? "bg-vb-emerald" : "bg-red-500",
-              )}
-            />
-            <span className="font-medium text-white">
-              {testResult.ok ? "Соединение работает" : "Не удалось проверить"}
-            </span>
-            {testResult.latency_ms !== undefined && (
-              <span className="ml-auto font-mono text-xs text-vb-silver-dim">
-                {testResult.latency_ms} ms
-              </span>
+          <AnimatePresence>
+            {testResult && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: "auto" }}
+                exit={{ opacity: 0, height: 0 }}
+                transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+                className="mt-4 overflow-hidden"
+              >
+                <div
+                  className={cn(
+                    "rounded-xl border p-3 text-[13px]",
+                    testResult.ok
+                      ? "border-vb-emerald/30 bg-vb-emerald/[0.04]"
+                      : "border-vb-loss/30 bg-vb-loss/[0.04]",
+                  )}
+                >
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={cn(
+                        "h-1.5 w-1.5 rounded-full",
+                        testResult.ok ? "bg-vb-emerald" : "bg-vb-loss",
+                      )}
+                    />
+                    <span className="font-medium text-vb-fg">
+                      {testResult.ok ? "Соединение работает" : "Не удалось проверить"}
+                    </span>
+                    {testResult.latency_ms !== undefined && (
+                      <span className="tnum ml-auto font-mono text-[11px] text-vb-silver-dim">
+                        {testResult.latency_ms} ms
+                      </span>
+                    )}
+                  </div>
+                  {testResult.external_ip && (
+                    <div className="mt-1.5 font-mono text-[12px] text-vb-silver-dim">
+                      IP-выход:{" "}
+                      <span className="text-vb-fg">{testResult.external_ip}</span>
+                    </div>
+                  )}
+                  {testResult.error && (
+                    <div className="mt-1.5 text-[12px] text-vb-loss/90">{testResult.error}</div>
+                  )}
+                </div>
+              </motion.div>
             )}
-          </div>
-          <div className="mt-2 space-y-1 font-mono text-xs text-vb-silver-dim">
-            {testResult.external_ip && (
-              <div>
-                <span className="text-vb-silver-dim">IP-выход:</span>{" "}
-                <span className="text-white">{testResult.external_ip}</span>
-              </div>
-            )}
-            {testResult.error && (
-              <div className="text-red-300/80">{testResult.error}</div>
-            )}
-          </div>
+          </AnimatePresence>
         </section>
-      )}
 
-      {/* Apps — Cursor */}
-      <section className="rounded-2xl border border-white/[0.04] bg-[rgba(10,10,10,0.55)] p-6 backdrop-blur-xl">
-        <h2 className="text-base font-semibold text-white">Приложения</h2>
-        <p className="mt-1 text-xs text-vb-silver-dim">
-          Запуск через тот же мост. Для Cursor создаётся ярлык «Cursor (proxy)».
-        </p>
+        {/* Killswitch */}
+        <KillswitchCard
+          status={ks}
+          bridgeRunning={running}
+          enabledAppCount={enabledCount}
+          onEnable={async () => {
+            setKs(await killswitchEnable());
+          }}
+          onDisable={async () => {
+            setKs(await killswitchDisable());
+          }}
+        />
 
-        <div className="mt-4 flex items-center gap-4 rounded-xl border border-vb-border bg-vb-surface/40 p-4">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-vb-bg text-vb-silver-dim">
-            <MousePointer2 className="h-5 w-5" strokeWidth={1.5} />
-          </div>
-          <div className="flex-1">
-            <div className="text-[14px] font-medium text-vb-silver">Cursor IDE</div>
-            <div className="text-[12px] text-vb-silver-dim">
-              {cursor === null
-                ? "Проверяю…"
-                : !cursor.installed
-                  ? "Не найден на этом ПК"
-                  : cursor.shortcut_exists
-                    ? "Ярлык «Cursor (proxy)» готов"
-                    : "Установлен — нужен ярлык с прокси"}
+        {/* Apps map */}
+        <section className="flex flex-col gap-3">
+          <div className="flex items-center justify-between px-1">
+            <div>
+              <h2 className="text-[15px] font-semibold text-vb-fg">Приложения</h2>
+              <p className="mt-0.5 text-[12px] text-vb-silver-dim">
+                Отметьте, что проксировать через мост
+              </p>
             </div>
+            <Button variant="ghost" size="sm" onClick={onOpenSettings}>
+              <Plus className="h-3.5 w-3.5" />
+              Добавить
+            </Button>
           </div>
-          {cursor && !cursor.installed && (
-            <Button
-              variant="secondary"
-              onClick={() => openUrl("https://cursor.com")}
-            >
-              Скачать
-              <ExternalLink className="h-3 w-3" />
-            </Button>
-          )}
-          {cursor && cursor.installed && cursor.shortcut_exists && (
-            <Button
-              variant="primary"
-              onClick={handleCursorLaunch}
-              disabled={cursorBusy}
-            >
-              {cursorBusy ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Play className="h-4 w-4" />
-              )}
-              Открыть
-            </Button>
-          )}
-          {cursor && cursor.installed && !cursor.shortcut_exists && (
-            <Button
-              variant="primary"
-              onClick={handleCursorSetup}
-              disabled={cursorBusy}
-            >
-              {cursorBusy ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <MousePointer2 className="h-4 w-4" />
-              )}
-              Настроить
-            </Button>
-          )}
-        </div>
-        {cursorMsg && (
-          <p className="mt-3 text-xs text-vb-silver-dim">{cursorMsg}</p>
-        )}
-      </section>
 
-      <div className="mt-auto pt-2 text-center text-xs text-vb-silver-dim">
-        <a
-          href="https://github.com/mogylnyy/Clod-Helper-v1"
-          className="inline-flex items-center gap-1 hover:text-vb-silver"
-          target="_blank"
-          rel="noreferrer"
-        >
-          GitHub
-          <ExternalLink className="h-3 w-3" />
-        </a>
+          <motion.div
+            variants={staggerContainer}
+            initial="hidden"
+            animate="show"
+            className="flex flex-col gap-2.5"
+          >
+            <AnimatePresence mode="popLayout">
+              {apps.map((app) => (
+                <AppRow
+                  key={app.id}
+                  app={app}
+                  onToggle={(en) => toggleApp(app.id, en)}
+                  onLaunch={() => launchApp(app.id)}
+                  onShortcut={(t) => shortcutApp(app.id, t)}
+                  onRemove={app.builtin ? undefined : () => removeApp(app.id)}
+                />
+              ))}
+            </AnimatePresence>
+          </motion.div>
+
+          {apps.length === 0 && (
+            <motion.div
+              variants={fadeInUp}
+              initial="hidden"
+              animate="show"
+              className="surface-card p-6 text-center text-[13px] text-vb-silver-dim"
+            >
+              <Loader2 className="mx-auto mb-2 h-4 w-4 animate-spin" />
+              Загружаю приложения…
+            </motion.div>
+          )}
+        </section>
       </div>
     </div>
   );
