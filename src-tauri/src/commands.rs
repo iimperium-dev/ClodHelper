@@ -2,17 +2,22 @@ use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::proxy::{self, ProxyCheckResult, ProxyConfig};
 use crate::settings::{self, Settings};
 use crate::shim::{self, ShimStatus, ShimTestResult};
-use crate::system::{self, NodeInfo, PythonInfo};
+use crate::system::{self, CursorInfo, NodeInfo, PythonInfo};
 
 #[tauri::command]
 pub fn detect_node() -> NodeInfo {
     system::detect_node()
+}
+
+#[tauri::command]
+pub fn detect_cursor() -> CursorInfo {
+    system::detect_cursor()
 }
 
 #[tauri::command]
@@ -84,6 +89,71 @@ pub fn launch_claude_code() -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn launch_cursor() -> Result<(), String> {
+    // Предпочитаем ярлык «Cursor (proxy)» — он несёт --proxy-server. Если его
+    // нет (пользователь удалил) — запускаем Cursor.exe напрямую с флагом.
+    let userprofile = std::env::var("USERPROFILE")
+        .map_err(|e| format!("USERPROFILE не задан: {e}"))?;
+    let shortcut = std::path::PathBuf::from(&userprofile)
+        .join("Desktop")
+        .join("Cursor (proxy).lnk");
+
+    if shortcut.exists() {
+        let mut cmd = Command::new("cmd");
+        cmd.args(["/c", "start", "", shortcut.to_str().unwrap_or("")]);
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        cmd.spawn().map_err(|e| format!("Не удалось запустить ярлык: {e}"))?;
+        return Ok(());
+    }
+
+    // Прокси у Cursor живёт в settings.json (http.proxy), не во флаге запуска,
+    // поэтому просто запускаем Cursor.exe — он подхватит прокси из настроек.
+    let exe = system::find_cursor_exe()
+        .ok_or_else(|| "Cursor не найден на этом ПК".to_string())?;
+    let mut cmd = Command::new(&exe);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd.spawn()
+        .map_err(|e| format!("Не удалось запустить Cursor: {e}"))?;
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+pub struct CursorSetupResult {
+    pub ok: bool,
+    /// Найден ли Cursor.exe (false → пользователю надо сначала поставить Cursor).
+    pub found: bool,
+    pub message: String,
+}
+
+#[tauri::command]
+pub async fn setup_cursor(app: AppHandle) -> Result<CursorSetupResult, String> {
+    // Создаёт ярлык «Cursor (proxy)». Сам мост уже поднят шимом — здесь только
+    // ярлык, поэтому запускаем скрипт блокирующе и читаем результат.
+    let script = resolve_resource(&app, "cursor-setup.ps1")?;
+    let output = run_ps_capture(&script, &[]).await?;
+    let found = !output.contains("Cursor не найден");
+    let ok = found && output.contains("ярлык создан");
+    let message = if !found {
+        "Cursor не найден на этом ПК. Установите его с cursor.com и повторите.".to_string()
+    } else if ok {
+        "Ярлык «Cursor (proxy)» создан на рабочем столе.".to_string()
+    } else {
+        "Не удалось создать ярлык. Подробности в логе установки.".to_string()
+    };
+    Ok(CursorSetupResult { ok, found, message })
+}
+
+#[tauri::command]
 pub fn detect_python() -> PythonInfo {
     system::detect_python()
 }
@@ -98,7 +168,7 @@ pub async fn check_proxy(url: String) -> ProxyCheckResult {
     proxy::check(&url).await
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum InstallMode {
     Code,
@@ -109,7 +179,8 @@ pub enum InstallMode {
 #[tauri::command]
 pub async fn run_install(
     app: AppHandle,
-    mode: InstallMode,
+    mode: Option<InstallMode>,
+    cursor: bool,
     proxy_url: String,
 ) -> Result<(), String> {
     // Validate proxy first — fail fast with a friendly message.
@@ -154,39 +225,33 @@ pub async fn run_install(
     emit_verbose(&app, "── /ДИАГНОСТИКА ──");
     emit_verbose(&app, "");
 
-    let code_ps1 = resources_dir.join("resources").join("claude-setup.ps1");
-    let desktop_ps1 = resources_dir
-        .join("resources")
-        .join("claude-desktop-setup.ps1");
-
-    // Если запустили из dev — папка `resources/` лежит не внутри resource_dir
-    // (которая указывает на target/debug/), а в src-tauri/resources/. Делаем
-    // fallback на CARGO_MANIFEST_DIR.
-    let code_ps1 = ensure_exists(code_ps1, "resources/claude-setup.ps1");
-    let desktop_ps1 = ensure_exists(desktop_ps1, "resources/claude-desktop-setup.ps1");
+    let code_ps1 = resolve_resource(&app, "claude-setup.ps1")?;
+    let desktop_ps1 = resolve_resource(&app, "claude-desktop-setup.ps1")?;
+    let cursor_ps1 = resolve_resource(&app, "cursor-setup.ps1")?;
 
     log_line(&log_file, &format!("code_ps1     = {}", code_ps1.display()));
     log_line(&log_file, &format!("desktop_ps1  = {}", desktop_ps1.display()));
+    log_line(&log_file, &format!("cursor_ps1   = {}", cursor_ps1.display()));
     emit_verbose(&app, format!("⓷ code_ps1    = {}", code_ps1.display()));
     emit_verbose(&app, format!("⓸ desktop_ps1 = {}", desktop_ps1.display()));
 
-    let need_code = matches!(mode, InstallMode::Code | InstallMode::Both);
-    let need_desktop = matches!(mode, InstallMode::Desktop | InstallMode::Both);
+    let need_code = matches!(mode, Some(InstallMode::Code) | Some(InstallMode::Both));
+    let need_desktop = matches!(mode, Some(InstallMode::Desktop) | Some(InstallMode::Both));
 
     // ВАЖНО: Bridge должен подняться ПЕРВЫМ. Claude Code в шаге 3 прописывает
     // HTTPS_PROXY=http://127.0.0.1:8889 — если bridge ещё не работает, CLI
     // не сможет связаться с Anthropic. Поэтому desktop-setup (он же setup
-    // bridge'а) идёт всегда — даже если режим = только Code.
+    // bridge'а) идёт всегда — даже если выбран только Cursor.
+    // Если Claude Desktop не выбран — не создаём его ярлык (иначе на
+    // cursor-only установке появился бы лишний ярлык Claude Desktop).
     emit(&app, "");
     emit(&app, "▸ Запускаем локальный прокси-bridge…");
     log_line(&log_file, "--- claude-desktop-setup.ps1 (bridge) ---");
-    run_ps_script(
-        &app,
-        &log_file,
-        &desktop_ps1,
-        &["-ProxyUrl", &proxy_url, "-Yes"],
-    )
-    .await?;
+    let mut bridge_args: Vec<&str> = vec!["-ProxyUrl", &proxy_url, "-Yes"];
+    if !need_desktop {
+        bridge_args.push("-SkipDesktopShortcut");
+    }
+    run_ps_script(&app, &log_file, &desktop_ps1, &bridge_args).await?;
     emit(&app, "✓ Bridge запущен на 127.0.0.1:8889");
 
     if need_code {
@@ -208,6 +273,13 @@ pub async fn run_install(
         emit(&app, "");
         emit(&app, "✓ Claude Desktop настроен");
     }
+    if cursor {
+        emit(&app, "");
+        emit(&app, "▸ Настраиваем Cursor IDE…");
+        log_line(&log_file, "--- cursor-setup.ps1 ---");
+        run_ps_script(&app, &log_file, &cursor_ps1, &[]).await?;
+        emit(&app, "✓ Cursor IDE настроен");
+    }
 
     // Сохраняем proxy_url в settings.json чтобы при следующем запуске
     // приложение открыло Dashboard (а не повторно Wizard).
@@ -221,17 +293,91 @@ pub async fn run_install(
     Ok(())
 }
 
-fn ensure_exists(primary: std::path::PathBuf, relative: &str) -> std::path::PathBuf {
+/// Найти путь к bundled-ресурсу `name` (из папки `resources/`).
+/// В dev-режиме папка `resources/` лежит не внутри resource_dir (target/debug/),
+/// а в src-tauri/resources/ — поэтому делаем fallback на CARGO_MANIFEST_DIR.
+fn resolve_resource(app: &AppHandle, name: &str) -> Result<std::path::PathBuf, String> {
+    let resources_dir = app
+        .path()
+        .resource_dir()
+        .map_err(|e| format!("Не удалось найти папку ресурсов: {e}"))?;
+    let primary = resources_dir.join("resources").join(name);
     if primary.exists() {
-        return primary;
+        return Ok(primary);
     }
-    // Fallback to source-tree path used during `tauri dev`.
     let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let dev_path = manifest.join(relative);
+    let dev_path = manifest.join("resources").join(name);
     if dev_path.exists() {
-        return dev_path;
+        return Ok(dev_path);
     }
-    primary
+    Ok(primary)
+}
+
+/// Запустить PS-скрипт блокирующе и вернуть объединённый stdout+stderr (UTF-8).
+/// Используется для коротких операций без стриминга в UI (например setup_cursor
+/// с Dashboard). Ошибка — только если powershell не стартовал.
+async fn run_ps_capture(
+    script: &std::path::Path,
+    args: &[&str],
+) -> Result<String, String> {
+    if !script.exists() {
+        return Err(format!(
+            "Не найден скрипт: {}. Переустановите Clod Helper.",
+            script.display()
+        ));
+    }
+    let raw = script.to_string_lossy();
+    let cleaned = raw
+        .strip_prefix(r"\\?\UNC\")
+        .map(|s| format!(r"\\{s}"))
+        .or_else(|| raw.strip_prefix(r"\\?\").map(String::from))
+        .unwrap_or_else(|| raw.to_string());
+    let script_escaped = cleaned.replace('\'', "''");
+    let mut tail = String::new();
+    for a in args {
+        if a.starts_with('-') {
+            tail.push(' ');
+            tail.push_str(a);
+        } else {
+            let escaped = a.replace('\'', "''");
+            tail.push_str(&format!(" '{escaped}'"));
+        }
+    }
+    let command_line = format!(
+        "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; \
+         $OutputEncoding=[System.Text.Encoding]::UTF8; \
+         $ErrorActionPreference='Continue'; \
+         & '{script_escaped}'{tail}; \
+         exit $LASTEXITCODE"
+    );
+    let ps_args: Vec<String> = vec![
+        "-NoProfile".into(),
+        "-NonInteractive".into(),
+        "-ExecutionPolicy".into(),
+        "Bypass".into(),
+        "-OutputFormat".into(),
+        "Text".into(),
+        "-Command".into(),
+        command_line,
+    ];
+    tokio::task::spawn_blocking(move || -> Result<String, String> {
+        let mut cmd = Command::new("powershell.exe");
+        cmd.args(&ps_args).stdout(Stdio::piped()).stderr(Stdio::piped());
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        let out = cmd
+            .output()
+            .map_err(|e| format!("powershell.exe не запустился: {e}"))?;
+        let mut s = String::from_utf8_lossy(&out.stdout).to_string();
+        s.push_str(&String::from_utf8_lossy(&out.stderr));
+        Ok(s)
+    })
+    .await
+    .map_err(|e| format!("Внутренняя ошибка: {e}"))?
 }
 
 fn log_line(file: &Arc<Mutex<Option<std::fs::File>>>, text: &str) {

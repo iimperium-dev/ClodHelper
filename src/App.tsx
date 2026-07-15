@@ -54,6 +54,7 @@ function App() {
   // ─── Wizard state (legacy) ───────────────────────────────────
   const [step, setStep] = useState<WizardStep>("welcome");
   const [mode, setMode] = useState<InstallMode | null>(null);
+  const [cursor, setCursor] = useState(false);
   const [proxy, setProxy] = useState<ProxyConfig | null>(null);
   const [proxyCheck, setProxyCheck] = useState<ProxyCheckResult | null>(null);
   const [node, setNode] = useState<NodeInfo | null>(null);
@@ -80,7 +81,9 @@ function App() {
       {step === "mode" && (
         <StepMode
           value={mode}
+          cursor={cursor}
           onChange={setMode}
+          onCursorChange={setCursor}
           onBack={() => setStep("welcome")}
           onNext={() => setStep("proxy")}
         />
@@ -97,9 +100,10 @@ function App() {
           onNext={() => setStep("deps")}
         />
       )}
-      {step === "deps" && mode && (
+      {step === "deps" && (mode || cursor) && (
         <StepDeps
           mode={mode}
+          cursor={cursor}
           node={node}
           python={python}
           onChange={(n, p) => {
@@ -110,9 +114,10 @@ function App() {
           onNext={() => setStep("install")}
         />
       )}
-      {step === "install" && mode && proxy && (
+      {step === "install" && (mode || cursor) && proxy && (
         <StepInstall
           mode={mode}
+          cursor={cursor}
           proxyUrl={proxy.url}
           onBack={() => setStep("deps")}
           onDone={() => {

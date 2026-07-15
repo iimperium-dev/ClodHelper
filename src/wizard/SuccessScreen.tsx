@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
-import { ChevronRight, MessageSquare, Terminal } from "lucide-react";
+import { ChevronRight, MessageSquare, MousePointer2, Terminal } from "lucide-react";
 import { SuccessCheck } from "../components/SuccessCheck";
 import { StatusPill } from "../components/StatusPill";
 import { ActionCard } from "../components/ActionCard";
@@ -11,7 +11,8 @@ import { LogLine } from "./StepInstall";
 import type { InstallMode } from "../lib/types";
 
 interface Props {
-  mode: InstallMode;
+  mode: InstallMode | null;
+  cursor: boolean;
   log: string[];
   onBack: () => void;
   onInstallCodeToo?: () => void;
@@ -21,6 +22,7 @@ const EASE_OUT: [number, number, number, number] = [0.16, 1, 0.3, 1];
 
 export function SuccessScreen({
   mode,
+  cursor,
   log,
   onBack,
   onInstallCodeToo,
@@ -51,13 +53,33 @@ export function SuccessScreen({
     }
   }
 
+  async function handleOpenCursor() {
+    try {
+      await invoke("launch_cursor");
+    } catch (e) {
+      console.error("Failed to launch Cursor", e);
+    }
+  }
+
   const showDesktop = mode === "desktop" || mode === "both";
   const showCode = mode === "code" || mode === "both";
+  const showCursor = cursor;
+  const primaryAction = showDesktop
+    ? handleOpenDesktop
+    : showCode
+      ? handleOpenTerminal
+      : handleOpenCursor;
+  const primaryLabel = showDesktop
+    ? "Открыть Claude"
+    : showCode
+      ? "Запустить Code"
+      : "Открыть Cursor";
 
   const pills: { label: string; pulse?: boolean }[] = [];
   pills.push({ label: "Подключение работает", pulse: true });
   if (showCode) pills.push({ label: "Claude Code на месте" });
   if (showDesktop) pills.push({ label: "Ярлык на рабочем столе" });
+  if (showCursor) pills.push({ label: "Cursor (proxy) готов" });
   pills.push({ label: "Готово к запуску" });
 
   return (
@@ -90,7 +112,9 @@ export function SuccessScreen({
             {...fadeUp(0.48)}
             className="mt-3 max-w-md text-[15px] leading-[1.5] tracking-[-0.01em] text-vb-silver-dim"
           >
-            Claude установлен и подключён. Открывайте — он уже ждёт.
+            {mode
+              ? "Claude установлен и подключён. Открывайте — он уже ждёт."
+              : "Cursor подключён через прокси. Запускайте — всё готово."}
           </motion.p>
         </div>
 
@@ -158,6 +182,25 @@ export function SuccessScreen({
                 title="Запустить Code"
                 description="Claude, который умеет работать с вашими файлами и проектами."
                 onClick={handleOpenTerminal}
+              />
+            </motion.div>
+          )}
+
+          {showCursor && (
+            <motion.div
+              initial={{ opacity: 0, y: reduce ? 0 : 12, scale: reduce ? 1 : 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              transition={{
+                duration: 0.36,
+                delay: reduce ? 0 : 1.46,
+                ease: EASE_OUT,
+              }}
+            >
+              <ActionCard
+                icon={<MousePointer2 className="h-5 w-5" strokeWidth={1.5} />}
+                title="Открыть Cursor"
+                description="Запустится через прокси-мост (ярлык «Cursor (proxy)»)."
+                onClick={handleOpenCursor}
               />
             </motion.div>
           )}
@@ -236,10 +279,10 @@ export function SuccessScreen({
           Свернуть
         </Button>
         <Button
-          onClick={showDesktop ? handleOpenDesktop : handleOpenTerminal}
+          onClick={primaryAction}
           className="shadow-[0_0_24px_rgba(16,185,129,0.25)] hover:shadow-[0_0_32px_rgba(16,185,129,0.4)]"
         >
-          {showDesktop ? "Открыть Claude" : "Запустить Code"}
+          {primaryLabel}
         </Button>
       </motion.div>
     </div>

@@ -44,8 +44,8 @@
     "publisher": "iimperium",
     "copyright": "Copyright (c) 2026 iimperium",
     "category": "DeveloperTool",
-    "shortDescription": "Установщик Claude Code и Claude Desktop через прокси",
-    "longDescription": "Clod Helper — десктопная утилита для установки и настройки Claude Code (CLI) и Claude Desktop через купленный HTTP-прокси. Нужен в регионах где Anthropic API заблокирован напрямую.",
+    "shortDescription": "Прокси для Claude Code, Claude Desktop и Cursor IDE",
+    "longDescription": "Clod Helper — десктопная утилита для установки и настройки Claude Code (CLI), Claude Desktop и Cursor IDE через купленный HTTP-прокси. Нужен в регионах где Anthropic API заблокирован напрямую.",
     "windows": {
       "nsis": {
         "installerIcon": "icons/icon.ico",

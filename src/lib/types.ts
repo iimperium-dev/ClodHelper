@@ -22,6 +22,18 @@ export interface PythonInfo {
   command?: string;
 }
 
+export interface CursorInfo {
+  installed: boolean;
+  exe_path?: string;
+  shortcut_exists: boolean;
+}
+
+export interface CursorSetupResult {
+  ok: boolean;
+  found: boolean;
+  message: string;
+}
+
 export interface ProxyCheckResult {
   reachable: boolean;
   latency_ms?: number;
@@ -36,6 +48,7 @@ export interface ProxyCheckResult {
 export interface WizardState {
   step: WizardStep;
   mode: InstallMode | null;
+  cursor: boolean;
   proxy: ProxyConfig | null;
   proxy_check: ProxyCheckResult | null;
   node: NodeInfo | null;

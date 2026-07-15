@@ -23,7 +23,8 @@ const VERBOSE_PREFIX = "__verbose__:";
 const REVEAL_INTERVAL_MS = 110;
 
 interface Props {
-  mode: InstallMode;
+  mode: InstallMode | null;
+  cursor: boolean;
   proxyUrl: string;
   onBack: () => void;
   onDone: () => void;
@@ -39,6 +40,7 @@ type Status =
 
 export function StepInstall({
   mode,
+  cursor,
   proxyUrl,
   onBack,
   onDone: _onDone,
@@ -127,7 +129,7 @@ export function StepInstall({
     pendingRef.current = [];
     desktopMissingRef.current = false;
     try {
-      await runInstall({ mode, proxyUrl });
+      await runInstall({ mode, cursor, proxyUrl });
       // Don't flip to "done" until the typewriter has caught up — otherwise
       // the success banner appears while the log is still scrolling.
       await drainPending(pendingRef);
@@ -150,7 +152,7 @@ export function StepInstall({
     desktopMissingRef.current = false;
     setStatus("running");
     try {
-      await runInstall({ mode, proxyUrl });
+      await runInstall({ mode, cursor, proxyUrl });
       await drainPending(pendingRef);
       const stillMissing =
         (mode === "desktop" || mode === "both") && desktopMissingRef.current;
@@ -170,6 +172,7 @@ export function StepInstall({
     return (
       <SuccessScreen
         mode={mode}
+        cursor={cursor}
         log={cleaned}
         onBack={onBack}
         onInstallCodeToo={onRestartWithCode}

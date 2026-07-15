@@ -225,6 +225,56 @@ pub fn restart() -> Result<(), String> {
     start()
 }
 
+// ─── Watchdog (авто-подъём упавшего шима) ────────────────────────
+
+/// Интервал опроса живости шима. 5с — баланс: быстро поднять после падения,
+/// но не дёргать sysinfo слишком часто.
+const WATCHDOG_INTERVAL_SEC: u64 = 5;
+
+/// Фоновый супервайзер: раз в WATCHDOG_INTERVAL_SEC проверяет, жив ли шим, и
+/// если упал — поднимает через start(). Это закрывает корневую боль: при пике
+/// деплоя (ssh/scp/docker через тот же upstream-прокси) python-процесс мог
+/// падать, и связь Claude Code пропадала НАМЕРТВО до ручного «Перезапустить».
+/// Теперь упавший шим поднимается сам за ~5с, деплой/стрим не «гаснут».
+///
+/// Запускается в отдельном OS-потоке (не async) — sysinfo синхронный, а нам
+/// нужен надёжный бесконечный цикл, переживающий любые ошибки start().
+/// Анти-флаппинг: после успешного подъёма ждём дольше, чтобы не штормить
+/// рестартами, если шим падает сразу (например, занят порт / битый upstream).
+pub fn spawn_watchdog() {
+    std::thread::spawn(|| {
+        // дать инсталлятору/автозапуску время на первый старт, чтобы watchdog
+        // не пытался поднять параллельно поднимающийся при логине шим.
+        std::thread::sleep(Duration::from_secs(WATCHDOG_INTERVAL_SEC));
+        let mut consecutive_revivals: u32 = 0;
+        loop {
+            if status().running {
+                consecutive_revivals = 0;
+            } else {
+                // шим мёртв — пытаемся поднять. start() идемпотентен (через .vbs).
+                match start() {
+                    Ok(()) => {
+                        consecutive_revivals += 1;
+                        tracing::warn!(
+                            "watchdog: шим был мёртв — поднял (попытка #{})",
+                            consecutive_revivals
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!("watchdog: не смог поднять шим: {e}");
+                    }
+                }
+                // анти-флаппинг: если шим падает раз за разом (битый конфиг/порт),
+                // тормозим, чтобы не штормить wscript-запусками. Иначе обычный темп.
+                if consecutive_revivals >= 3 {
+                    std::thread::sleep(Duration::from_secs(30));
+                }
+            }
+            std::thread::sleep(Duration::from_secs(WATCHDOG_INTERVAL_SEC));
+        }
+    });
+}
+
 fn startup_vbs_path() -> Option<PathBuf> {
     let appdata = dirs::config_dir()?; // %APPDATA% on Windows
     Some(

@@ -5,21 +5,27 @@ import {
   Copy,
   ExternalLink,
   Globe,
+  Loader2,
+  MousePointer2,
   Pause,
   Play,
   RotateCw,
   Settings as SettingsIcon,
   Wifi,
 } from "lucide-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { Button } from "../components/Button";
 import {
+  detectCursor,
+  launchCursor,
+  setupCursor,
   shimRestart,
   shimStart,
   shimStatus,
   shimStop,
   shimTest,
 } from "../lib/api";
-import type { ShimStatus, ShimTestResult } from "../lib/types";
+import type { CursorInfo, ShimStatus, ShimTestResult } from "../lib/types";
 import { cn } from "../lib/cn";
 
 const POLL_INTERVAL_MS = 5_000;
@@ -44,6 +50,9 @@ export function Dashboard({ onOpenSettings }: Props) {
   const [busy, setBusy] = useState<"start" | "stop" | "restart" | "test" | null>(null);
   const [testResult, setTestResult] = useState<ShimTestResult | null>(null);
   const [copied, setCopied] = useState(false);
+  const [cursor, setCursor] = useState<CursorInfo | null>(null);
+  const [cursorBusy, setCursorBusy] = useState(false);
+  const [cursorMsg, setCursorMsg] = useState<string | null>(null);
   const intervalRef = useRef<number | null>(null);
 
   const refresh = useCallback(async () => {
@@ -55,8 +64,46 @@ export function Dashboard({ onOpenSettings }: Props) {
     }
   }, []);
 
+  const refreshCursor = useCallback(async () => {
+    try {
+      setCursor(await detectCursor());
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const handleCursorSetup = async () => {
+    setCursorBusy(true);
+    setCursorMsg(null);
+    try {
+      const r = await setupCursor();
+      setCursorMsg(r.message);
+      await refreshCursor();
+      if (r.ok) {
+        await launchCursor().catch(() => undefined);
+      }
+    } catch (e) {
+      setCursorMsg(String(e));
+    } finally {
+      setCursorBusy(false);
+    }
+  };
+
+  const handleCursorLaunch = async () => {
+    setCursorBusy(true);
+    setCursorMsg(null);
+    try {
+      await launchCursor();
+    } catch (e) {
+      setCursorMsg(String(e));
+    } finally {
+      setCursorBusy(false);
+    }
+  };
+
   useEffect(() => {
     void refresh();
+    void refreshCursor();
     intervalRef.current = window.setInterval(() => {
       void refresh();
     }, POLL_INTERVAL_MS);
@@ -65,7 +112,7 @@ export function Dashboard({ onOpenSettings }: Props) {
         window.clearInterval(intervalRef.current);
       }
     };
-  }, [refresh]);
+  }, [refresh, refreshCursor]);
 
   const handleStart = async () => {
     setBusy("start");
@@ -130,7 +177,7 @@ export function Dashboard({ onOpenSettings }: Props) {
             Clod Helper
           </h1>
           <p className="mt-0.5 text-sm text-vb-silver-dim">
-            Прокси-мост для Claude Code и Claude Desktop
+            Прокси-мост для Claude Code, Claude Desktop и Cursor
           </p>
         </div>
         <Button variant="ghost" onClick={onOpenSettings} aria-label="Настройки">
@@ -300,6 +347,72 @@ export function Dashboard({ onOpenSettings }: Props) {
           </div>
         </section>
       )}
+
+      {/* Apps — Cursor */}
+      <section className="rounded-2xl border border-white/[0.04] bg-[rgba(10,10,10,0.55)] p-6 backdrop-blur-xl">
+        <h2 className="text-base font-semibold text-white">Приложения</h2>
+        <p className="mt-1 text-xs text-vb-silver-dim">
+          Запуск через тот же мост. Для Cursor создаётся ярлык «Cursor (proxy)».
+        </p>
+
+        <div className="mt-4 flex items-center gap-4 rounded-xl border border-vb-border bg-vb-surface/40 p-4">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-vb-bg text-vb-silver-dim">
+            <MousePointer2 className="h-5 w-5" strokeWidth={1.5} />
+          </div>
+          <div className="flex-1">
+            <div className="text-[14px] font-medium text-vb-silver">Cursor IDE</div>
+            <div className="text-[12px] text-vb-silver-dim">
+              {cursor === null
+                ? "Проверяю…"
+                : !cursor.installed
+                  ? "Не найден на этом ПК"
+                  : cursor.shortcut_exists
+                    ? "Ярлык «Cursor (proxy)» готов"
+                    : "Установлен — нужен ярлык с прокси"}
+            </div>
+          </div>
+          {cursor && !cursor.installed && (
+            <Button
+              variant="secondary"
+              onClick={() => openUrl("https://cursor.com")}
+            >
+              Скачать
+              <ExternalLink className="h-3 w-3" />
+            </Button>
+          )}
+          {cursor && cursor.installed && cursor.shortcut_exists && (
+            <Button
+              variant="primary"
+              onClick={handleCursorLaunch}
+              disabled={cursorBusy}
+            >
+              {cursorBusy ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Play className="h-4 w-4" />
+              )}
+              Открыть
+            </Button>
+          )}
+          {cursor && cursor.installed && !cursor.shortcut_exists && (
+            <Button
+              variant="primary"
+              onClick={handleCursorSetup}
+              disabled={cursorBusy}
+            >
+              {cursorBusy ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <MousePointer2 className="h-4 w-4" />
+              )}
+              Настроить
+            </Button>
+          )}
+        </div>
+        {cursorMsg && (
+          <p className="mt-3 text-xs text-vb-silver-dim">{cursorMsg}</p>
+        )}
+      </section>
 
       <div className="mt-auto pt-2 text-center text-xs text-vb-silver-dim">
         <a

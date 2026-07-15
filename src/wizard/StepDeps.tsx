@@ -12,7 +12,8 @@ import { detectNode, detectPython } from "../lib/api";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 interface Props {
-  mode: InstallMode;
+  mode: InstallMode | null;
+  cursor: boolean;
   node: NodeInfo | null;
   python: PythonInfo | null;
   onChange: (node: NodeInfo, python: PythonInfo) => void;
@@ -22,6 +23,7 @@ interface Props {
 
 export function StepDeps({
   mode,
+  cursor,
   node,
   python,
   onChange,
@@ -31,7 +33,9 @@ export function StepDeps({
   const [busy, setBusy] = useState(false);
 
   const needNode = mode === "code" || mode === "both";
-  const needPython = mode === "desktop" || mode === "both";
+  // Мост (local-proxy.py) нужен любому варианту, кроме «только Claude Code»
+  // (там тоже нужен, но это покрывалось ранее). Для Desktop и Cursor — Python.
+  const needPython = mode === "desktop" || mode === "both" || cursor;
 
   async function runDetect() {
     setBusy(true);

@@ -26,7 +26,16 @@ import logging
 import socket
 import sys
 import threading
+import time
 from urllib.parse import urlparse
+
+# Потолок одновременных проброшенных соединений. Защита от пика деплоя
+# (ssh/scp/docker-pull открывают шквал соединений через шим) — без лимита
+# процесс плодил по потоку на коннект → too-many-threads/OOM → шим падал,
+# рвя SSE-стрим Claude Code. Семафор держит число живых хендлеров; лишние
+# ждут слота, а не валят процесс. 256 с запасом для нормального стрима+деплоя.
+_MAX_CONNECTIONS = 256
+_conn_slots = threading.Semaphore(_MAX_CONNECTIONS)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -160,6 +169,7 @@ def handle_client(
             client.close()
         except OSError:
             pass
+        _conn_slots.release()  # вернуть слот семафора (захвачен в accept-цикле)
 
 
 def main() -> int:
@@ -203,7 +213,9 @@ def main() -> int:
         log.error("Cannot bind %s:%s — %s", listen_host, listen_port, e)
         log.error("Is another process already listening on this port?")
         return 1
-    server.listen(64)
+    # Backlog побольше: при пике деплоя десятки соединений встают в очередь
+    # ОС — без запаса часть отбивается RST, и Claude Code видит обрыв.
+    server.listen(256)
 
     log.info(
         "Listening on %s:%s → upstream %s:%s%s",
@@ -215,15 +227,48 @@ def main() -> int:
     )
     log.info("Use proxy URL: http://%s:%s in apps", listen_host, listen_port)
 
+    # ГЛАВНЫЙ accept-цикл НИКОГДА не должен падать (иначе слушающий сокет
+    # исчезает → ConnectionRefused, Claude Code теряет связь, деплой гаснет).
+    # Любую ошибку accept/запуска потока ловим и продолжаем, а не выходим.
     try:
         while True:
-            client, addr = server.accept()
-            t = threading.Thread(
-                target=handle_client,
-                args=(client, addr, upstream_host, upstream_port, upstream_auth),
-                daemon=True,
-            )
-            t.start()
+            try:
+                client, addr = server.accept()
+            except OSError as e:
+                # transient (EMFILE «too many open files» под пиком деплоя,
+                # сетевой сбой) — НЕ валим сервер, ждём чуть и продолжаем.
+                log.warning("accept() failed (%s) — продолжаю слушать", e)
+                time.sleep(0.1)
+                continue
+
+            # лимит одновременных соединений: ждём свободный слот (с таймаутом,
+            # чтобы зависший пик не заблокировал приём навсегда). Нет слота за
+            # 5с → отбиваем этот коннект, но СЕРВЕР живёт (приоритет — не упасть).
+            if not _conn_slots.acquire(timeout=5.0):
+                log.warning("Лимит %d соединений — отбиваю %s, сервер жив",
+                            _MAX_CONNECTIONS, addr)
+                try:
+                    client.close()
+                except OSError:
+                    pass
+                continue
+
+            try:
+                t = threading.Thread(
+                    target=handle_client,
+                    args=(client, addr, upstream_host, upstream_port, upstream_auth),
+                    daemon=True,
+                )
+                t.start()
+            except (RuntimeError, OSError) as e:
+                # can't start new thread — освобождаем слот, закрываем коннект,
+                # но сервер ПРОДОЛЖАЕТ слушать (не падаем).
+                log.warning("Не смог запустить поток (%s) — отбиваю %s", e, addr)
+                _conn_slots.release()
+                try:
+                    client.close()
+                except OSError:
+                    pass
     except KeyboardInterrupt:
         log.info("Stopping (Ctrl+C)")
         return 0

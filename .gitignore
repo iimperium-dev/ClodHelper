@@ -28,3 +28,12 @@ src-tauri/target
 src-tauri/gen
 src-tauri/Cargo.lock
 
+# Release bundles (don't commit binaries)
+*-setup.exe
+*.msi
+*.nsis.zip
+
+# Python bytecode
+__pycache__/
+*.pyc
+

@@ -1,9 +1,11 @@
 # Clod Helper
 
-Утилита для установки **Claude Code** и **Claude Desktop** через прокси.
+Утилита для установки **Claude Code**, **Claude Desktop** и туннелирования **Cursor IDE** через прокси.
 Нужна тем, у кого Anthropic API блокирует напрямую (например, в России).
 
-Работает через локальный мост `127.0.0.1:8889`, который форвардит трафик в купленный HTTP-прокси с автоматической авторизацией. Электрон-приложения (включая Claude Desktop) ходят через мост — система не трогается, остальной интернет работает напрямую.
+Работает через локальный мост `127.0.0.1:8889`, который форвардит трафик в купленный HTTP-прокси с автоматической авторизацией. Электрон-приложения (Claude Desktop, Cursor) ходят через мост — система не трогается, остальной интернет работает напрямую.
+
+**Cursor IDE** подключается тем же способом, что и Claude Desktop: создаётся ярлык «Cursor (proxy)» на рабочем столе, который запускает Cursor с флагом `--proxy-server=http://127.0.0.1:8889`. Обычный ярлык Cursor идёт напрямую. Выбрать Cursor можно в мастере установки (отдельным тумблером, вместе с Claude или без него) либо на Dashboard кнопкой «Настроить».
 
 ---
 
@@ -80,7 +82,8 @@ src-tauri/              Rust backend
   src/system.rs         детект Node.js / Python
   resources/            bundled ресурсы:
     claude-setup.ps1            установщик Claude Code
-    claude-desktop-setup.ps1    установщик локального моста
+    claude-desktop-setup.ps1    установщик локального моста (+ ярлык Claude Desktop)
+    cursor-setup.ps1            ярлык «Cursor (proxy)» (мост общий)
     local-proxy.py              сам мост (Python HTTP-proxy с auth-injection)
   tauri.conf.json       bundle metadata (publisher / copyright / иконки)
 ```

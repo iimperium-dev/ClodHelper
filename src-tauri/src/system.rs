@@ -16,6 +16,56 @@ pub struct PythonInfo {
     pub command: Option<String>,
 }
 
+#[derive(Debug, Serialize, Clone)]
+pub struct CursorInfo {
+    pub installed: bool,
+    pub exe_path: Option<String>,
+    /// Существует ли уже ярлык «Cursor (proxy)» на рабочем столе.
+    pub shortcut_exists: bool,
+}
+
+/// Найти Cursor.exe в стандартных местах установки (per-user / system).
+pub fn find_cursor_exe() -> Option<std::path::PathBuf> {
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        candidates.push(
+            std::path::PathBuf::from(&local).join("Programs/cursor/Cursor.exe"),
+        );
+        candidates.push(
+            std::path::PathBuf::from(&local).join("Programs/Cursor/Cursor.exe"),
+        );
+    }
+    if let Ok(pf) = std::env::var("PROGRAMFILES") {
+        candidates.push(std::path::PathBuf::from(&pf).join("Cursor/Cursor.exe"));
+    }
+    if let Ok(pf86) = std::env::var("ProgramFiles(x86)") {
+        candidates.push(std::path::PathBuf::from(&pf86).join("Cursor/Cursor.exe"));
+    }
+    candidates.into_iter().find(|p| p.exists())
+}
+
+/// Путь к ярлыку «Cursor (proxy)» на рабочем столе пользователя.
+pub fn cursor_shortcut_path() -> Option<std::path::PathBuf> {
+    let userprofile = std::env::var("USERPROFILE").ok()?;
+    Some(
+        std::path::PathBuf::from(userprofile)
+            .join("Desktop")
+            .join("Cursor (proxy).lnk"),
+    )
+}
+
+pub fn detect_cursor() -> CursorInfo {
+    let exe = find_cursor_exe();
+    let shortcut_exists = cursor_shortcut_path()
+        .map(|p| p.exists())
+        .unwrap_or(false);
+    CursorInfo {
+        installed: exe.is_some(),
+        exe_path: exe.map(|p| p.to_string_lossy().to_string()),
+        shortcut_exists,
+    }
+}
+
 fn run_silent(program: &str, args: &[&str]) -> Option<String> {
     let mut cmd = Command::new(program);
     cmd.args(args);

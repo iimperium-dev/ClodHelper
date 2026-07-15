@@ -34,6 +34,9 @@ pub fn run() {
             commands::run_install,
             commands::launch_claude_desktop,
             commands::launch_claude_code,
+            commands::detect_cursor,
+            commands::setup_cursor,
+            commands::launch_cursor,
             // Shim control
             commands::shim_status,
             commands::shim_start,
@@ -47,6 +50,11 @@ pub fn run() {
         ])
         .setup(|app| {
             setup_tray(app.handle())?;
+
+            // Watchdog: авто-подъём упавшего шима (корневой фикс «деплой роняет
+            // мост → Claude Code теряет связь»). Фоновый поток, переживает любые
+            // ошибки, поднимает шим за ~5с после падения.
+            shim::spawn_watchdog();
 
             // Если запущены с флагом --tray (после автозапуска Windows) —
             // прячем главное окно при старте, видна только иконка в трее.

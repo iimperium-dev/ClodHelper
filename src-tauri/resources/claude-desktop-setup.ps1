@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
     Настройка Claude Desktop через локальный прокси-bridge.
@@ -28,7 +28,10 @@ param(
     [string]$ProxyUrl,
     [int]$Port = 8889,
     [switch]$Uninstall,
-    [switch]$Yes
+    [switch]$Yes,
+    # Не создавать ярлык «Claude Desktop (proxy)». Используется когда мост
+    # поднимается только ради Claude Code / Cursor, а сам Claude Desktop не нужен.
+    [switch]$SkipDesktopShortcut
 )
 
 $ErrorActionPreference = 'Stop'
@@ -256,6 +259,13 @@ if ($listening) {
 # ─── Шаг 5: ярлык на рабочем столе ───────────────────────────────
 
 Write-Step 5 5 "Создаю ярлык 'Claude Desktop (proxy)' на рабочем столе..."
+
+if ($SkipDesktopShortcut) {
+    Write-Ok "пропущено (Claude Desktop не выбран)"
+    Write-Host ""
+    Write-Host "  Мост запущен. Ярлык Claude Desktop не создавали." -ForegroundColor DarkGray
+    exit 0
+}
 
 $claudeExe = Find-ClaudeDesktopExe
 if (-not $claudeExe) {
