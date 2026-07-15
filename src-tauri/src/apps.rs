@@ -274,18 +274,34 @@ fn launch_exe(p: &AppProfile) -> Result<(), String> {
 }
 
 fn launch_msix(p: &AppProfile) -> Result<(), String> {
-    // Сначала пробуем ярлык с прошитым --proxy-server.
-    if let Some(shortcut) = desktop_shortcut_path(&p.name) {
-        if shortcut.exists() {
-            let mut cmd = Command::new("cmd");
-            cmd.args(["/c", "start", "", shortcut.to_str().unwrap_or("")]);
-            apply_no_window(&mut cmd);
-            cmd.spawn()
-                .map_err(|e| format!("Не удалось запустить ярлык {}: {e}", p.name))?;
-            return Ok(());
-        }
+    // MSIX-приложение (Codex) НЕ проксируется через `shell:AppsFolder` —
+    // активатор глотает аргументы, а Electron/Chromium НЕ читает env-прокси
+    // (только `--proxy-server`). Проверено вживую: `shell:AppsFolder` → Codex
+    // идёт мимо моста.
+    //
+    // Рабочий способ (подтверждён): запустить главный exe ПРЯМО из папки
+    // установленного пакета WindowsApps с флагом `--proxy-server`. Путь
+    // версионированный — резолвим на лету через Get-AppxPackage, поэтому
+    // апдейт Store не ломает. Тест: 4 соединения к мосту, 0 прямых.
+    let proxy = local_proxy_url();
+
+    if let Some(exe) = msix_main_exe(p) {
+        let mut cmd = Command::new(&exe);
+        cmd.arg(format!("--proxy-server={proxy}"));
+        // env — на случай если рантайм внутри (node/codex) читает их.
+        cmd.env("HTTP_PROXY", &proxy);
+        cmd.env("HTTPS_PROXY", &proxy);
+        cmd.env("http_proxy", &proxy);
+        cmd.env("https_proxy", &proxy);
+        cmd.env("NO_PROXY", "localhost,127.0.0.1,::1");
+        apply_no_window(&mut cmd);
+        cmd.spawn()
+            .map_err(|e| format!("Не удалось запустить {}: {e}", p.name))?;
+        return Ok(());
     }
-    // Fallback: голая MSIX-активация через AppsFolder.
+
+    // Fallback: если не нашли exe в пакете — голая активация (без прокси, но
+    // хотя бы откроется; killswitch подстрахует от утечки).
     let app_id = p
         .app_id
         .clone()
@@ -305,13 +321,68 @@ fn launch_msix(p: &AppProfile) -> Result<(), String> {
     Ok(())
 }
 
+/// Найти главный exe MSIX-приложения в установленном пакете (для прямого
+/// запуска с `--proxy-server`). Путь версионированный — резолвим каждый раз.
+fn msix_main_exe(p: &AppProfile) -> Option<PathBuf> {
+    let root = if p.id == "codex" {
+        codex_install_root()?
+    } else {
+        // Для будущих MSIX-профилей: ищем корень по app_id (PackageFamilyName!App).
+        let app_id = p.app_id.as_ref()?;
+        let family = app_id.split('!').next()?;
+        appx_install_location(family)?
+    };
+    // Главный exe: у Codex это app\ChatGPT.exe. Ищем первый .exe с именем из
+    // process_names (первое имя = главный процесс), иначе — эвристикой.
+    let main_name = p
+        .process_names
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "app.exe".into());
+    let direct = root.join("app").join(&main_name);
+    if direct.exists() {
+        return Some(direct);
+    }
+    // Иначе ищем рекурсивно.
+    find_in_dir(&root, &main_name)
+        .into_iter()
+        .next()
+        .map(PathBuf::from)
+}
+
+/// InstallLocation MSIX-пакета по PackageFamilyName.
+fn appx_install_location(family: &str) -> Option<PathBuf> {
+    let out = run_silent(
+        "powershell.exe",
+        &[
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            &format!(
+                "$p = Get-AppxPackage | Where-Object {{ $_.PackageFamilyName -eq '{}' }} | Select-Object -First 1; if ($p) {{ $p.InstallLocation }} else {{ '' }}",
+                family.replace('\'', "''"),
+            ),
+        ],
+    )?;
+    let loc = out.trim();
+    if loc.is_empty() {
+        None
+    } else {
+        let path = PathBuf::from(loc);
+        path.exists().then_some(path)
+    }
+}
+
 // ─── Ярлык (Desktop / Taskbar) ───────────────────────────────────
 
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ShortcutTarget {
     Desktop,
-    Taskbar,
+    /// Меню Пуск. На Win11 программный «Pin to taskbar» удалён Microsoft, а вот
+    /// ярлык в Start Menu создаётся штатно и оттуда пользователь может закрепить
+    /// на панель задач правым кликом. Кладём туда + открываем папку.
+    StartMenu,
 }
 
 /// Создать ярлык «<name> (proxy)» на рабочем столе или закрепить в панель задач.
@@ -339,13 +410,15 @@ pub fn create_shortcut(
             (exe, format!("--proxy-server={proxy}"))
         }
         LaunchKind::Msix => {
-            let app_id = location.ok_or_else(|| "Нет AppID".to_string())?;
-            // Для MSIX TargetPath — explorer.exe с shell:AppsFolder; так ярлык
-            // корректно активирует пакет. Аргумент прокси добавляем, но MSIX
-            // может его проигнорировать — killswitch подстрахует.
+            // Ярлык на ПРЯМОЙ exe пакета с флагом --proxy-server (как в launch)
+            // — только так Codex реально проксируется. shell:AppsFolder аргумент
+            // глотает. Путь версионированный, но ярлык одноразовый; при апдейте
+            // Store пользователь пересоздаёт (или запускает через «Открыть»).
+            let exe = msix_main_exe(p)
+                .ok_or_else(|| "Не нашёл exe пакета для ярлыка".to_string())?;
             (
-                "explorer.exe".to_string(),
-                format!("shell:AppsFolder\\{app_id}"),
+                exe.to_string_lossy().to_string(),
+                format!("--proxy-server={proxy}"),
             )
         }
     };
@@ -367,37 +440,38 @@ fn run_create_shortcut_ps(
     let target_e = esc(target_path);
     let args_e = esc(arguments);
 
-    // Desktop: пишем .lnk в папку рабочего стола.
-    // Taskbar: Windows 11 не даёт программно «Pin to taskbar» напрямую (COM verb
-    // удалён) — создаём .lnk в стандартной пользовательской папке ярлыков и
-    // просим пользователя закрепить его вручную ЛИБО кладём в известную папку,
-    // из которой закрепление тривиально. Мы кладём в Desktop и возвращаем
-    // подсказку. Такой компромисс честнее чем тихо не сработавший «pin».
+    // Desktop: .lnk в папку рабочего стола.
+    // StartMenu: .lnk в пользовательскую папку Programs меню Пуск + открываем
+    //   папку, чтобы пользователь мог правым кликом «Закрепить на панели задач»
+    //   (на Win11 это единственный рабочий путь — программный pin удалён).
     let script = match target {
         ShortcutTarget::Desktop => format!(
             "$ws = New-Object -ComObject WScript.Shell; \
              $desktop = [Environment]::GetFolderPath('Desktop'); \
-             $lnk = $ws.CreateShortcut((Join-Path $desktop '{name}.lnk')); \
+             $path = Join-Path $desktop '{name}.lnk'; \
+             $lnk = $ws.CreateShortcut($path); \
              $lnk.TargetPath = '{target}'; \
              $lnk.Arguments = '{args}'; \
              $lnk.IconLocation = '{icon}'; \
              $lnk.Save(); \
-             Write-Output ('SHORTCUT_OK:' + (Join-Path $desktop '{name}.lnk'))",
+             Write-Output ('SHORTCUT_OK:' + $path)",
             name = name_e,
             target = target_e,
             args = args_e,
             icon = target_e,
         ),
-        ShortcutTarget::Taskbar => format!(
+        ShortcutTarget::StartMenu => format!(
             "$ws = New-Object -ComObject WScript.Shell; \
-             $dir = Join-Path $env:APPDATA 'Microsoft\\Internet Explorer\\Quick Launch\\User Pinned\\TaskBar'; \
+             $dir = Join-Path $env:APPDATA 'Microsoft\\Windows\\Start Menu\\Programs'; \
              if (-not (Test-Path $dir)) {{ New-Item -ItemType Directory -Path $dir -Force | Out-Null }}; \
-             $lnk = $ws.CreateShortcut((Join-Path $dir '{name}.lnk')); \
+             $path = Join-Path $dir '{name}.lnk'; \
+             $lnk = $ws.CreateShortcut($path); \
              $lnk.TargetPath = '{target}'; \
              $lnk.Arguments = '{args}'; \
              $lnk.IconLocation = '{icon}'; \
              $lnk.Save(); \
-             Write-Output ('SHORTCUT_OK:' + (Join-Path $dir '{name}.lnk'))",
+             Start-Process explorer.exe -ArgumentList ('/select,' + '\"' + $path + '\"'); \
+             Write-Output ('SHORTCUT_OK:' + $path)",
             name = name_e,
             target = target_e,
             args = args_e,

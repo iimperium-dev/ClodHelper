@@ -127,7 +127,7 @@ export interface AppProfileStatus {
   process_names: string[];
 }
 
-export type ShortcutTarget = "desktop" | "taskbar";
+export type ShortcutTarget = "desktop" | "start_menu";
 
 // ─── Killswitch ──────────────────────────────────────────────────
 

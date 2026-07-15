@@ -52,8 +52,12 @@ export function AppRow({ app, onToggle, onLaunch, onShortcut, onRemove }: Props)
     setShortcutOpen(false);
     try {
       await onShortcut(target);
-      setFlash(target === "desktop" ? "Ярлык на рабочем столе" : "Ярлык в панели задач");
-      window.setTimeout(() => setFlash(null), 2500);
+      setFlash(
+        target === "desktop"
+          ? "Ярлык на рабочем столе"
+          : "Ярлык в Пуске — правым кликом закрепите на панель",
+      );
+      window.setTimeout(() => setFlash(null), 4000);
     } catch (e) {
       setFlash(String(e));
       window.setTimeout(() => setFlash(null), 3000);
@@ -167,10 +171,10 @@ export function AppRow({ app, onToggle, onLaunch, onShortcut, onRemove }: Props)
               </button>
               <button
                 type="button"
-                onClick={() => makeShortcut("taskbar")}
+                onClick={() => makeShortcut("start_menu")}
                 className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] text-vb-silver hover:bg-vb-surface-2"
               >
-                В панель задач
+                В меню Пуск
               </button>
             </motion.div>
           )}
