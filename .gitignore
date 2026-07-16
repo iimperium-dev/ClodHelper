@@ -37,3 +37,6 @@ src-tauri/Cargo.lock
 __pycache__/
 *.pyc
 
+
+# Bridge exe (reproducible from local-proxy.py via PyInstaller)
+src-tauri/resources/clod-bridge.exe

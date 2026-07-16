@@ -692,6 +692,16 @@ pub fn apps_list() -> Vec<AppProfileStatus> {
 /// на каждый чих. UI подскажет «переприменить killswitch» если нужно.
 #[tauri::command]
 pub async fn apps_set(profiles: Vec<AppProfile>) -> Result<Vec<AppProfileStatus>, String> {
+    // Сверяем VS Code settings.json с состоянием профиля: включён → прописать
+    // прокси в терминал, выключен → убрать наши ключи. Ошибки глотаем (JSONC
+    // или отсутствие VS Code не должны блокировать сохранение профилей).
+    if let Some(vscode) = profiles.iter().find(|p| p.id == "vscode") {
+        if vscode.enabled {
+            let _ = crate::vscode_config::enable();
+        } else {
+            let _ = crate::vscode_config::disable();
+        }
+    }
     let saved = settings::set_profiles(profiles)?;
     Ok(apps::statuses(&saved.app_profiles))
 }

@@ -20,7 +20,12 @@ use serde::Serialize;
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
 
 pub const LISTEN_PORT: u16 = 8889;
+/// Легаси python-мост (для миграции/детекта старых установок).
 const SHIM_FILENAME: &str = "local-proxy.py";
+/// Новый мост — самостоятельный exe (НЕ python.exe). Критично: killswitch
+/// блокирует python.exe, а мост на python.exe душил сам себя. exe-мост под
+/// своим именем не попадает под блок → killswitch не рубит собственный мост.
+pub const BRIDGE_EXE: &str = "clod-bridge.exe";
 const INSTALL_DIR_REL: &str = "ClaudeDesktopProxy";
 const STARTUP_VBS_NAME: &str = "ClaudeDesktopProxy.vbs";
 
@@ -73,7 +78,10 @@ pub fn status() -> ShimStatus {
 
     for (pid, proc) in sys.processes() {
         let name = proc.name().to_string_lossy().to_lowercase();
-        if !name.starts_with("python") && !name.starts_with("py.exe") {
+        // Новый мост: clod-bridge.exe. Легаси: python*.exe с local-proxy.py.
+        let is_bridge_exe = name == BRIDGE_EXE;
+        let is_legacy_python = name.starts_with("python") || name.starts_with("py.exe");
+        if !is_bridge_exe && !is_legacy_python {
             continue;
         }
         let cmdline_parts: Vec<String> = proc
@@ -82,7 +90,8 @@ pub fn status() -> ShimStatus {
             .map(|s| s.to_string_lossy().to_string())
             .collect();
         let cmdline = cmdline_parts.join(" ");
-        if !cmdline.contains(SHIM_FILENAME) {
+        // exe-мост опознаём по имени; python-мост — по наличию local-proxy.py в argv.
+        if is_legacy_python && !cmdline.contains(SHIM_FILENAME) {
             continue;
         }
 
@@ -168,19 +177,25 @@ pub fn stop() -> Result<usize, String> {
     let mut killed = 0usize;
     for (_pid, proc) in sys.processes() {
         let name = proc.name().to_string_lossy().to_lowercase();
-        if !name.starts_with("python") && !name.starts_with("py.exe") {
+        let is_bridge_exe = name == BRIDGE_EXE;
+        let is_legacy_python = name.starts_with("python") || name.starts_with("py.exe");
+        if !is_bridge_exe && !is_legacy_python {
             continue;
         }
-        let cmdline: String = proc
-            .cmd()
-            .iter()
-            .map(|s| s.to_string_lossy().to_string())
-            .collect::<Vec<_>>()
-            .join(" ");
-        if cmdline.contains(SHIM_FILENAME) {
-            if proc.kill() {
-                killed += 1;
-            }
+        // exe-мост — по имени; python-мост — по local-proxy.py в argv.
+        let kill_it = if is_bridge_exe {
+            true
+        } else {
+            let cmdline: String = proc
+                .cmd()
+                .iter()
+                .map(|s| s.to_string_lossy().to_string())
+                .collect::<Vec<_>>()
+                .join(" ");
+            cmdline.contains(SHIM_FILENAME)
+        };
+        if kill_it && proc.kill() {
+            killed += 1;
         }
     }
     // Дать ОС секунду на освобождение порта.
@@ -288,45 +303,47 @@ fn startup_vbs_path() -> Option<PathBuf> {
     )
 }
 
-#[allow(dead_code)]
 fn install_dir() -> Option<PathBuf> {
     Some(dirs::data_local_dir()?.join(INSTALL_DIR_REL))
 }
 
-/// Путь к local-proxy.py в установленной копии (для подмены при правках кода).
+/// Путь к местному clod-bridge.exe (установленная копия).
+pub fn bridge_exe_path() -> Option<PathBuf> {
+    install_dir().map(|d| d.join(BRIDGE_EXE))
+}
+
+/// Путь к local-proxy.py в установленной копии (легаси — для миграции/детекта).
 pub fn shim_script_path() -> Option<PathBuf> {
     install_dir().map(|d| d.join(SHIM_FILENAME))
 }
 
 /// Перезаписать `ClaudeDesktopProxy.vbs` с новым upstream-прокси. Не запускает
-/// сам шим — вызывающий код должен сделать `stop()` + `start()` после.
+/// сам мост — вызывающий код должен сделать `stop()` + `start()` после.
 ///
-/// `python_cmd` — что вписать в строку запуска (`py`, `python`, или полный путь
-/// до `python.exe`). Если None — пробуем то же что в текущем live-процессе,
-/// иначе fallback на `python`.
+/// Теперь запускает `clod-bridge.exe` НАПРЯМУЮ (не python) — так мост не
+/// попадает под killswitch-блок python.exe. `_python_cmd` сохранён в сигнатуре
+/// для обратной совместимости вызовов, но игнорируется.
 pub fn write_startup_vbs(
     proxy_url: &str,
-    python_cmd: Option<&str>,
+    _python_cmd: Option<&str>,
 ) -> Result<PathBuf, String> {
     let vbs_path = startup_vbs_path()
         .ok_or_else(|| "Не нашёл папку Startup".to_string())?;
-    let script_path = shim_script_path()
+    let exe_path = bridge_exe_path()
         .ok_or_else(|| "Не нашёл папку ClaudeDesktopProxy".to_string())?;
-    if !script_path.exists() {
+    if !exe_path.exists() {
         return Err(format!(
             "Не найден {}. Запустите установщик заново.",
-            script_path.display()
+            exe_path.display()
         ));
     }
-    let py = python_cmd.unwrap_or("python");
-    let proxy_path_str = script_path.to_string_lossy().to_string();
-    // VBS escape: " → "" — но мы строим через Chr(34), как делает .ps1.
+    let exe_str = exe_path.to_string_lossy().to_string();
+    // VBS: запускаем exe напрямую, скрыто (0), не ждём (False).
     let vbs = format!(
-        "' Auto-start Claude Desktop Proxy at Windows login (hidden).\r\n\
+        "' Auto-start Clod bridge at Windows login (hidden).\r\n\
          Set sh = CreateObject(\"WScript.Shell\")\r\n\
-         sh.Run \"{py} \" & Chr(34) & \"{path}\" & Chr(34) & \" --upstream \" & Chr(34) & \"{proxy}\" & Chr(34) & \" --listen 127.0.0.1:{port} --quiet\", 0, False\r\n",
-        py = py,
-        path = proxy_path_str,
+         sh.Run Chr(34) & \"{path}\" & Chr(34) & \" --upstream \" & Chr(34) & \"{proxy}\" & Chr(34) & \" --listen 127.0.0.1:{port} --quiet\", 0, False\r\n",
+        path = exe_str,
         proxy = proxy_url.replace('"', ""),
         port = LISTEN_PORT,
     );

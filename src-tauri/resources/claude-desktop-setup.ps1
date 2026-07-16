@@ -193,57 +193,52 @@ if (-not $Yes) {
 # ─── Шаг 1: Python ───────────────────────────────────────────────
 
 Write-Host ""
-Write-Step 1 5 "Проверяю Python 3.7+..."
+Write-Step 1 5 "Проверяю мост clod-bridge.exe..."
 
-$pythonCmd = Get-PythonCommand
-if (-not $pythonCmd) {
-    Write-Err "Python 3.7+ не найден."
-    Write-Host "        Скачай с https://python.org (Windows installer x64)." -ForegroundColor Yellow
-    Write-Host "        При установке поставь галочку 'Add Python to PATH'." -ForegroundColor Yellow
-    Start-Process "https://www.python.org/downloads/"
+# Мост теперь самостоятельный exe (не python.exe). Причина: killswitch блокирует
+# python.exe, а мост на python душил сам себя. exe-мост под своим именем не
+# попадает под блок. Python больше НЕ требуется.
+$sourceBridge = Join-Path $SourceDir 'clod-bridge.exe'
+if (-not (Test-Path $sourceBridge)) {
+    Write-Err "Не найден clod-bridge.exe рядом с этим скриптом ($sourceBridge)"
+    Write-Host "        Переустановите Clod Helper." -ForegroundColor Yellow
     exit 1
 }
-Write-Ok "найден ($pythonCmd)"
+Write-Ok "найден"
 
-# ─── Шаг 2: копирование local-proxy.py ───────────────────────────
+# ─── Шаг 2: копирование clod-bridge.exe ──────────────────────────
 
-Write-Step 2 5 "Копирую local-proxy.py в $InstallDir..."
-
-$sourceProxy = Join-Path $SourceDir 'local-proxy.py'
-if (-not (Test-Path $sourceProxy)) {
-    Write-Err "Не найден local-proxy.py рядом с этим скриптом ($sourceProxy)"
-    Write-Host "        Положи local-proxy.py в ту же папку и запусти снова." -ForegroundColor Yellow
-    exit 1
-}
+Write-Step 2 5 "Копирую clod-bridge.exe в $InstallDir..."
 
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-Copy-Item $sourceProxy (Join-Path $InstallDir 'local-proxy.py') -Force
+$bridgePath = Join-Path $InstallDir 'clod-bridge.exe'
+# Остановить работающий мост перед перезаписью exe (иначе файл занят).
+Stop-ProxyProcess
+Get-Process -Name 'clod-bridge' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 500
+Copy-Item $sourceBridge $bridgePath -Force
 Write-Ok "скопировано"
 
 # ─── Шаг 3: автозагрузка через .vbs ──────────────────────────────
 
 Write-Step 3 5 "Настраиваю автозагрузку при логине Windows..."
 
-# .vbs запускает Python скрипт без видимого окна терминала.
-$proxyPath = Join-Path $InstallDir 'local-proxy.py'
+# .vbs запускает exe напрямую без видимого окна.
 $vbsContent = @"
-' Auto-start Claude Desktop Proxy at Windows login (hidden, no console window).
+' Auto-start Clod bridge at Windows login (hidden, no console window).
 Set sh = CreateObject("WScript.Shell")
-sh.Run "$pythonCmd " & Chr(34) & "$proxyPath" & Chr(34) & " --upstream " & Chr(34) & "$ProxyUrl" & Chr(34) & " --listen 127.0.0.1:$Port --quiet", 0, False
+sh.Run Chr(34) & "$bridgePath" & Chr(34) & " --upstream " & Chr(34) & "$ProxyUrl" & Chr(34) & " --listen 127.0.0.1:$Port --quiet", 0, False
 "@
 Set-Content -Path $StartupVbs -Value $vbsContent -Encoding ASCII
 Write-Ok "автозагрузка прописана ($StartupVbs)"
 
 # ─── Шаг 4: запуск прямо сейчас ──────────────────────────────────
 
-Write-Step 4 5 "Запускаю прокси прямо сейчас..."
+Write-Step 4 5 "Запускаю мост прямо сейчас..."
 
-# Остановить предыдущую копию если уже работала.
-Stop-ProxyProcess
-
-# Запустить через WScript.Shell hidden (тот же способ что vbs).
+# Запустить exe через WScript.Shell hidden (тот же способ что vbs).
 $wsh = New-Object -ComObject WScript.Shell
-$startCmd = "$pythonCmd `"$proxyPath`" --upstream `"$ProxyUrl`" --listen 127.0.0.1:$Port --quiet"
+$startCmd = "`"$bridgePath`" --upstream `"$ProxyUrl`" --listen 127.0.0.1:$Port --quiet"
 $wsh.Run($startCmd, 0, $false) | Out-Null
 Start-Sleep -Seconds 2
 

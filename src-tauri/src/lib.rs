@@ -6,6 +6,7 @@ mod proxy;
 mod settings;
 mod shim;
 mod system;
+mod vscode_config;
 
 use tauri::{
     menu::{Menu, MenuItem},
