@@ -63,12 +63,27 @@ function make(
   };
 }
 
-export function parseProxyInput(raw: string): ParsedProxy | null {
+/** Ошибка разбора с человеческим объяснением (например, SOCKS-прокси). */
+export interface ParseReject {
+  error: string;
+}
+
+export function isParseReject(r: ParsedProxy | ParseReject | null): r is ParseReject {
+  return !!r && "error" in r;
+}
+
+export function parseProxyInput(raw: string): ParsedProxy | ParseReject | null {
   let s = raw.trim();
   if (!s) return null;
 
+  // SOCKS молча превращать в http нельзя: мост говорит только HTTP CONNECT,
+  // и такой прокси «не отвечал» бы без объяснения причины.
+  if (/^socks\d?h?:\/\//i.test(s)) {
+    return { error: "Это SOCKS-прокси — мост работает только с HTTP-прокси. Попросите у продавца HTTP-адрес." };
+  }
+
   // Схему убираем (протокол всегда http для моста).
-  s = s.replace(/^(https?|socks5?h?):\/\//i, "");
+  s = s.replace(/^https?:\/\//i, "");
   s = s.replace(/\/+$/, "");
 
   // "host:port user:pass" (пробел/таб/;) → склеиваем в 4-частную форму.
@@ -89,6 +104,15 @@ export function parseProxyInput(raw: string): ParsedProxy | null {
     const leftIsHost = lp.length === 2 && isPort(lp[1]) && (isIPv4(lp[0]) || isHostLike(lp[0]));
     const rightIsHost = rp.length === 2 && isPort(rp[1]) && (isIPv4(rp[0]) || isHostLike(rp[0]));
 
+    if (leftIsHost && rightIsHost) {
+      // Обе стороны похожи на host:port («доменный» логин + цифровой пароль).
+      // IP-адрес — сильный сигнал хоста; без него — эскалация в UI.
+      const asStd = make(rp[0], Number(rp[1]), lp[0], lp.slice(1).join(":"), "low"); // user:pass@host:port
+      const asRev = make(lp[0], Number(lp[1]), rp[0], rp.slice(1).join(":"), "low"); // host:port@user:pass
+      if (isIPv4(rp[0]) && !isIPv4(lp[0])) return { ...asStd, confidence: "high" };
+      if (isIPv4(lp[0]) && !isIPv4(rp[0])) return { ...asRev, confidence: "high" };
+      return { ...asStd, alt: asRev };
+    }
     if (rightIsHost) {
       // user:pass@host:port — стандарт.
       const [user, ...passParts] = lp;

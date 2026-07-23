@@ -25,7 +25,7 @@ import {
   proxyLabelSet,
 } from "../lib/api";
 import { ServiceLogo } from "../components/BrandLogos";
-import { parseProxyInput, type ParsedProxy } from "../lib/proxyParse";
+import { isParseReject, parseProxyInput, type ParsedProxy } from "../lib/proxyParse";
 import { useStatus } from "../lib/status";
 import type { ProxyCheckResult, ServiceGroup } from "../lib/types";
 import { fadeInUp, staggerContainer } from "../lib/motion";
@@ -42,10 +42,11 @@ const SERVICES: { id: ServiceGroup; name: string; sub: string }[] = [
 
 const MAX_POOL = 5;
 /** Кэш гео-проверок в localStorage: флаг и страна видны всегда, не только
-    после ручного пинга (переживает перезапуски приложения). */
-const GEO_CACHE_KEY = "clod-proxy-geo-v1";
+    после ручного пинга (переживает перезапуски приложения).
+    v2: ключи — host:port (логин-пароль в localStorage не пишем). */
+const GEO_CACHE_KEY = "clod-proxy-geo-v2";
 
-/** host:port из URL пула (без схемы и логина-пароля — эстетика). */
+/** host:port из URL пула (без схемы и логина-пароля — эстетика и ключ кэша). */
 function hostPort(url: string): string {
   const rest = url.includes("://") ? url.split("://")[1] : url;
   return rest.includes("@") ? rest.slice(rest.lastIndexOf("@") + 1) : rest;
@@ -53,7 +54,10 @@ function hostPort(url: string): string {
 
 function loadGeoCache(): Record<string, ProxyCheckResult> {
   try {
-    return JSON.parse(localStorage.getItem(GEO_CACHE_KEY) ?? "{}");
+    const v: unknown = JSON.parse(localStorage.getItem(GEO_CACHE_KEY) ?? "{}");
+    return v && typeof v === "object" && !Array.isArray(v)
+      ? (v as Record<string, ProxyCheckResult>)
+      : {};
   } catch {
     return {};
   }
@@ -217,47 +221,66 @@ export function Proxies() {
   // после ручной проверки.
   const geoCheck = useCallback(
     async (url: string) => {
-      setGeoBusy((b) => ({ ...b, [url]: true }));
+      const key = hostPort(url);
+      setGeoBusy((b) => ({ ...b, [key]: true }));
       try {
         const r = await checkProxy(url);
         setGeo((old) => {
-          const next = { ...old, [url]: r };
-          saveGeoCache(next);
+          const next = { ...old, [key]: r };
+          // Провал (гео-API недоступен, прокси моргнул) навсегда не кэшируем —
+          // иначе флаг «не появится никогда». В кэш — только удачные ответы,
+          // с прунингом по текущему пулу (записи удалённых прокси не копятся).
+          if (r.reachable || r.country_code) {
+            const keep = new Set((pool ?? []).map(hostPort));
+            keep.add(key);
+            saveGeoCache(
+              Object.fromEntries(Object.entries(next).filter(([k]) => keep.has(k))),
+            );
+          }
           return next;
         });
       } finally {
-        setGeoBusy((b) => ({ ...b, [url]: false }));
+        setGeoBusy((b) => ({ ...b, [key]: false }));
       }
     },
-    [],
+    [pool],
   );
 
   useEffect(() => {
     if (!pool) return;
     for (const url of pool) {
-      if (!geo[url] && !geoBusy[url]) void geoCheck(url);
+      const key = hostPort(url);
+      if (!geo[key] && !geoBusy[key]) void geoCheck(url);
     }
-    // геobusy намеренно не в deps: цикл сам себя не перезапускает
+    // geo/geoBusy намеренно не в deps: цикл сам себя не перезапускает
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pool, geoCheck]);
 
   // ── Умный парсинг ввода ──
-  const parsedBase = useMemo(() => parseProxyInput(addInput), [addInput]);
+  const parsedResult = useMemo(() => parseProxyInput(addInput), [addInput]);
+  const parseError = isParseReject(parsedResult) ? parsedResult.error : null;
+  const parsedBase: ParsedProxy | null = isParseReject(parsedResult) ? null : parsedResult;
   const parsed: ParsedProxy | null =
     parsedBase && swapped && parsedBase.alt ? parsedBase.alt : parsedBase;
   const ambiguous = !!parsedBase?.alt;
+  /** Жёлтая панель: есть alt ИЛИ парсер не уверен (низкая уверенность). */
+  const needsReview = ambiguous || parsed?.confidence === "low";
 
-  const applyPool = async (next: string[], busyKey: string) => {
+  const applyPool = async (next: string[], busyKey: string): Promise<boolean> => {
     setBusy(busyKey);
+    setConfirmDel(null);
     setError(null);
     try {
       setPool(await proxiesSet(next));
       await refresh();
       await refreshPoolPing();
+      // Бэкенд перемапил индексы назначений по URL — перечитываем их состояние.
       setAssignments(await proxyAssignmentsGet().catch(() => ({})));
       setLabels(await proxyLabelsGet().catch(() => ({})));
+      return true;
     } catch (e) {
       setError(String(e));
+      return false;
     } finally {
       setBusy(null);
     }
@@ -265,10 +288,16 @@ export function Proxies() {
 
   const handleAdd = async () => {
     if (!parsed || !pool) return;
-    await applyPool([...pool, parsed.url], "add");
-    setAddInput("");
-    setSwapped(false);
-    setAdding(false);
+    if (pool.includes(parsed.url)) {
+      setError("Этот прокси уже в пуле");
+      return;
+    }
+    // Ввод чистим только при успехе — иначе пользователь перенабирает строку.
+    if (await applyPool([...pool, parsed.url], "add")) {
+      setAddInput("");
+      setSwapped(false);
+      setAdding(false);
+    }
   };
 
   const askDelete = (i: number) => {
@@ -335,10 +364,11 @@ export function Proxies() {
   };
 
   const pingFor = (url: string) => poolPing.find((p) => p.url === url)?.ms;
-  /** Мост старше 1.1.0 не понимает назначения. */
+  /** Назначения честно строгие (закрепление сильнее режима, без failover)
+      только с моста 1.2.0 — старее гейтим, чтобы UI не врал про «IP не меняется». */
   const bridgeSupportsAssignments =
     health !== null &&
-    health.version.localeCompare("1.1.0", undefined, { numeric: true }) >= 0;
+    health.version.localeCompare("1.2.0", undefined, { numeric: true }) >= 0;
 
   return (
     <motion.div
@@ -397,14 +427,16 @@ export function Proxies() {
                   <div
                     className={cn(
                       "mt-2.5 rounded-lg border p-3",
-                      ambiguous
+                      needsReview
                         ? "border-vb-warn/35 bg-vb-warn/[0.05]"
                         : "border-vb-emerald/25 bg-vb-emerald/[0.04]",
                     )}
                   >
-                    {ambiguous && (
+                    {needsReview && (
                       <p className="mb-2 text-[12px] text-vb-warn">
-                        Формат неоднозначный — проверьте, где хост, а где логин:
+                        {ambiguous
+                          ? "Формат неоднозначный — проверьте, где хост, а где логин:"
+                          : "Не до конца уверен в разборе — проверьте поля:"}
                       </p>
                     )}
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px]">
@@ -421,7 +453,12 @@ export function Proxies() {
                             <span className="font-mono text-vb-fg">{parsed.username}</span>
                           </span>
                           <span className="text-vb-silver-dim">
-                            Пароль <span className="font-mono text-vb-fg">····</span>
+                            Пароль{" "}
+                            {parsed.password ? (
+                              <span className="font-mono text-vb-fg">····</span>
+                            ) : (
+                              <span className="text-vb-warn">пусто</span>
+                            )}
                           </span>
                         </>
                       )}
@@ -437,6 +474,8 @@ export function Proxies() {
                       </button>
                     )}
                   </div>
+                ) : parseError ? (
+                  <p className="mt-2 text-[12px] text-vb-warn">{parseError}</p>
                 ) : (
                   <p className="mt-2 text-[12px] text-vb-loss">
                     Не получилось разобрать. Примеры:{" "}
@@ -501,8 +540,15 @@ export function Proxies() {
                     : ms > 1500
                       ? "bg-vb-warn"
                       : "bg-vb-emerald";
-              const g = geo[url];
+              const gkey = hostPort(url);
+              const g = geo[gkey];
+              const gBusy = geoBusy[gkey];
               const tag = labels[url];
+              // Назначенные на этот прокси сервисы: предупреждаем при удалении —
+              // их закрепление снимется (уйдут в «Авто»).
+              const pinnedHere = SERVICES.filter((s) => assignments[s.id] === i).map(
+                (s) => s.name,
+              );
               return (
                 <div key={url} className="flex items-center gap-3 px-4 py-3">
                   <span className={cn("h-2 w-2 shrink-0 rounded-full", dot)} />
@@ -556,7 +602,7 @@ export function Proxies() {
                         )}
                       </span>
                       {/* Флаг + страна — видны ВСЕГДА (кэш гео) */}
-                      {geoBusy[url] && !g ? (
+                      {gBusy && !g ? (
                         <Loader2 className="h-3 w-3 animate-spin" />
                       ) : g?.country_code ? (
                         <span className="inline-flex items-center gap-1">
@@ -572,12 +618,15 @@ export function Proxies() {
                       /* Подтверждение удаления — обязательное */
                       <div className="flex items-center gap-1.5 rounded-lg border border-vb-loss/40 bg-vb-loss/[0.06] px-2 py-1">
                         <span className="text-[12px] font-medium text-vb-loss">
-                          Удалить?
+                          {pinnedHere.length
+                            ? `Удалить? ${pinnedHere.join(", ")} → Авто`
+                            : "Удалить?"}
                         </span>
                         <button
                           type="button"
                           onClick={() => void handleRemove(i)}
-                          className="rounded-md bg-vb-loss px-2 py-0.5 text-[11px] font-semibold text-white transition-colors hover:bg-vb-loss/85 active:scale-[0.96]"
+                          disabled={busy !== null}
+                          className="rounded-md bg-vb-loss px-2 py-0.5 text-[11px] font-semibold text-white transition-colors hover:bg-vb-loss/85 active:scale-[0.96] disabled:opacity-40"
                         >
                           Да
                         </button>
@@ -608,11 +657,11 @@ export function Proxies() {
                         <button
                           type="button"
                           onClick={() => void geoCheck(url)}
-                          disabled={busy !== null || geoBusy[url]}
+                          disabled={busy !== null || gBusy}
                           className="rounded-lg p-1.5 text-vb-silver-faint transition-colors hover:bg-vb-surface-2 hover:text-vb-silver active:scale-[0.97] disabled:opacity-35"
                           title="Перепроверить гео и доступность"
                         >
-                          {geoBusy[url] ? (
+                          {gBusy ? (
                             <Loader2 className="h-3.5 w-3.5 animate-spin" />
                           ) : (
                             <RefreshCw className="h-3.5 w-3.5" />
@@ -664,7 +713,7 @@ export function Proxies() {
         {!bridgeSupportsAssignments && health !== null && (
           <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-vb-warn/30 bg-vb-warn/[0.05] p-3">
             <p className="text-[12px] leading-snug text-vb-warn">
-              Для назначений мосту нужна версия 1.1.0+ (сейчас {health.version}).
+              Для строгих назначений мосту нужна версия 1.2.0+ (сейчас {health.version}).
             </p>
             <Button
               variant="secondary"
@@ -700,7 +749,14 @@ export function Proxies() {
                   value={value}
                   pool={pool ?? []}
                   labels={labels}
-                  disabled={busy !== null || pool === null || pool.length === 0}
+                  // Старый мост назначения игнорирует — активный контрол врал бы,
+                  // что закрепление работает (см. плашку «Обновить мост» выше).
+                  disabled={
+                    busy !== null ||
+                    pool === null ||
+                    pool.length === 0 ||
+                    !bridgeSupportsAssignments
+                  }
                   onChange={(v) => void handleAssign(id, v)}
                 />
               </div>

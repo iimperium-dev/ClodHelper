@@ -72,6 +72,10 @@ export function StatusProvider({ children }: { children: ReactNode }) {
   const [history, setHistory] = useState<TrafficSample[]>([]);
   const [poolPing, setPoolPing] = useState<ProxyPing[]>([]);
   const lastTotal = useRef<number | null>(null);
+  /** Поколение refresh: устаревший ответ (интервальный тик, обогнанный ручным
+      refresh после действия) не должен перезатирать более свежее состояние —
+      иначе UI на 5с «откатывается» и sparkline рисует ложные всплески. */
+  const gen = useRef(0);
 
   const refreshPoolPing = useCallback(async () => {
     try {
@@ -82,14 +86,17 @@ export function StatusProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refresh = useCallback(async () => {
+    const g = ++gen.current;
+    const fresh = () => gen.current === g;
     // Каждый статус независим: медленный вызов не держит остальные.
     await Promise.all([
-      shimStatus().then(setStatus).catch(() => {}),
-      bridgeTaskStatus().then(setTask).catch(() => {}),
-      globalProxyEnv().then(setEnv).catch(() => {}),
-      bridgeExeLegacy().then(setExeLegacy).catch(() => {}),
+      shimStatus().then((v) => fresh() && setStatus(v)).catch(() => {}),
+      bridgeTaskStatus().then((v) => fresh() && setTask(v)).catch(() => {}),
+      globalProxyEnv().then((v) => fresh() && setEnv(v)).catch(() => {}),
+      bridgeExeLegacy().then((v) => fresh() && setExeLegacy(v)).catch(() => {}),
       bridgeHealth()
         .then((h) => {
+          if (!fresh()) return;
           setHealth(h);
           setHealthErr(null);
           const total = h.via_upstream + h.via_direct;
@@ -103,6 +110,7 @@ export function StatusProvider({ children }: { children: ReactNode }) {
           }
         })
         .catch((err) => {
+          if (!fresh()) return;
           setHealth(null);
           setHealthErr(String(err));
           lastTotal.current = null;
@@ -113,11 +121,23 @@ export function StatusProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void refresh();
     void refreshPoolPing();
-    const id = window.setInterval(() => void refresh(), POLL_INTERVAL_MS);
-    const pingId = window.setInterval(() => void refreshPoolPing(), POOL_PING_INTERVAL_MS);
+    // Скрытое окно не поллит: спрятанный трей-попап живёт вечно, и без этой
+    // паузы он параллельно с главным окном дёргал бы мост каждые 5с и пинговал
+    // весь пул прокси каждые 5 минут. При показе — обновляемся сразу.
+    const id = window.setInterval(() => {
+      if (!document.hidden) void refresh();
+    }, POLL_INTERVAL_MS);
+    const pingId = window.setInterval(() => {
+      if (!document.hidden) void refreshPoolPing();
+    }, POOL_PING_INTERVAL_MS);
+    const onVisible = () => {
+      if (!document.hidden) void refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       window.clearInterval(id);
       window.clearInterval(pingId);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [refresh, refreshPoolPing]);
 

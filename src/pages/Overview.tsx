@@ -99,14 +99,22 @@ export function Overview({ onOpenProxies }: Props) {
     !health && (exeLegacy || (healthErr !== null && healthErr.includes("разобрать")));
 
   // ── Действия моста ──
+  // Все команды могут реально упасть (порт занят, exe удалён, PowerShell
+  // отказал) — без catch клик выглядел бы как «нажал и ничего»: спиннер
+  // мигнул, ошибки нет. Показываем её строкой под hero.
+  const [actionError, setActionError] = useState<string | null>(null);
+
   const bridgeAction = async (
     kind: "start" | "stop" | "restart",
     fn: () => Promise<unknown>,
   ) => {
     setBusy(kind);
+    setActionError(null);
     try {
       await fn();
       await refresh();
+    } catch (e) {
+      setActionError(String(e));
     } finally {
       setBusy(null);
     }
@@ -115,8 +123,11 @@ export function Overview({ onOpenProxies }: Props) {
   const handleTest = async () => {
     setBusy("test");
     setTestResult(null);
+    setActionError(null);
     try {
       setTestResult(await shimTest());
+    } catch (e) {
+      setActionError(String(e));
     } finally {
       setBusy(null);
     }
@@ -124,8 +135,11 @@ export function Overview({ onOpenProxies }: Props) {
 
   const handleEnvToggle = async () => {
     setEnvBusy(true);
+    setActionError(null);
     try {
       setEnv(envOn ? await clearGlobalProxyEnv() : await setGlobalProxyEnv());
+    } catch (e) {
+      setActionError(String(e));
     } finally {
       setEnvBusy(false);
     }
@@ -133,9 +147,12 @@ export function Overview({ onOpenProxies }: Props) {
 
   const handleRouteToggle = async () => {
     setRouteBusy(true);
+    setActionError(null);
     try {
       await bridgeSetRouteMode(smartOn ? "all" : "smart");
       await refresh();
+    } catch (e) {
+      setActionError(String(e));
     } finally {
       setRouteBusy(false);
     }
@@ -143,9 +160,12 @@ export function Overview({ onOpenProxies }: Props) {
 
   const handleTaskRegister = async () => {
     setTaskBusy(true);
+    setActionError(null);
     try {
       await bridgeTaskRegister();
       await refresh();
+    } catch (e) {
+      setActionError(String(e));
     } finally {
       setTaskBusy(false);
     }
@@ -252,6 +272,21 @@ export function Overview({ onOpenProxies }: Props) {
             )}
           </div>
         </div>
+
+        {/* Ошибка последнего действия (запуск/стоп/тумблеры) */}
+        <AnimatePresence>
+          {actionError && (
+            <motion.p
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+              className="mt-2 overflow-hidden text-[12px] text-vb-loss"
+            >
+              {actionError}
+            </motion.p>
+          )}
+        </AnimatePresence>
 
         {/* Результат теста */}
         <AnimatePresence>
@@ -551,9 +586,9 @@ export function Overview({ onOpenProxies }: Props) {
                     ok: u.healthy,
                     ms: null as number | null,
                   }))
-              ).map((c) => (
+              ).map((c, ci) => (
                 <span
-                  key={c.label}
+                  key={`${ci}:${c.label}`}
                   className="flex items-center gap-1.5 rounded-md border border-vb-border bg-vb-surface-2 px-2 py-0.5 font-mono text-[11px] text-vb-silver"
                 >
                   <span

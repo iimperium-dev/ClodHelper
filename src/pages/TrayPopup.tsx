@@ -42,6 +42,13 @@ export function TrayPopup() {
   const [testResult, setTestResult] = useState<ShimTestResult | null>(null);
   const [envBusy, setEnvBusy] = useState(false);
   const [routeBusy, setRouteBusy] = useState(false);
+  /** Ошибка последнего действия: без неё упавшая команда выглядит как
+      «нажал и ничего не произошло». Гаснет сама. */
+  const [actionError, setActionError] = useState<string | null>(null);
+  const failFlash = (e: unknown) => {
+    setActionError(String(e));
+    window.setTimeout(() => setActionError(null), 6000);
+  };
 
   const loading = status === null;
   const running = status?.running ?? false;
@@ -62,9 +69,12 @@ export function TrayPopup() {
     fn: () => Promise<unknown>,
   ) => {
     setBusy(kind);
+    setActionError(null);
     try {
       await fn();
       await refresh();
+    } catch (e) {
+      failFlash(e);
     } finally {
       setBusy(null);
     }
@@ -73,9 +83,12 @@ export function TrayPopup() {
   const handleTest = async () => {
     setBusy("test");
     setTestResult(null);
+    setActionError(null);
     try {
       setTestResult(await shimTest());
       window.setTimeout(() => setTestResult(null), 6000);
+    } catch (e) {
+      failFlash(e);
     } finally {
       setBusy(null);
     }
@@ -83,8 +96,11 @@ export function TrayPopup() {
 
   const handleEnvToggle = async () => {
     setEnvBusy(true);
+    setActionError(null);
     try {
       setEnv(envOn ? await clearGlobalProxyEnv() : await setGlobalProxyEnv());
+    } catch (e) {
+      failFlash(e);
     } finally {
       setEnvBusy(false);
     }
@@ -92,9 +108,12 @@ export function TrayPopup() {
 
   const handleRouteToggle = async () => {
     setRouteBusy(true);
+    setActionError(null);
     try {
       await bridgeSetRouteMode(smartOn ? "all" : "smart");
       await refresh();
+    } catch (e) {
+      failFlash(e);
     } finally {
       setRouteBusy(false);
     }
@@ -164,6 +183,21 @@ export function TrayPopup() {
             </button>
           )}
         </div>
+
+        {/* Ошибка последнего действия */}
+        <AnimatePresence>
+          {actionError && (
+            <motion.p
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+              className="overflow-hidden px-4 pb-1 text-[11px] leading-snug text-vb-loss"
+            >
+              {actionError}
+            </motion.p>
+          )}
+        </AnimatePresence>
 
         {/* Метрики */}
         {health && (

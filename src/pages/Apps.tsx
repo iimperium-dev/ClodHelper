@@ -46,8 +46,11 @@ export function Apps() {
           id: a.id,
           name: a.name,
           kind: a.kind,
-          exe_path: a.location && a.kind !== "msix" ? a.location : undefined,
-          app_id: a.kind === "msix" ? a.location : undefined,
+          // Пути/AppID не шлём: location — runtime-снимок, он пустеет, когда
+          // exe временно недоступен (отключённый диск), и затирал бы
+          // сохранённый путь навсегда. Бэкенд бережёт сохранённые значения.
+          exe_path: undefined,
+          app_id: undefined,
           process_names: a.process_names,
           enabled: a.enabled,
           builtin: a.builtin,
