@@ -13,14 +13,24 @@ use crate::settings::{self, Settings};
 use crate::shim::{self, ShimStatus, ShimTestResult};
 use crate::system::{self, CursorInfo, NodeInfo, PythonInfo};
 
+// ВАЖНО: синхронные #[tauri::command] выполняются в ГЛАВНОМ потоке окна.
+// Любая команда, спавнящая PowerShell/сканирующая процессы, обязана быть
+// async + spawn_blocking — иначе UI виснет («не отвечает»), особенно под
+// 5-секундным поллингом Dashboard. Проверено вживую: сумма sync-команд
+// замораживала окно наглухо.
+
 #[tauri::command]
-pub fn detect_node() -> NodeInfo {
-    system::detect_node()
+pub async fn detect_node() -> Result<NodeInfo, String> {
+    tokio::task::spawn_blocking(system::detect_node)
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))
 }
 
 #[tauri::command]
-pub fn detect_cursor() -> CursorInfo {
-    system::detect_cursor()
+pub async fn detect_cursor() -> Result<CursorInfo, String> {
+    tokio::task::spawn_blocking(system::detect_cursor)
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))
 }
 
 #[tauri::command]
@@ -157,8 +167,10 @@ pub async fn setup_cursor(app: AppHandle) -> Result<CursorSetupResult, String> {
 }
 
 #[tauri::command]
-pub fn detect_python() -> PythonInfo {
-    system::detect_python()
+pub async fn detect_python() -> Result<PythonInfo, String> {
+    tokio::task::spawn_blocking(system::detect_python)
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))
 }
 
 #[tauri::command]
@@ -643,8 +655,11 @@ async fn run_ps_script(
 // ─── Shim control (Dashboard) ────────────────────────────────────
 
 #[tauri::command]
-pub fn shim_status() -> ShimStatus {
-    shim::status()
+pub async fn shim_status() -> Result<ShimStatus, String> {
+    // Скан процессов sysinfo — сотни миллисекунд; с главного потока — фриз.
+    tokio::task::spawn_blocking(shim::status)
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))
 }
 
 #[tauri::command]
@@ -696,10 +711,15 @@ pub fn settings_get() -> Settings {
 // ─── App profiles (проксируемые приложения) ─────────────────────
 
 /// Список профилей + их runtime-статус (найдено ли приложение, есть ли ярлык).
+/// Внутри Get-AppxPackage (секунды!) — только spawn_blocking.
 #[tauri::command]
-pub fn apps_list() -> Vec<AppProfileStatus> {
-    let s = settings::load_with_presets();
-    apps::statuses(&s.app_profiles)
+pub async fn apps_list() -> Result<Vec<AppProfileStatus>, String> {
+    tokio::task::spawn_blocking(|| {
+        let s = settings::load_with_presets();
+        apps::statuses(&s.app_profiles)
+    })
+    .await
+    .map_err(|e| format!("Внутренняя ошибка: {e}"))
 }
 
 /// Сохранить новое состояние профилей (enabled-галочки, добавленные свои).
@@ -855,8 +875,11 @@ pub async fn killswitch_disable() -> Result<KillswitchStatus, String> {
 
 /// Прочитать глобальные HTTP(S)_PROXY (User scope) — состояние тумблера.
 #[tauri::command]
-pub fn global_proxy_env() -> GlobalProxyEnv {
-    env_proxy::read()
+pub async fn global_proxy_env() -> Result<GlobalProxyEnv, String> {
+    // Внутри спавн PowerShell — с главного потока это фриз окна.
+    tokio::task::spawn_blocking(env_proxy::read)
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))
 }
 
 /// Включить системное проксирование: HTTP(S)_PROXY → мост (User scope, без UAC).
@@ -921,6 +944,13 @@ pub struct BridgeUpstreamHealth {
     pub fail: u64,
 }
 
+/// Одна ошибка из кольцевого буфера моста: секунды-от-старта + текст.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BridgeErrorEntry {
+    pub t: u64,
+    pub msg: String,
+}
+
 /// Зеркало JSON от GET /healthz нового Rust-моста.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BridgeHealth {
@@ -935,6 +965,20 @@ pub struct BridgeHealth {
     pub via_direct: u64,
     pub errors: u64,
     pub upstreams: Vec<BridgeUpstreamHealth>,
+    /// Последние ошибки моста (мост 1.1.0+; у старых версий поля нет).
+    #[serde(default)]
+    pub last_errors: Vec<BridgeErrorEntry>,
+}
+
+/// Установленный мост — старый python-exe (без /healthz и --rules)?
+/// Проба `--version` кэшируется по mtime exe. По этому флагу UI показывает
+/// «Обновить мост» — надёжнее, чем гадать по тексту ошибки healthz (старый
+/// мост может и таймаутить запрос, и вернуть мусор — зависит от upstream).
+#[tauri::command]
+pub async fn bridge_exe_legacy() -> Result<bool, String> {
+    tokio::task::spawn_blocking(crate::tasks::bridge_exe_is_legacy)
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))
 }
 
 /// Живые счётчики моста. Ошибка = мост не отвечает ИЛИ это старый python-мост
@@ -1029,6 +1073,134 @@ pub async fn bridge_update(app: AppHandle) -> Result<String, String> {
     })
     .await
     .map_err(|e| format!("Внутренняя ошибка: {e}"))?
+}
+
+// ─── Прокси-пул (до 5 upstream'ов + назначения по сервисам) ──────
+
+/// TCP-пинг одного прокси из пула (мс). None = не подключились.
+#[derive(Debug, Serialize)]
+pub struct ProxyPing {
+    pub url: String,
+    pub host: String,
+    pub port: u16,
+    pub ms: Option<u64>,
+}
+
+#[tauri::command]
+pub fn proxies_get() -> Vec<String> {
+    let s = settings::load();
+    settings::effective_proxies(&s)
+}
+
+/// Заменить пул (1..=5; [0] — основной): валидация, сохранение, перерегистрация
+/// задачи (vbs получает все --upstream) и перезапуск моста.
+#[tauri::command]
+pub async fn proxies_set(urls: Vec<String>) -> Result<Vec<String>, String> {
+    for u in &urls {
+        proxy::parse(u)?;
+    }
+    let saved = settings::set_proxies(urls)?;
+    let primary = saved.proxy_url.clone().unwrap_or_default();
+    tokio::task::spawn_blocking(move || {
+        // Не фатально: без задачи мост перезапустится с одним upstream (легаси).
+        if let Err(e) = crate::tasks::register(&primary) {
+            tracing::warn!("proxies_set: перерегистрация задачи: {e}");
+        }
+        shim::restart()
+    })
+    .await
+    .map_err(|e| format!("Внутренняя ошибка: {e}"))??;
+    Ok(settings::effective_proxies(&settings::load()))
+}
+
+#[tauri::command]
+pub fn proxy_assignments_get() -> std::collections::HashMap<String, usize> {
+    settings::load().proxy_assignments
+}
+
+/// Имена (тэги) прокси: URL → имя.
+#[tauri::command]
+pub fn proxy_labels_get() -> std::collections::HashMap<String, String> {
+    settings::load().proxy_labels
+}
+
+/// Задать/убрать имя прокси (пустое = убрать). Чисто косметика — мост не трогаем.
+#[tauri::command]
+pub fn proxy_label_set(
+    url: String,
+    label: String,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    Ok(settings::set_proxy_label(url, label)?.proxy_labels)
+}
+
+/// Назначения «сервис → прокси из пула»: сохранить, переписать rules,
+/// перезапустить мост (rules читаются при старте).
+#[tauri::command]
+pub async fn proxy_assignments_set(
+    assignments: std::collections::HashMap<String, usize>,
+) -> Result<(), String> {
+    settings::set_proxy_assignments(assignments)?;
+    tokio::task::spawn_blocking(|| -> Result<(), String> {
+        crate::tasks::write_rules_file()?;
+        shim::restart()
+    })
+    .await
+    .map_err(|e| format!("Внутренняя ошибка: {e}"))??;
+    Ok(())
+}
+
+/// TCP-пинг всего пула параллельно (лёгкий connect, не через интернет-запрос).
+#[tauri::command]
+pub async fn proxies_ping() -> Vec<ProxyPing> {
+    let pool = settings::effective_proxies(&settings::load());
+    let handles: Vec<_> = pool
+        .into_iter()
+        .map(|url| {
+            tokio::task::spawn_blocking(move || {
+                let (host, port) = match proxy::parse(&url) {
+                    Ok(c) => (c.host, c.port),
+                    Err(_) => return ProxyPing { url, host: String::new(), port: 0, ms: None },
+                };
+                use std::net::{TcpStream, ToSocketAddrs};
+                let ms = format!("{host}:{port}")
+                    .to_socket_addrs()
+                    .ok()
+                    .and_then(|mut a| a.next())
+                    .and_then(|addr| {
+                        let t = std::time::Instant::now();
+                        TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(4))
+                            .ok()
+                            .map(|_| t.elapsed().as_millis() as u64)
+                    });
+                ProxyPing { url, host, port, ms }
+            })
+        })
+        .collect();
+    let mut out = Vec::new();
+    for h in handles {
+        if let Ok(p) = h.await {
+            out.push(p);
+        }
+    }
+    out
+}
+
+// ─── Окна (для трей-попапа) ──────────────────────────────────────
+
+/// Показать главное окно (кнопка «Открыть приложение» в трей-попапе).
+#[tauri::command]
+pub fn show_main_window(app: AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
+    }
+}
+
+/// Полный выход из GUI. Мост — отдельный процесс, он продолжает работать.
+#[tauri::command]
+pub fn quit_app(app: AppHandle) {
+    app.exit(0);
 }
 
 #[tauri::command]

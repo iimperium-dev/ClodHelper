@@ -31,12 +31,30 @@ pub struct GlobalProxyEnv {
 }
 
 /// Прочитать User-scope прокси-переменные из реестра.
+///
+/// ОДИН вызов PowerShell на все ключи: каждый спавн PS стоит ~0.5-1с, а read()
+/// дёргается UI-поллингом каждые 5с. Читаем только UPPERCASE-имена — реестр
+/// Windows регистронезависим, отдельный запрос lowercase вернул бы ту же
+/// запись дублем.
 pub fn read() -> GlobalProxyEnv {
+    let read_keys = ["HTTP_PROXY", "HTTPS_PROXY"];
+    let script = read_keys
+        .iter()
+        .map(|k| {
+            format!(
+                "Write-Output ('{k}=' + [Environment]::GetEnvironmentVariable('{k}', 'User'))"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    let out = run_ps_capture(&script).unwrap_or_default();
+
     let mut values = Vec::new();
-    for key in KEYS {
-        if let Some(v) = read_user_env(key) {
-            if !v.trim().is_empty() {
-                values.push(((*key).to_string(), v));
+    for line in out.lines() {
+        if let Some((k, v)) = line.split_once('=') {
+            let (k, v) = (k.trim(), v.trim());
+            if !v.is_empty() && read_keys.iter().any(|rk| rk.eq_ignore_ascii_case(k)) {
+                values.push((k.to_string(), v.to_string()));
             }
         }
     }

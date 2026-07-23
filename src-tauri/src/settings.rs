@@ -36,6 +36,28 @@ pub struct Settings {
     /// None = "all" — консервативный дефолт для старых установок.
     #[serde(default)]
     pub route_mode: Option<String>,
+    /// Прокси-пул (до 5). [0] — основной; proxy_url держится с ним в синхроне
+    /// для обратной совместимости (vbs/старый код читают proxy_url).
+    /// Пустой список = легаси-установка, пул из одного proxy_url.
+    #[serde(default)]
+    pub proxies: Vec<String>,
+    /// Назначения «сервис → индекс прокси в пуле»: ключи — группы из
+    /// tasks::SERVICE_GROUPS ("anthropic", "openai", …). Отсутствие ключа =
+    /// авто (основной + failover).
+    #[serde(default)]
+    pub proxy_assignments: std::collections::HashMap<String, usize>,
+    /// Пользовательские имена (тэги) прокси: URL → имя («Немецкий», «Резерв»).
+    #[serde(default)]
+    pub proxy_labels: std::collections::HashMap<String, String>,
+}
+
+/// Полный пул прокси: proxies, а для легаси-установок — единственный proxy_url.
+pub fn effective_proxies(s: &Settings) -> Vec<String> {
+    if !s.proxies.is_empty() {
+        s.proxies.clone()
+    } else {
+        s.proxy_url.clone().into_iter().collect()
+    }
 }
 
 fn settings_path() -> Result<PathBuf, String> {
@@ -70,7 +92,51 @@ pub fn save(settings: &Settings) -> Result<(), String> {
 
 pub fn set_proxy_url(url: String) -> Result<Settings, String> {
     let mut s = load();
+    // Основной прокси и пул держим в синхроне: [0] всегда = proxy_url.
+    if s.proxies.is_empty() {
+        s.proxies = vec![url.clone()];
+    } else {
+        s.proxies[0] = url.clone();
+    }
     s.proxy_url = Some(url);
+    save(&s)?;
+    Ok(s)
+}
+
+/// Заменить пул целиком (1..=5, [0] — основной). Назначения, указывающие за
+/// пределы нового пула, вычищаются.
+pub fn set_proxies(urls: Vec<String>) -> Result<Settings, String> {
+    if urls.is_empty() || urls.len() > 5 {
+        return Err("Пул прокси: от 1 до 5 адресов".into());
+    }
+    let mut s = load();
+    s.proxy_url = Some(urls[0].clone());
+    s.proxy_assignments.retain(|_, idx| *idx < urls.len());
+    s.proxy_labels.retain(|url, _| urls.contains(url));
+    s.proxies = urls;
+    save(&s)?;
+    Ok(s)
+}
+
+/// Задать/убрать имя (тэг) прокси. Пустое имя = убрать.
+pub fn set_proxy_label(url: String, label: String) -> Result<Settings, String> {
+    let mut s = load();
+    let label = label.trim().to_string();
+    if label.is_empty() {
+        s.proxy_labels.remove(&url);
+    } else {
+        s.proxy_labels.insert(url, label);
+    }
+    save(&s)?;
+    Ok(s)
+}
+
+pub fn set_proxy_assignments(
+    map: std::collections::HashMap<String, usize>,
+) -> Result<Settings, String> {
+    let mut s = load();
+    let pool_len = effective_proxies(&s).len();
+    s.proxy_assignments = map.into_iter().filter(|(_, idx)| *idx < pool_len).collect();
     save(&s)?;
     Ok(s)
 }

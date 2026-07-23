@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
-  "windows": ["main"],
+  "description": "Capability for the main and tray-popup windows",
+  "windows": ["main", "tray"],
   "permissions": [
     "core:default",
     "core:event:default",
@@ -11,6 +11,9 @@
     "core:window:allow-show",
     "core:window:allow-set-focus",
     "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-is-maximized",
+    "core:window:allow-start-dragging",
     "opener:default",
     "opener:allow-open-url",
     "shell:default",
@@ -19,6 +22,7 @@
     "autostart:allow-disable",
     "autostart:allow-is-enabled",
     "dialog:default",
-    "dialog:allow-open"
+    "dialog:allow-open",
+    "notification:default"
   ]
 }

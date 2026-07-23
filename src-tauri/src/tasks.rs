@@ -45,13 +45,56 @@ fn runner_vbs_path() -> Option<PathBuf> {
     shim::install_dir().map(|d| d.join(RUNNER_VBS))
 }
 
-/// Записать rules-файл моста из settings.route_mode. Вызывается при регистрации
-/// задачи и при переключении режима в UI. Возвращает путь для аргумента --rules.
+/// Группы AI-сервисов для назначения «сервис → конкретный прокси из пула».
+/// Ключи хранятся в settings.proxy_assignments; домены разворачиваются в
+/// rules-файл (мост матчит по суффиксу). Синхронизировано с UI (Настройки).
+pub const SERVICE_GROUPS: &[(&str, &[&str])] = &[
+    ("anthropic", &["anthropic.com", "claude.ai", "claude.com"]),
+    (
+        "openai",
+        &["openai.com", "chatgpt.com", "oaistatic.com", "oaiusercontent.com"],
+    ),
+    ("google", &["generativelanguage.googleapis.com", "ai.google.dev"]),
+    (
+        "other_ai",
+        &[
+            "x.ai",
+            "mistral.ai",
+            "openrouter.ai",
+            "perplexity.ai",
+            "githubcopilot.com",
+            "cursor.sh",
+            "cursor.com",
+        ],
+    ),
+];
+
+/// Записать rules-файл моста из settings (route_mode + proxy_assignments).
+/// Вызывается при регистрации задачи и при изменениях в UI. Возвращает путь
+/// для аргумента --rules.
 pub fn write_rules_file() -> Result<PathBuf, String> {
-    let mode = crate::settings::load()
+    let s = crate::settings::load();
+    let mode = s
         .route_mode
+        .clone()
         .filter(|m| m == "smart")
         .unwrap_or_else(|| "all".into());
+    let pool_len = crate::settings::effective_proxies(&s).len();
+
+    // Назначения: группа → индекс прокси; разворачиваем в домен → индекс.
+    let mut assignments = serde_json::Map::new();
+    for (group, idx) in &s.proxy_assignments {
+        if *idx >= pool_len {
+            continue;
+        }
+        if let Some((_, domains)) = SERVICE_GROUPS.iter().find(|(g, _)| g == group) {
+            for d in *domains {
+                assignments.insert((*d).to_string(), serde_json::json!(idx));
+            }
+        }
+    }
+
+    let json = serde_json::json!({ "mode": mode, "assignments": assignments });
     let path = shim::install_dir()
         .map(|d| d.join(RULES_FILE))
         .ok_or_else(|| "Не нашёл папку ClaudeDesktopProxy".to_string())?;
@@ -59,8 +102,8 @@ pub fn write_rules_file() -> Result<PathBuf, String> {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("create dir {}: {e}", parent.display()))?;
     }
-    let json = format!("{{\n  \"mode\": \"{mode}\"\n}}\n");
-    std::fs::write(&path, json).map_err(|e| format!("write {}: {e}", path.display()))?;
+    let text = serde_json::to_string_pretty(&json).map_err(|e| format!("serialize rules: {e}"))?;
+    std::fs::write(&path, text).map_err(|e| format!("write {}: {e}", path.display()))?;
     Ok(path)
 }
 
@@ -106,6 +149,36 @@ fn bridge_supports_rules(exe: &std::path::Path) -> bool {
     cmd.output().map(|o| o.status.success()).unwrap_or(false)
 }
 
+/// Кэш пробы установленного exe. Ключ — mtime файла: после «Обновить мост»
+/// mtime меняется и кэш сбрасывается сам. Проба PyInstaller-exe стоит
+/// секунды (распаковка onefile) — без кэша UI-поллинг был бы болью.
+static EXE_PROBE_CACHE: std::sync::Mutex<Option<(std::time::SystemTime, bool)>> =
+    std::sync::Mutex::new(None);
+
+/// Установленный мост — легаси (старый PyInstaller-python, без /healthz и
+/// --rules)? По этому флагу UI показывает «Обновить мост» вместо вечного
+/// спиннера. false, если exe не найден вовсе.
+pub fn bridge_exe_is_legacy() -> bool {
+    let Some(exe) = shim::bridge_exe_path().filter(|p| p.exists()) else {
+        return false;
+    };
+    let mtime = std::fs::metadata(&exe)
+        .and_then(|m| m.modified())
+        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+    if let Ok(guard) = EXE_PROBE_CACHE.lock() {
+        if let Some((t, legacy)) = guard.as_ref() {
+            if *t == mtime {
+                return *legacy;
+            }
+        }
+    }
+    let legacy = !bridge_supports_rules(&exe);
+    if let Ok(mut guard) = EXE_PROBE_CACHE.lock() {
+        *guard = Some((mtime, legacy));
+    }
+    legacy
+}
+
 /// Зарегистрировать (или перерегистрировать) задачу автозапуска моста.
 ///
 /// Пишет runner-vbs с актуальным upstream-URL, регистрирует задачу и — только
@@ -135,6 +208,27 @@ pub fn register(proxy_url: &str) -> Result<(), String> {
         format!("\" --listen 127.0.0.1:{port} --quiet\"", port = LISTEN_PORT)
     };
 
+    // Все прокси пула → повторяемые --upstream (порядок = индексы для
+    // assignments в rules-файле; переданный proxy_url — первым/основным).
+    let pool = {
+        let s = crate::settings::load();
+        let mut list = crate::settings::effective_proxies(&s);
+        if list.first().map(|u| u != proxy_url).unwrap_or(true) {
+            list.retain(|u| u != proxy_url);
+            list.insert(0, proxy_url.to_string());
+        }
+        list
+    };
+    let upstreams_expr: String = pool
+        .iter()
+        .map(|u| {
+            format!(
+                " & \" --upstream \" & Chr(34) & \"{}\" & Chr(34)",
+                u.replace('"', "")
+            )
+        })
+        .collect();
+
     // Runner-СУПЕРВИЗОР: скрытый запуск, ожидание, перезапуск упавшего моста
     // через 5с. Цикл бесконечный — умирает только вместе с wscript (Stop-
     // ScheduledTask). Если exe исчез (деинсталляция) — sh.Run кидает ошибку,
@@ -144,11 +238,11 @@ pub fn register(proxy_url: &str) -> Result<(), String> {
          ' перезапускается через 5 секунд. Остановка — Stop-ScheduledTask.\r\n\
          Set sh = CreateObject(\"WScript.Shell\")\r\n\
          Do\r\n\
-         code = sh.Run(Chr(34) & \"{exe}\" & Chr(34) & \" --upstream \" & Chr(34) & \"{proxy}\" & Chr(34) & {args}, 0, True)\r\n\
+         code = sh.Run(Chr(34) & \"{exe}\" & Chr(34){upstreams} & {args}, 0, True)\r\n\
          WScript.Sleep 5000\r\n\
          Loop\r\n",
         exe = exe.to_string_lossy(),
-        proxy = proxy_url.replace('"', ""),
+        upstreams = upstreams_expr,
         args = args_expr,
     );
     std::fs::write(&vbs_path, vbs)

@@ -26,6 +26,12 @@ use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
 /// приложения флаг чист → авто-подъём работает как обычно.
 static MANUALLY_STOPPED: AtomicBool = AtomicBool::new(false);
 
+/// Мост остановлен пользователем намеренно? (для трей-монитора: не пугать
+/// уведомлением «мост упал», когда человек сам нажал «Остановить».)
+pub(crate) fn manually_stopped() -> bool {
+    MANUALLY_STOPPED.load(Ordering::Relaxed)
+}
+
 pub const LISTEN_PORT: u16 = 8889;
 /// Легаси python-мост (для миграции/детекта старых установок).
 const SHIM_FILENAME: &str = "local-proxy.py";
@@ -107,7 +113,14 @@ pub fn status() -> ShimStatus {
         let (upstream_masked, upstream_host, upstream_port) =
             split_upstream(upstream_raw.as_deref());
 
-        let uptime = System::uptime().saturating_sub(proc.start_time());
+        // start_time() — секунды с EPOCH; сравнивать надо с текущим epoch-
+        // временем. (System::uptime() — секунды с БУТА: разница уходила в
+        // минус → saturating 0 → UI вечно показывал «—».)
+        let now_epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let uptime = now_epoch.saturating_sub(proc.start_time());
 
         return ShimStatus {
             running: true,

@@ -140,9 +140,31 @@ pub fn find_vscode_exe() -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.exists())
 }
 
+/// Кэш AppUserModelID Codex: Get-AppxPackage стоит СЕКУНДЫ, а статус профилей
+/// поллится UI каждые 5с (двумя вызовами: builtin_presets + profile_installed).
+/// TTL 60с достаточно — установка/удаление Codex случается редко.
+static CODEX_APP_ID_CACHE: std::sync::Mutex<
+    Option<(std::time::Instant, Option<String>)>,
+> = std::sync::Mutex::new(None);
+
 /// Найти AppUserModelID установленного Codex через PowerShell Get-AppxPackage.
 /// Возвращаем в форме `<PackageFamilyName>!App` — этим запускается MSIX.
 pub fn find_codex_app_id() -> Option<String> {
+    if let Ok(guard) = CODEX_APP_ID_CACHE.lock() {
+        if let Some((t, cached)) = guard.as_ref() {
+            if t.elapsed() < std::time::Duration::from_secs(60) {
+                return cached.clone();
+            }
+        }
+    }
+    let result = find_codex_app_id_uncached();
+    if let Ok(mut guard) = CODEX_APP_ID_CACHE.lock() {
+        *guard = Some((std::time::Instant::now(), result.clone()));
+    }
+    result
+}
+
+fn find_codex_app_id_uncached() -> Option<String> {
     // Известный PackageFamilyName Codex стабилен между версиями (меняется только
     // версия в PackageFullName). Проверяем что пакет установлен через Get-AppxPackage.
     let out = run_silent(

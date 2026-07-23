@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Clod Helper",
         "width": 960,
         "height": 680,
@@ -19,9 +20,25 @@
         "minHeight": 620,
         "resizable": true,
         "fullscreen": false,
-        "decorations": true,
+        "decorations": false,
+        "shadow": true,
         "transparent": false,
-        "backgroundColor": "#000000"
+        "backgroundColor": "#101312"
+      },
+      {
+        "label": "tray",
+        "title": "Clod Helper",
+        "url": "index.html?view=tray",
+        "width": 332,
+        "height": 404,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "focus": false
       }
     ],
     "security": {
