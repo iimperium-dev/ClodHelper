@@ -6,6 +6,7 @@ mod proxy;
 mod settings;
 mod shim;
 mod system;
+mod tasks;
 mod vscode_config;
 
 use tauri::{
@@ -63,17 +64,30 @@ pub fn run() {
             commands::killswitch_status,
             commands::killswitch_enable,
             commands::killswitch_disable,
-            // Global env
+            // Global env (главный выключатель)
             commands::global_proxy_env,
+            commands::set_global_proxy_env,
             commands::clear_global_proxy_env,
+            // Автозапуск моста (Планировщик)
+            commands::bridge_task_status,
+            commands::bridge_task_register,
+            // Мост: здоровье и маршрутизация
+            commands::bridge_health,
+            commands::bridge_set_route_mode,
+            commands::bridge_update,
         ])
         .setup(|app| {
             setup_tray(app.handle())?;
 
             // Watchdog: авто-подъём упавшего шима (корневой фикс «деплой роняет
             // мост → Claude Code теряет связь»). Фоновый поток, переживает любые
-            // ошибки, поднимает шим за ~5с после падения.
+            // ошибки, поднимает шим за ~5с после падения. Второй эшелон после
+            // RestartOnFailure Планировщика (тот работает и без нашего GUI).
             shim::spawn_watchdog();
+
+            // Миграция старых установок: .vbs в Startup → задача Планировщика
+            // с автоперезапуском. Фоново — PS-вызовы медленные, UI не ждёт.
+            std::thread::spawn(tasks::migrate_from_startup_vbs);
 
             // Если запущены с флагом --tray (после автозапуска Windows) —
             // прячем главное окно при старте, видна только иконка в трее.

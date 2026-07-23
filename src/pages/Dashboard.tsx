@@ -2,28 +2,40 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   Activity,
+  CalendarClock,
   Copy,
   Globe,
   Loader2,
+  Network,
   Pause,
   Play,
   Plus,
   RotateCw,
+  Route,
   Settings as SettingsIcon,
   Wifi,
 } from "lucide-react";
 import { Button } from "../components/Button";
 import { AppRow } from "../components/AppRow";
 import { KillswitchCard } from "../components/KillswitchCard";
+import { Toggle } from "../components/Toggle";
 import {
   appsCreateShortcut,
   appsLaunch,
   appsList,
   appsRemove,
   appsSet,
+  bridgeHealth,
+  bridgeSetRouteMode,
+  bridgeTaskRegister,
+  bridgeTaskStatus,
+  bridgeUpdate,
+  clearGlobalProxyEnv,
+  globalProxyEnv,
   killswitchDisable,
   killswitchEnable,
   killswitchStatus,
+  setGlobalProxyEnv,
   shimRestart,
   shimStart,
   shimStatus,
@@ -32,6 +44,9 @@ import {
 } from "../lib/api";
 import type {
   AppProfileStatus,
+  BridgeHealth,
+  BridgeTaskStatus,
+  GlobalProxyEnv,
   KillswitchStatus,
   ShimStatus,
   ShimTestResult,
@@ -61,20 +76,41 @@ export function Dashboard({ onOpenSettings }: Props) {
   const [status, setStatus] = useState<ShimStatus | null>(null);
   const [apps, setApps] = useState<AppProfileStatus[]>([]);
   const [ks, setKs] = useState<KillswitchStatus | null>(null);
+  const [globalEnv, setGlobalEnvState] = useState<GlobalProxyEnv | null>(null);
+  const [envBusy, setEnvBusy] = useState(false);
+  const [task, setTask] = useState<BridgeTaskStatus | null>(null);
+  const [taskBusy, setTaskBusy] = useState(false);
+  const [health, setHealth] = useState<BridgeHealth | null>(null);
+  const [healthErr, setHealthErr] = useState<string | null>(null);
+  const [routeBusy, setRouteBusy] = useState(false);
+  const [updatingBridge, setUpdatingBridge] = useState(false);
+  const [updateError, setUpdateError] = useState<string | null>(null);
   const [busy, setBusy] = useState<"start" | "stop" | "restart" | "test" | null>(null);
   const [testResult, setTestResult] = useState<ShimTestResult | null>(null);
   const [copied, setCopied] = useState(false);
   const intervalRef = useRef<number | null>(null);
 
   const refresh = useCallback(async () => {
-    const [s, a, k] = await Promise.all([
+    const [s, a, k, e, t, h] = await Promise.all([
       shimStatus().catch(() => null),
       appsList().catch(() => [] as AppProfileStatus[]),
       killswitchStatus().catch(() => null),
+      globalProxyEnv().catch(() => null),
+      bridgeTaskStatus().catch(() => null),
+      // Ошибку healthz СОХРАНЯЕМ: по её тексту различаем «мост лежит /
+      // перезапускается» (не отвечает) и «старый python-мост» (ответ не
+      // парсится) — см. bridge_health в commands.rs.
+      bridgeHealth()
+        .then((x) => ({ ok: x as BridgeHealth | null, err: null as string | null }))
+        .catch((err) => ({ ok: null, err: String(err) })),
     ]);
     if (s) setStatus(s);
     setApps(a);
     if (k) setKs(k);
+    if (e) setGlobalEnvState(e);
+    if (t) setTask(t);
+    setHealth(h.ok);
+    setHealthErr(h.err);
   }, []);
 
   useEffect(() => {
@@ -87,6 +123,59 @@ export function Dashboard({ onOpenSettings }: Props) {
 
   const running = status?.running ?? false;
   const enabledCount = apps.filter((a) => a.enabled).length;
+  const envOn = (globalEnv?.present ?? false) && (globalEnv?.points_to_bridge ?? false);
+  const envForeign = (globalEnv?.present ?? false) && !(globalEnv?.points_to_bridge ?? false);
+
+  // ─── Системное проксирование (главный выключатель) ───
+  const handleEnvToggle = async () => {
+    setEnvBusy(true);
+    try {
+      setGlobalEnvState(envOn ? await clearGlobalProxyEnv() : await setGlobalProxyEnv());
+    } finally {
+      setEnvBusy(false);
+    }
+  };
+
+  const handleTaskRegister = async () => {
+    setTaskBusy(true);
+    try {
+      setTask(await bridgeTaskRegister());
+    } catch {
+      await refresh();
+    } finally {
+      setTaskBusy(false);
+    }
+  };
+
+  // ─── Маршрутизация (smart/all) ───
+  const smartOn = health?.mode === "smart";
+  // «Старый мост»: healthz ОТВЕТИЛ, но не JSON (python-мост пробросил запрос
+  // upstream'у). «Не отвечает» = мост лежит/перезапускается — это НЕ повод
+  // предлагать обновление.
+  const oldBridge = !health && healthErr !== null && healthErr.includes("разобрать");
+
+  const handleRouteToggle = async () => {
+    setRouteBusy(true);
+    try {
+      await bridgeSetRouteMode(smartOn ? "all" : "smart");
+      await refresh();
+    } finally {
+      setRouteBusy(false);
+    }
+  };
+
+  const handleBridgeUpdate = async () => {
+    setUpdatingBridge(true);
+    setUpdateError(null);
+    try {
+      await bridgeUpdate();
+      await refresh();
+    } catch (e) {
+      setUpdateError(String(e));
+    } finally {
+      setUpdatingBridge(false);
+    }
+  };
 
   // ─── Bridge controls ───
   const bridgeAction = async (
@@ -173,7 +262,7 @@ export function Dashboard({ onOpenSettings }: Props) {
               Clod Helper
             </h1>
             <p className="mt-0.5 text-[13px] text-vb-silver-dim">
-              Прокси-мост и killswitch для ваших приложений
+              Системный прокси, умный мост и killswitch
             </p>
           </div>
           <Button variant="ghost" size="sm" onClick={onOpenSettings}>
@@ -229,6 +318,40 @@ export function Dashboard({ onOpenSettings }: Props) {
               </dt>
               <dd className="tnum mt-1 font-mono text-vb-fg">
                 {status?.listen ?? "—"}
+              </dd>
+            </div>
+            <div className="col-span-2">
+              <dt className="flex items-center gap-1.5 text-vb-silver-dim">
+                <CalendarClock className="h-3.5 w-3.5" />
+                Автозапуск
+              </dt>
+              <dd className="mt-1 flex items-center gap-2 text-[13px]">
+                {task === null ? (
+                  // Статус ещё грузится — не пугаем ложным «устаревший».
+                  <span className="text-vb-silver-dim">—</span>
+                ) : task.registered ? (
+                  <span className="text-vb-fg">
+                    Планировщик задач{" "}
+                    <span className="text-vb-emerald">✓ автоперезапуск при падении</span>
+                  </span>
+                ) : (
+                  <>
+                    <span className="text-vb-warn">
+                      устаревший (.vbs в Startup) — упавший мост сам не поднимется
+                    </span>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={handleTaskRegister}
+                      disabled={taskBusy}
+                    >
+                      {taskBusy ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : null}
+                      Перенастроить
+                    </Button>
+                  </>
+                )}
               </dd>
             </div>
             <div className="col-span-2">
@@ -340,6 +463,162 @@ export function Dashboard({ onOpenSettings }: Props) {
               </motion.div>
             )}
           </AnimatePresence>
+        </section>
+
+        {/* Системное проксирование — главный выключатель */}
+        <section
+          className={cn(
+            "glass-card p-5",
+            envOn && "border-vb-emerald/25",
+          )}
+        >
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <h2 className="flex items-center gap-2 text-[15px] font-semibold text-vb-fg">
+                <Network className="h-4 w-4" />
+                Системное проксирование
+              </h2>
+              <p className="mt-1 text-[12px] text-vb-silver-dim">
+                HTTP(S)_PROXY → мост для всей системы. Каждый новый процесс —
+                VS Code, терминал, Claude Code, git, node — проксируется сам,
+                без запуска через хелпер и без ярлыков.
+              </p>
+            </div>
+            {globalEnv === null ? (
+              <Loader2 className="h-5 w-5 shrink-0 animate-spin text-vb-silver-dim" />
+            ) : (
+              <Toggle
+                checked={envOn}
+                onChange={handleEnvToggle}
+                disabled={envBusy}
+                label="Системный прокси"
+              />
+            )}
+          </div>
+
+          {envForeign && (
+            <div className="mt-3 rounded-lg border border-vb-warn/30 bg-vb-warn/[0.05] p-3 text-[12px]">
+              <p className="text-vb-warn">
+                В системе уже есть прокси-переменные, указывающие НЕ на мост:
+              </p>
+              <div className="mt-1.5 space-y-0.5 font-mono text-[11px] text-vb-silver-dim">
+                {globalEnv?.values.map(([k, v]) => (
+                  <div key={k} className="truncate">
+                    {k}=<span className="text-vb-fg">{v}</span>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-1.5 text-vb-silver-dim">
+                Включение тумблера перепишет их на мост (127.0.0.1:8889).
+              </p>
+            </div>
+          )}
+
+          {envOn && (
+            <p className="mt-3 text-[11px] text-vb-silver-faint">
+              Действует на процессы, запущенные после включения. Уже открытые
+              терминалы нужно перезапустить. NO_PROXY-исключения сохранены.
+            </p>
+          )}
+        </section>
+
+        {/* Маршрутизация: smart (только AI через upstream) / all (всё) */}
+        <section className="glass-card p-5">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <h2 className="flex items-center gap-2 text-[15px] font-semibold text-vb-fg">
+                <Route className="h-4 w-4" />
+                Умная маршрутизация
+              </h2>
+              <p className="mt-1 text-[12px] text-vb-silver-dim">
+                Через платный прокси — только AI-домены (Anthropic, OpenAI,
+                Copilot…). Остальной трафик идёт напрямую, не тратя upstream.
+              </p>
+            </div>
+            {health ? (
+              <Toggle
+                checked={smartOn}
+                onChange={handleRouteToggle}
+                disabled={routeBusy}
+                label="Умная маршрутизация"
+              />
+            ) : running && oldBridge ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={handleBridgeUpdate}
+                disabled={updatingBridge}
+              >
+                {updatingBridge ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RotateCw className="h-3.5 w-3.5" />
+                )}
+                Обновить мост
+              </Button>
+            ) : running ? (
+              // Мост запускается/перезапускается — healthz ещё молчит.
+              <Loader2 className="h-5 w-5 shrink-0 animate-spin text-vb-silver-dim" />
+            ) : (
+              <span className="shrink-0 text-[12px] text-vb-silver-dim">мост не запущен</span>
+            )}
+          </div>
+
+          {oldBridge && running && (
+            <p className="mt-3 text-[12px] text-vb-warn">
+              Мост старой версии (без /healthz) — маршрутизация недоступна.
+              «Обновить мост» заменит его на новый (Rust) с сохранением настроек.
+            </p>
+          )}
+          {updateError && <p className="mt-2 text-[12px] text-vb-loss">{updateError}</p>}
+
+          {health && (
+            <div className="mt-4 border-t border-vb-border pt-3">
+              <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[12px] text-vb-silver-dim">
+                <span>
+                  через прокси:{" "}
+                  <span className="tnum font-mono text-vb-fg">{health.via_upstream}</span>
+                </span>
+                <span>
+                  напрямую:{" "}
+                  <span className="tnum font-mono text-vb-fg">{health.via_direct}</span>
+                </span>
+                <span>
+                  активных:{" "}
+                  <span className="tnum font-mono text-vb-fg">{health.active}</span>
+                </span>
+                {health.errors > 0 && (
+                  <span className="text-vb-warn">
+                    ошибок: <span className="tnum font-mono">{health.errors}</span>
+                  </span>
+                )}
+                <span className="ml-auto font-mono text-[11px] text-vb-silver-faint">
+                  clod-bridge {health.version}
+                </span>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {health.upstreams.map((u) => (
+                  <span
+                    key={u.url}
+                    className={cn(
+                      "flex items-center gap-1.5 rounded-md border px-2 py-0.5 font-mono text-[11px]",
+                      u.healthy
+                        ? "border-vb-emerald/25 text-vb-silver"
+                        : "border-vb-loss/30 text-vb-loss",
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "h-1.5 w-1.5 rounded-full",
+                        u.healthy ? "bg-vb-emerald" : "bg-vb-loss",
+                      )}
+                    />
+                    {u.url}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </section>
 
         {/* Killswitch */}

@@ -31,6 +31,11 @@ pub struct Settings {
     /// пользователя; фактические правила проверяются отдельно в firewall.rs.
     #[serde(default)]
     pub killswitch_enabled: bool,
+    /// Режим маршрутизации моста: "all" (всё через upstream, как раньше) |
+    /// "smart" (через upstream только AI-домены, остальное напрямую).
+    /// None = "all" — консервативный дефолт для старых установок.
+    #[serde(default)]
+    pub route_mode: Option<String>,
 }
 
 fn settings_path() -> Result<PathBuf, String> {
@@ -115,6 +120,13 @@ pub fn set_profiles(profiles: Vec<AppProfile>) -> Result<Settings, String> {
 pub fn set_killswitch(enabled: bool) -> Result<Settings, String> {
     let mut s = load();
     s.killswitch_enabled = enabled;
+    save(&s)?;
+    Ok(s)
+}
+
+pub fn set_route_mode(mode: String) -> Result<Settings, String> {
+    let mut s = load();
+    s.route_mode = Some(mode);
     save(&s)?;
     Ok(s)
 }

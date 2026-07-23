@@ -6,8 +6,6 @@ import {
   Loader2,
   Power,
   RefreshCw,
-  ShieldOff,
-  Trash2,
 } from "lucide-react";
 import {
   disable as autostartDisable,
@@ -22,17 +20,11 @@ import {
   appsAddCustom,
   appsList,
   checkProxy,
-  clearGlobalProxyEnv,
-  globalProxyEnv,
   parseProxy,
   settingsGet,
   settingsSetProxy,
 } from "../lib/api";
-import type {
-  AppProfileStatus,
-  GlobalProxyEnv,
-  ProxyCheckResult,
-} from "../lib/types";
+import type { AppProfileStatus, ProxyCheckResult } from "../lib/types";
 import { fadeInUp } from "../lib/motion";
 import { cn } from "../lib/cn";
 
@@ -55,9 +47,6 @@ export function Settings({ onBack }: Props) {
   const [autostartBusy, setAutostartBusy] = useState(false);
   const [autostartError, setAutostartError] = useState<string | null>(null);
 
-  const [globalEnv, setGlobalEnv] = useState<GlobalProxyEnv | null>(null);
-  const [clearingEnv, setClearingEnv] = useState(false);
-
   const [apps, setApps] = useState<AppProfileStatus[]>([]);
   const [customName, setCustomName] = useState("");
   const [customPath, setCustomPath] = useState("");
@@ -71,7 +60,6 @@ export function Settings({ onBack }: Props) {
       setEditProxy(s.proxy_url);
     }
     setAutostart(await autostartIsEnabled().catch(() => false));
-    setGlobalEnv(await globalProxyEnv().catch(() => null));
     setApps(await appsList().catch(() => []));
   }, []);
 
@@ -125,15 +113,6 @@ export function Settings({ onBack }: Props) {
       );
     } finally {
       setAutostartBusy(false);
-    }
-  };
-
-  const handleClearEnv = async () => {
-    setClearingEnv(true);
-    try {
-      setGlobalEnv(await clearGlobalProxyEnv());
-    } finally {
-      setClearingEnv(false);
     }
   };
 
@@ -379,52 +358,6 @@ export function Settings({ onBack }: Props) {
           )}
         </motion.section>
 
-        {/* Глобальные env-переменные (убрать «шляпу» из системы) */}
-        {globalEnv?.present && (
-          <motion.section
-            variants={fadeInUp}
-            initial="hidden"
-            animate="show"
-            className="surface-card border-vb-warn/25 p-5"
-          >
-            <div className="flex items-start gap-3">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-vb-warn/10 text-vb-warn">
-                <ShieldOff className="h-4.5 w-4.5" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <h2 className="text-[15px] font-semibold text-vb-fg">
-                  Глобальные прокси-переменные в системе
-                </h2>
-                <p className="mt-1 text-[12px] text-vb-silver-dim">
-                  HTTP(S)_PROXY заданы глобально — их видит весь ПК. Теперь прокси
-                  впрыскивается только в выбранные приложения, так что глобальные
-                  можно убрать.
-                </p>
-                <div className="mt-2 flex flex-wrap gap-1">
-                  {globalEnv.values.map(([k]) => (
-                    <span
-                      key={k}
-                      className="rounded-md bg-vb-surface-2 px-1.5 py-0.5 font-mono text-[10px] text-vb-silver-faint"
-                    >
-                      {k}
-                    </span>
-                  ))}
-                </div>
-                <div className="mt-3">
-                  <Button variant="danger" size="sm" onClick={handleClearEnv} disabled={clearingEnv}>
-                    {clearingEnv ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Trash2 className="h-3.5 w-3.5" />
-                    )}
-                    Убрать из системы
-                  </Button>
-                </div>
-              </div>
-            </div>
-          </motion.section>
-        )}
-
         {/* Autostart */}
         <motion.section variants={fadeInUp} initial="hidden" animate="show" className="surface-card p-5">
           <div className="flex items-start justify-between gap-4">
@@ -434,7 +367,8 @@ export function Settings({ onBack }: Props) {
                 Запускать с Windows
               </h2>
               <p className="mt-1 text-[12px] text-vb-silver-dim">
-                Clod Helper стартует в трее при входе. Мост автостартует отдельно.
+                Clod Helper стартует в трее при входе. Мост автостартует отдельно —
+                задачей Планировщика (с автоперезапуском), GUI ему не нужен.
               </p>
             </div>
             {autostart === null ? (

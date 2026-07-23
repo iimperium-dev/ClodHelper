@@ -258,12 +258,8 @@ fn launch_exe(p: &AppProfile) -> Result<(), String> {
     let exe = location.ok_or_else(|| format!("Путь к {} не определён", p.name))?;
     let proxy = local_proxy_url();
 
-    // VS Code: --proxy-server покрывает только UI, но НЕ терминал (где Claude
-    // Code). Прописываем прокси в settings.json → каждый новый терминал получит
-    // HTTP_PROXY. Ошибку глотаем (не критично для запуска, лог не нужен).
-    if p.id == "vscode" {
-        let _ = crate::vscode_config::enable();
-    }
+    // Терминал VS Code (и Claude Code в нём) покрывается глобальными User
+    // env-переменными (env_proxy.rs) — правка settings.json больше не нужна.
 
     let mut cmd = Command::new(&exe);
     cmd.arg(format!("--proxy-server={proxy}"));

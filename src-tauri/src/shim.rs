@@ -14,10 +14,17 @@
 //! сохраняет инвариант "после ребута шим запустится так же как сейчас".
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde::Serialize;
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
+
+/// Пользователь явно остановил мост (кнопка «Остановить»/меню трея). Пока флаг
+/// взведён, watchdog НЕ поднимает мост — иначе ручная остановка жила бы 5 сек
+/// и кнопка была бы бесполезной. Любой явный start() снимает флаг; при старте
+/// приложения флаг чист → авто-подъём работает как обычно.
+static MANUALLY_STOPPED: AtomicBool = AtomicBool::new(false);
 
 pub const LISTEN_PORT: u16 = 8889;
 /// Легаси python-мост (для миграции/детекта старых установок).
@@ -169,6 +176,12 @@ fn split_upstream(
 
 /// Убить все процессы шима (по argv-match). Возвращает кол-во убитых.
 pub fn stop() -> Result<usize, String> {
+    // Ручная остановка: watchdog не должен воскрешать мост через 5с.
+    MANUALLY_STOPPED.store(true, Ordering::Relaxed);
+    // Сначала останавливаем задачу Планировщика (если есть): её runner-
+    // супервизор иначе перезапустит убитый мост через 5 секунд.
+    crate::tasks::stop_ignore_errors();
+
     let mut sys = System::new_with_specifics(
         RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
     );
@@ -205,9 +218,18 @@ pub fn stop() -> Result<usize, String> {
 
 // ─── Start ───────────────────────────────────────────────────────
 
-/// Запустить шим через тот же .vbs что прописан в Startup-папке (молча,
-/// без окна консоли). Если .vbs нет — фейл (значит инсталлятор не отработал).
+/// Запустить шим: через задачу Планировщика (основной путь) или легаси .vbs
+/// из Startup (старые установки до миграции). Оба пути — молча, без окна.
 pub fn start() -> Result<(), String> {
+    // Явный запуск снимает ручную остановку — watchdog снова сторожит.
+    MANUALLY_STOPPED.store(false, Ordering::Relaxed);
+    if crate::tasks::is_registered() {
+        crate::tasks::start()?;
+        // Дать процессу время поднять listener.
+        std::thread::sleep(Duration::from_millis(700));
+        return Ok(());
+    }
+
     let vbs = startup_vbs_path()
         .ok_or_else(|| "Не нашёл папку Startup".to_string())?;
     if !vbs.exists() {
@@ -263,6 +285,12 @@ pub fn spawn_watchdog() {
         std::thread::sleep(Duration::from_secs(WATCHDOG_INTERVAL_SEC));
         let mut consecutive_revivals: u32 = 0;
         loop {
+            // Уважаем ручную остановку: «Остановить» значит остановить,
+            // а не «поживи 5 секунд».
+            if MANUALLY_STOPPED.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_secs(WATCHDOG_INTERVAL_SEC));
+                continue;
+            }
             if status().running {
                 consecutive_revivals = 0;
             } else {
@@ -290,7 +318,9 @@ pub fn spawn_watchdog() {
     });
 }
 
-fn startup_vbs_path() -> Option<PathBuf> {
+/// Путь легаси-автозапуска (.vbs в Startup). Оставлен для миграции: задача
+/// Планировщика (tasks.rs) при регистрации удаляет его.
+pub(crate) fn startup_vbs_path() -> Option<PathBuf> {
     let appdata = dirs::config_dir()?; // %APPDATA% on Windows
     Some(
         appdata
@@ -303,7 +333,7 @@ fn startup_vbs_path() -> Option<PathBuf> {
     )
 }
 
-fn install_dir() -> Option<PathBuf> {
+pub(crate) fn install_dir() -> Option<PathBuf> {
     Some(dirs::data_local_dir()?.join(INSTALL_DIR_REL))
 }
 
@@ -317,44 +347,8 @@ pub fn shim_script_path() -> Option<PathBuf> {
     install_dir().map(|d| d.join(SHIM_FILENAME))
 }
 
-/// Перезаписать `ClaudeDesktopProxy.vbs` с новым upstream-прокси. Не запускает
-/// сам мост — вызывающий код должен сделать `stop()` + `start()` после.
-///
-/// Теперь запускает `clod-bridge.exe` НАПРЯМУЮ (не python) — так мост не
-/// попадает под killswitch-блок python.exe. `_python_cmd` сохранён в сигнатуре
-/// для обратной совместимости вызовов, но игнорируется.
-pub fn write_startup_vbs(
-    proxy_url: &str,
-    _python_cmd: Option<&str>,
-) -> Result<PathBuf, String> {
-    let vbs_path = startup_vbs_path()
-        .ok_or_else(|| "Не нашёл папку Startup".to_string())?;
-    let exe_path = bridge_exe_path()
-        .ok_or_else(|| "Не нашёл папку ClaudeDesktopProxy".to_string())?;
-    if !exe_path.exists() {
-        return Err(format!(
-            "Не найден {}. Запустите установщик заново.",
-            exe_path.display()
-        ));
-    }
-    let exe_str = exe_path.to_string_lossy().to_string();
-    // VBS: запускаем exe напрямую, скрыто (0), не ждём (False).
-    let vbs = format!(
-        "' Auto-start Clod bridge at Windows login (hidden).\r\n\
-         Set sh = CreateObject(\"WScript.Shell\")\r\n\
-         sh.Run Chr(34) & \"{path}\" & Chr(34) & \" --upstream \" & Chr(34) & \"{proxy}\" & Chr(34) & \" --listen 127.0.0.1:{port} --quiet\", 0, False\r\n",
-        path = exe_str,
-        proxy = proxy_url.replace('"', ""),
-        port = LISTEN_PORT,
-    );
-    if let Some(parent) = vbs_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("create dir {}: {e}", parent.display()))?;
-    }
-    std::fs::write(&vbs_path, vbs)
-        .map_err(|e| format!("write {}: {e}", vbs_path.display()))?;
-    Ok(vbs_path)
-}
+// Примечание: write_startup_vbs (легаси-автозапуск через Startup) удалён —
+// автозапуск теперь регистрирует tasks::register (Планировщик + RestartOnFailure).
 
 // ─── Test (ping) ─────────────────────────────────────────────────
 

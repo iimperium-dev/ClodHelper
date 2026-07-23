@@ -1,10 +1,13 @@
 //! Управление ГЛОБАЛЬНЫМИ прокси-переменными Windows (User scope).
 //!
-//! Зачем: раньше проксирование включалось глобальными User env-переменными
-//! HTTP_PROXY/HTTPS_PROXY — их видел ЛЮБОЙ процесс на машине. Теперь модель
-//! другая: прокси впрыскивается только в приложения, запущенные через профили
-//! (env в дочернем процессе). Глобальные переменные становятся лишними и даже
-//! вредными — их надо убрать из системы, чтобы «шляпа» не висела глобально.
+//! Это ГЛАВНЫЙ механизм доставки прокси (модель Фазы 1). Опыт эксплуатации
+//! показал: впрыскивание env только в дочерние процессы лаунчера хрупко
+//! (VS Code пересобирает окружение терминала, MSIX глотает аргументы,
+//! приложения запускают не через хелпер). Глобальные HTTP(S)_PROXY в User
+//! scope наследует ЛЮБОЙ новый процесс — VS Code, его терминал, Claude Code,
+//! git, node — без флагов, ярлыков и правки конфигов. Указывают они на
+//! локальный мост (127.0.0.1:8889), так что «шляпа» не глобальная: браузеры
+//! env-прокси не читают, а мост сам решает, что гнать через upstream.
 //!
 //! Читаем/пишем User-scope переменные окружения через реестр
 //! HKCU\Environment (то же, что делает setx / System Properties).
@@ -18,6 +21,11 @@ const KEYS: &[&str] = &["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"
 pub struct GlobalProxyEnv {
     /// Заданы ли какие-либо HTTP(S)_PROXY в User-scope.
     pub present: bool,
+    /// Заданы ОБА HTTP_PROXY и HTTPS_PROXY, и все значения указывают на наш
+    /// мост (127.0.0.1:8889). Без HTTPS_PROXY тумблер «ВКЛ» врал бы: весь
+    /// https-трафик (т.е. Claude) шёл бы мимо моста.
+    /// false при present=true → чужой/неполный прокси, UI показывает warning.
+    pub points_to_bridge: bool,
     /// Значения найденных переменных (name → value) для показа в UI.
     pub values: Vec<(String, String)>,
 }
@@ -32,10 +40,67 @@ pub fn read() -> GlobalProxyEnv {
             }
         }
     }
+    let bridge_needle = format!("127.0.0.1:{}", crate::shim::LISTEN_PORT);
+    let has_http = values
+        .iter()
+        .any(|(k, _)| k.eq_ignore_ascii_case("HTTP_PROXY"));
+    let has_https = values
+        .iter()
+        .any(|(k, _)| k.eq_ignore_ascii_case("HTTPS_PROXY"));
+    let points_to_bridge =
+        has_http && has_https && values.iter().all(|(_, v)| v.contains(&bridge_needle));
     GlobalProxyEnv {
         present: !values.is_empty(),
+        points_to_bridge,
         values,
     }
+}
+
+/// Прописать глобальные прокси-переменные → мост (User scope).
+///
+/// HTTP_PROXY/HTTPS_PROXY = URL моста; NO_PROXY мержится с существующим
+/// значением пользователя (его домены-исключения сохраняем, локальные адреса
+/// гарантируем). lowercase-варианты убираем: env Windows регистронезависим,
+/// пара UPPER+lower в реестре только путает.
+///
+/// Действует на процессы, запущенные ПОСЛЕ (WM_SETTINGCHANGE рассылается
+/// автоматически). Прав администратора не требует (User scope).
+pub fn set(proxy_url: &str) -> Result<(), String> {
+    let no_proxy = merged_no_proxy();
+    let url_e = proxy_url.replace('\'', "''");
+    let np_e = no_proxy.replace('\'', "''");
+    let script = format!(
+        "[Environment]::SetEnvironmentVariable('HTTP_PROXY', '{url_e}', 'User'); \
+         [Environment]::SetEnvironmentVariable('HTTPS_PROXY', '{url_e}', 'User'); \
+         [Environment]::SetEnvironmentVariable('NO_PROXY', '{np_e}', 'User'); \
+         [Environment]::SetEnvironmentVariable('http_proxy', $null, 'User'); \
+         [Environment]::SetEnvironmentVariable('https_proxy', $null, 'User'); \
+         Write-Output 'ENV_SET'"
+    );
+    let out = run_ps_capture(&script)
+        .ok_or_else(|| "powershell.exe не выполнил запись переменных".to_string())?;
+    if out.contains("ENV_SET") {
+        Ok(())
+    } else {
+        Err(format!("Не удалось записать переменные: {out}"))
+    }
+}
+
+/// Существующий NO_PROXY пользователя + обязательные локальные адреса.
+fn merged_no_proxy() -> String {
+    const REQUIRED: &[&str] = &["localhost", "127.0.0.1", "::1"];
+    let existing = read_user_env("NO_PROXY").unwrap_or_default();
+    let mut parts: Vec<String> = existing
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    for r in REQUIRED {
+        if !parts.iter().any(|p| p.eq_ignore_ascii_case(r)) {
+            parts.push((*r).to_string());
+        }
+    }
+    parts.join(",")
 }
 
 /// Удалить все глобальные HTTP(S)_PROXY из User-scope.

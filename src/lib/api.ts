@@ -3,6 +3,8 @@ import type {
   AppProfile,
   AppProfileStatus,
   AppSettings,
+  BridgeHealth,
+  BridgeTaskStatus,
   CursorInfo,
   CursorSetupResult,
   GlobalProxyEnv,
@@ -138,12 +140,43 @@ export async function killswitchDisable(): Promise<KillswitchStatus> {
   return invoke<KillswitchStatus>("killswitch_disable");
 }
 
-// ─── Global proxy env ────────────────────────────────────────────
+// ─── Global proxy env (главный выключатель) ──────────────────────
 
 export async function globalProxyEnv(): Promise<GlobalProxyEnv> {
   return invoke<GlobalProxyEnv>("global_proxy_env");
 }
 
+/** Включить системное проксирование: HTTP(S)_PROXY → мост (User scope). */
+export async function setGlobalProxyEnv(): Promise<GlobalProxyEnv> {
+  return invoke<GlobalProxyEnv>("set_global_proxy_env");
+}
+
 export async function clearGlobalProxyEnv(): Promise<GlobalProxyEnv> {
   return invoke<GlobalProxyEnv>("clear_global_proxy_env");
+}
+
+// ─── Автозапуск моста (Планировщик задач) ────────────────────────
+
+export async function bridgeTaskStatus(): Promise<BridgeTaskStatus> {
+  return invoke<BridgeTaskStatus>("bridge_task_status");
+}
+
+export async function bridgeTaskRegister(): Promise<BridgeTaskStatus> {
+  return invoke<BridgeTaskStatus>("bridge_task_register");
+}
+
+// ─── Мост: /healthz и маршрутизация ──────────────────────────────
+
+/** Живые счётчики моста. Кидает, если мост не отвечает или старый (python). */
+export async function bridgeHealth(): Promise<BridgeHealth> {
+  return invoke<BridgeHealth>("bridge_health");
+}
+
+export async function bridgeSetRouteMode(mode: "smart" | "all"): Promise<void> {
+  return invoke<void>("bridge_set_route_mode", { mode });
+}
+
+/** Обновить установленный мост из ресурсов приложения (stop → copy → start). */
+export async function bridgeUpdate(): Promise<string> {
+  return invoke<string>("bridge_update");
 }

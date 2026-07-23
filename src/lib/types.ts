@@ -97,6 +97,8 @@ export interface AppSettings {
   autostart_dashboard: boolean;
   app_profiles?: AppProfile[];
   killswitch_enabled?: boolean;
+  /** "all" | "smart" (None = "all"). */
+  route_mode?: string;
 }
 
 // ─── App profiles (проксируемые приложения) ──────────────────────
@@ -137,10 +139,44 @@ export interface KillswitchStatus {
   blocked_processes: string[];
 }
 
-// ─── Global proxy env ────────────────────────────────────────────
+// ─── Global proxy env (главный выключатель) ──────────────────────
 
 export interface GlobalProxyEnv {
   present: boolean;
+  /** Все значения указывают на наш мост (127.0.0.1:8889). */
+  points_to_bridge: boolean;
   /** [name, value] пары. */
   values: [string, string][];
+}
+
+// ─── Автозапуск моста (Планировщик задач) ────────────────────────
+
+export interface BridgeTaskStatus {
+  registered: boolean;
+  /** Ready / Running / Disabled. */
+  state?: string;
+}
+
+// ─── Мост: /healthz и маршрутизация ──────────────────────────────
+
+export interface BridgeUpstreamHealth {
+  url: string;
+  healthy: boolean;
+  ok: number;
+  fail: number;
+}
+
+export interface BridgeHealth {
+  status: string;
+  version: string;
+  uptime_sec: number;
+  listen: string;
+  /** "smart" — через upstream только AI-домены; "all" — весь трафик. */
+  mode: string;
+  active: number;
+  total: number;
+  via_upstream: number;
+  via_direct: number;
+  errors: number;
+  upstreams: BridgeUpstreamHealth[];
 }

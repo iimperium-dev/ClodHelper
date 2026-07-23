@@ -257,6 +257,20 @@ pub async fn run_install(
     run_ps_script(&app, &log_file, &desktop_ps1, &bridge_args).await?;
     emit(&app, "✓ Bridge запущен на 127.0.0.1:8889");
 
+    // Автозапуск: setup-скрипт кладёт легаси .vbs в Startup — заменяем его
+    // задачей Планировщика с RestartOnFailure (упавший мост поднимается сам).
+    // Не фатально: при ошибке легаси .vbs остаётся рабочим запасным путём.
+    emit(&app, "▸ Настраиваем автозапуск моста (Планировщик задач)…");
+    let url_for_task = proxy_url.clone();
+    match tokio::task::spawn_blocking(move || crate::tasks::register(&url_for_task)).await {
+        Ok(Ok(())) => emit(&app, "✓ Задача ClodBridge зарегистрирована (автоперезапуск при падении)"),
+        Ok(Err(e)) => {
+            log_line(&log_file, &format!("WARN: task register failed: {e}"));
+            emit(&app, format!("⚠ Планировщик не настроен ({e}) — остаётся автозапуск через Startup"));
+        }
+        Err(e) => log_line(&log_file, &format!("WARN: task register join: {e}")),
+    }
+
     if need_code {
         emit(&app, "");
         emit(&app, "▸ Устанавливаем Claude Code…");
@@ -663,10 +677,12 @@ pub async fn shim_test() -> ShimTestResult {
 
 #[tauri::command]
 pub fn shim_script_path() -> Option<String> {
-    // Возвращаем путь только если файл фактически существует — это сигнал
-    // "шим установлен", по нему App.tsx решает Dashboard vs Wizard.
-    shim::shim_script_path()
+    // Сигнал «мост установлен» для App.tsx (Dashboard vs Wizard).
+    // Новый маркер — clod-bridge.exe; легаси — local-proxy.py (установки,
+    // где exe ещё не появился).
+    shim::bridge_exe_path()
         .filter(|p| p.exists())
+        .or_else(|| shim::shim_script_path().filter(|p| p.exists()))
         .map(|p| p.to_string_lossy().to_string())
 }
 
@@ -690,18 +706,9 @@ pub fn apps_list() -> Vec<AppProfileStatus> {
 /// Если killswitch активен — правила файрвола НЕ пересобираются автоматически
 /// здесь (это делает отдельный killswitch_enable), чтобы не плодить UAC-промпты
 /// на каждый чих. UI подскажет «переприменить killswitch» если нужно.
+/// settings.json VS Code больше не трогаем — терминал покрывает глобальный env.
 #[tauri::command]
 pub async fn apps_set(profiles: Vec<AppProfile>) -> Result<Vec<AppProfileStatus>, String> {
-    // Сверяем VS Code settings.json с состоянием профиля: включён → прописать
-    // прокси в терминал, выключен → убрать наши ключи. Ошибки глотаем (JSONC
-    // или отсутствие VS Code не должны блокировать сохранение профилей).
-    if let Some(vscode) = profiles.iter().find(|p| p.id == "vscode") {
-        if vscode.enabled {
-            let _ = crate::vscode_config::enable();
-        } else {
-            let _ = crate::vscode_config::disable();
-        }
-    }
     let saved = settings::set_profiles(profiles)?;
     Ok(apps::statuses(&saved.app_profiles))
 }
@@ -844,12 +851,27 @@ pub async fn killswitch_disable() -> Result<KillswitchStatus, String> {
         .map_err(|e| format!("Внутренняя ошибка: {e}"))?)
 }
 
-// ─── Глобальные env-переменные ──────────────────────────────────
+// ─── Глобальные env-переменные (главный выключатель) ────────────
 
-/// Прочитать глобальные HTTP(S)_PROXY (User scope) — для подсказки «убрать».
+/// Прочитать глобальные HTTP(S)_PROXY (User scope) — состояние тумблера.
 #[tauri::command]
 pub fn global_proxy_env() -> GlobalProxyEnv {
     env_proxy::read()
+}
+
+/// Включить системное проксирование: HTTP(S)_PROXY → мост (User scope, без UAC).
+/// Заодно best-effort чистим легаси-ключи из settings.json VS Code — при
+/// глобальном env они стали лишними дублями.
+#[tauri::command]
+pub async fn set_global_proxy_env() -> Result<GlobalProxyEnv, String> {
+    tokio::task::spawn_blocking(|| {
+        env_proxy::set(&format!("http://127.0.0.1:{}", shim::LISTEN_PORT))?;
+        let _ = crate::vscode_config::disable();
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|e| format!("Внутренняя ошибка: {e}"))??;
+    Ok(env_proxy::read())
 }
 
 /// Удалить глобальные HTTP(S)_PROXY из системы (User scope, без UAC).
@@ -861,6 +883,154 @@ pub async fn clear_global_proxy_env() -> Result<GlobalProxyEnv, String> {
     Ok(env_proxy::read())
 }
 
+// ─── Автозапуск моста (Планировщик задач) ───────────────────────
+
+/// Статус задачи автозапуска моста.
+#[tauri::command]
+pub async fn bridge_task_status() -> crate::tasks::BridgeTaskStatus {
+    tokio::task::spawn_blocking(crate::tasks::status)
+        .await
+        .unwrap_or(crate::tasks::BridgeTaskStatus {
+            registered: false,
+            state: None,
+        })
+}
+
+/// Зарегистрировать задачу автозапуска (использует proxy_url из settings).
+/// Удаляет легаси .vbs из Startup после успешной регистрации.
+#[tauri::command]
+pub async fn bridge_task_register() -> Result<crate::tasks::BridgeTaskStatus, String> {
+    let url = settings::load()
+        .proxy_url
+        .ok_or_else(|| "Прокси ещё не настроен — сначала сохраните его".to_string())?;
+    tokio::task::spawn_blocking(move || crate::tasks::register(&url))
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))??;
+    Ok(tokio::task::spawn_blocking(crate::tasks::status)
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))?)
+}
+
+// ─── Мост: здоровье и маршрутизация ─────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BridgeUpstreamHealth {
+    pub url: String,
+    pub healthy: bool,
+    pub ok: u64,
+    pub fail: u64,
+}
+
+/// Зеркало JSON от GET /healthz нового Rust-моста.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BridgeHealth {
+    pub status: String,
+    pub version: String,
+    pub uptime_sec: u64,
+    pub listen: String,
+    pub mode: String,
+    pub active: u64,
+    pub total: u64,
+    pub via_upstream: u64,
+    pub via_direct: u64,
+    pub errors: u64,
+    pub upstreams: Vec<BridgeUpstreamHealth>,
+}
+
+/// Живые счётчики моста. Ошибка = мост не отвечает ИЛИ это старый python-мост
+/// без /healthz (UI предложит «Обновить мост»).
+#[tauri::command]
+pub async fn bridge_health() -> Result<BridgeHealth, String> {
+    let client = reqwest::Client::builder()
+        .no_proxy() // сами к себе — не через системный прокси
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .map_err(|e| format!("client: {e}"))?;
+    let resp = client
+        .get(format!("http://127.0.0.1:{}/healthz", shim::LISTEN_PORT))
+        .send()
+        .await
+        .map_err(|e| format!("мост не отвечает: {e}"))?;
+    resp.json::<BridgeHealth>()
+        .await
+        .map_err(|e| format!("не удалось разобрать healthz: {e}"))
+}
+
+/// Переключить режим маршрутизации моста ("smart" | "all"): сохранить в
+/// settings, переписать rules-файл (+vbs при известном upstream), перезапустить.
+#[tauri::command]
+pub async fn bridge_set_route_mode(mode: String) -> Result<(), String> {
+    if mode != "smart" && mode != "all" {
+        return Err("Режим должен быть smart или all".into());
+    }
+    settings::set_route_mode(mode)?;
+    // Задача уже могла быть зарегистрирована без --rules (старый формат) —
+    // полная перерегистрация гарантирует актуальные аргументы runner-vbs.
+    if let Some(url) = settings::load().proxy_url {
+        tokio::task::spawn_blocking(move || crate::tasks::register(&url))
+            .await
+            .map_err(|e| format!("Внутренняя ошибка: {e}"))??;
+    } else {
+        tokio::task::spawn_blocking(crate::tasks::write_rules_file)
+            .await
+            .map_err(|e| format!("Внутренняя ошибка: {e}"))??;
+    }
+    tokio::task::spawn_blocking(shim::restart)
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))??;
+    Ok(())
+}
+
+/// Обновить установленный мост из ресурсов приложения: stop → copy → start.
+/// Нужен для миграции живых установок со старого python-моста на Rust-мост
+/// (новый exe попадает в resources при апдейте Clod Helper).
+#[tauri::command]
+pub async fn bridge_update(app: AppHandle) -> Result<String, String> {
+    let src = resolve_resource(&app, "clod-bridge.exe")?;
+    if !src.exists() {
+        return Err("В ресурсах приложения нет clod-bridge.exe".into());
+    }
+    let dst = shim::bridge_exe_path()
+        .ok_or_else(|| "Не нашёл папку ClaudeDesktopProxy".to_string())?;
+    tokio::task::spawn_blocking(move || -> Result<String, String> {
+        let _ = shim::stop(); // работающий exe залочен Windows — сначала стоп
+        if let Some(parent) = dst.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("create dir {}: {e}", parent.display()))?;
+        }
+        // Страховка отката: старый exe сохраняем рядом (.bak) — если новый
+        // мост у пользователя поведёт себя хуже, можно вернуть вручную.
+        if dst.exists() {
+            let _ = std::fs::copy(&dst, dst.with_extension("exe.bak"));
+        }
+        // Файл может освобождаться не мгновенно после kill — пара ретраев.
+        let mut last_err = String::new();
+        for _ in 0..3 {
+            match std::fs::copy(&src, &dst) {
+                Ok(_) => {
+                    // Перерегистрировать задачу: новый Rust-мост понимает
+                    // --rules, vbs должен его получить (иначе smart-режим не
+                    // применится). Не фатально — легаси-vbs тоже рабочий.
+                    if let Some(url) = settings::load().proxy_url {
+                        if let Err(e) = crate::tasks::register(&url) {
+                            tracing::warn!("bridge_update: перерегистрация задачи не удалась: {e}");
+                        }
+                    }
+                    shim::start()?;
+                    return Ok(format!("Мост обновлён: {}", dst.display()));
+                }
+                Err(e) => {
+                    last_err = e.to_string();
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
+            }
+        }
+        Err(format!("Не удалось скопировать мост: {last_err}"))
+    })
+    .await
+    .map_err(|e| format!("Внутренняя ошибка: {e}"))?
+}
+
 #[tauri::command]
 pub async fn settings_set_proxy(url: String) -> Result<Settings, String> {
     // 1) Validate proxy first — fail fast.
@@ -869,14 +1039,12 @@ pub async fn settings_set_proxy(url: String) -> Result<Settings, String> {
     // 2) Persist to settings.json.
     let saved = settings::set_proxy_url(url.clone())?;
 
-    // 3) Write VBS with new proxy URL.
-    let py = system::detect_python_cmd().unwrap_or_else(|| "python".to_string());
-    let url_for_vbs = url.clone();
-    tokio::task::spawn_blocking(move || {
-        shim::write_startup_vbs(&url_for_vbs, Some(&py))
-    })
-    .await
-    .map_err(|e| format!("Внутренняя ошибка: {e}"))??;
+    // 3) Перерегистрировать задачу автозапуска: runner-vbs получит новый
+    //    upstream-URL (заодно мигрирует легаси-установку со Startup .vbs).
+    let url_for_task = url.clone();
+    tokio::task::spawn_blocking(move || crate::tasks::register(&url_for_task))
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))??;
 
     // 4) Restart shim so new URL applies immediately.
     tokio::task::spawn_blocking(shim::restart)
