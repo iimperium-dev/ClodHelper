@@ -28,6 +28,10 @@ src-tauri/target
 src-tauri/gen
 src-tauri/Cargo.lock
 
+# Bridge build artifacts (Rust crate in bridge/)
+bridge/target
+bridge/Cargo.lock
+
 # Release bundles (don't commit binaries)
 *-setup.exe
 *.msi
@@ -38,5 +42,5 @@ __pycache__/
 *.pyc
 
 
-# Bridge exe (reproducible from local-proxy.py via PyInstaller)
+# Bridge exe (reproducible: npm run bridge:build из bridge/ Rust-крейта)
 src-tauri/resources/clod-bridge.exe

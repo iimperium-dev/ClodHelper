@@ -1,0 +1,20 @@
+[package]
+name = "clod-bridge"
+version = "1.0.0"
+edition = "2021"
+description = "Локальный HTTP-прокси-мост: no-auth localhost → auth upstream, с domain-routing и failover"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time", "macros", "sync"] }
+socket2 = "0.5"
+url = "2"
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Маленький exe: он копируется в resources и ставится каждому пользователю.
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+codegen-units = 1
