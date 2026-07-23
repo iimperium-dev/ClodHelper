@@ -222,24 +222,62 @@ fn load_rules(path: Option<&str>) -> (Mode, Vec<String>, Vec<String>, Vec<(Strin
     let mut proxy: Vec<String> = DEFAULT_PROXY_DOMAINS.iter().map(|s| s.to_string()).collect();
     let mut direct: Vec<String> = Vec::new();
     let mut assignments: Vec<(String, usize)> = Vec::new();
-    if let Some(p) = path {
-        match std::fs::read_to_string(p) {
-            // BOM терпим: Блокнот/PowerShell пишут UTF-8 c BOM, serde_json его не ест.
-            Ok(text) => match serde_json::from_str::<RulesFile>(text.trim_start_matches('\u{feff}')) {
-                Ok(r) => {
-                    if let Some(m) = r.mode.as_deref() {
-                        mode = if m.eq_ignore_ascii_case("smart") { Mode::Smart } else { Mode::All };
-                    }
-                    proxy.extend(r.proxy_domains.unwrap_or_default());
-                    direct.extend(r.direct_domains.unwrap_or_default());
-                    assignments = r.assignments.unwrap_or_default().into_iter().collect();
+    let Some(p) = path else {
+        return (mode, proxy, direct, assignments);
+    };
+
+    // Отсутствие файла — легальный кейс (правил нет). А вот битый/нечитаемый
+    // файл дефолтами закрывать НЕЛЬЗЯ: дефолты = пустые assignments, т.е.
+    // закреплённый Claude тихо уйдёт в failover на другой выходной IP. Смена
+    // IP опаснее простоя, поэтому: ретраи (запись дашборда могла совпасть с
+    // нашим стартом), затем fail-fast — супервизор перезапустит с целым файлом.
+    let mut last_err = String::new();
+    for attempt in 0..5 {
+        if attempt > 0 {
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        let text = match std::fs::read_to_string(p) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return (mode, proxy, direct, assignments);
+            }
+            Err(e) => {
+                last_err = format!("не читается: {e}");
+                continue;
+            }
+        };
+        // BOM терпим: Блокнот/PowerShell пишут UTF-8 c BOM, serde_json его не ест.
+        match serde_json::from_str::<RulesFile>(text.trim_start_matches('\u{feff}')) {
+            Ok(r) => {
+                if let Some(m) = r.mode.as_deref() {
+                    mode = if m.eq_ignore_ascii_case("smart") { Mode::Smart } else { Mode::All };
                 }
-                Err(e) => eprintln!("WARN: rules file {p} не парсится ({e}) — дефолты"),
-            },
-            Err(e) => eprintln!("WARN: rules file {p} не читается ({e}) — дефолты"),
+                proxy.extend(r.proxy_domains.unwrap_or_default());
+                direct.extend(r.direct_domains.unwrap_or_default());
+                // Нормализация + детерминированный порядок (длина ↓, имя, индекс):
+                // HashMap-порядок случаен, и при дублях-тезках победитель менялся
+                // бы от рестарта к рестарту — а это скачок выходного IP.
+                let mut v: Vec<(String, usize)> = r
+                    .assignments
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(k, i)| (k.trim_end_matches('.').to_ascii_lowercase(), i))
+                    .collect();
+                v.sort_by(|a, b| {
+                    b.0.len()
+                        .cmp(&a.0.len())
+                        .then_with(|| a.0.cmp(&b.0))
+                        .then_with(|| a.1.cmp(&b.1))
+                });
+                v.dedup_by(|a, b| a.0 == b.0);
+                assignments = v;
+                return (mode, proxy, direct, assignments);
+            }
+            Err(e) => last_err = format!("не парсится: {e}"),
         }
     }
-    (mode, proxy, direct, assignments)
+    eprintln!("ERROR: rules file {p} {last_err} — отказ запуска: потеря закреплений опаснее простоя");
+    std::process::exit(2);
 }
 
 // ─── Маршрутизация ───────────────────────────────────────────────
@@ -251,9 +289,11 @@ enum Route {
 }
 
 /// Матч по суффиксу: "api.anthropic.com" матчится на "anthropic.com".
+/// Хвостовая точка FQDN ("claude.ai.") нормализуется — иначе канонические
+/// имена обходили бы и роутинг, и закрепление.
 fn host_matches(host: &str, domain: &str) -> bool {
-    let h = host.to_ascii_lowercase();
-    let d = domain.to_ascii_lowercase();
+    let h = host.trim_end_matches('.').to_ascii_lowercase();
+    let d = domain.trim_end_matches('.').to_ascii_lowercase();
     h == d || h.ends_with(&format!(".{d}"))
 }
 
@@ -288,25 +328,32 @@ fn enable_keepalive(stream: &TcpStream) {
 }
 
 /// Прочитать заголовки первого запроса (до \r\n\r\n, лимит HEAD_LIMIT).
+/// Дедлайн один на ВСЮ голову: per-read таймаут позволял клиенту, капающему
+/// по байту, держать permit семафора бесконечно.
 async fn read_head(client: &mut TcpStream) -> Result<Vec<u8>, String> {
-    let mut buf = Vec::with_capacity(2048);
-    let mut chunk = [0u8; 8192];
-    loop {
-        let n = timeout(HEAD_TIMEOUT, client.read(&mut chunk))
-            .await
-            .map_err(|_| "head read timeout".to_string())?
-            .map_err(|e| format!("head read: {e}"))?;
-        if n == 0 {
-            return Err("client closed before full head".into());
+    let read_all = async {
+        let mut buf = Vec::with_capacity(2048);
+        let mut chunk = [0u8; 8192];
+        loop {
+            let n = client
+                .read(&mut chunk)
+                .await
+                .map_err(|e| format!("head read: {e}"))?;
+            if n == 0 {
+                return Err("client closed before full head".to_string());
+            }
+            buf.extend_from_slice(&chunk[..n]);
+            if find_head_end(&buf).is_some() {
+                return Ok(buf);
+            }
+            if buf.len() > HEAD_LIMIT {
+                return Err("headers too large".to_string());
+            }
         }
-        buf.extend_from_slice(&chunk[..n]);
-        if find_head_end(&buf).is_some() {
-            return Ok(buf);
-        }
-        if buf.len() > HEAD_LIMIT {
-            return Err("headers too large".into());
-        }
-    }
+    };
+    timeout(HEAD_TIMEOUT, read_all)
+        .await
+        .map_err(|_| "head read timeout".to_string())?
 }
 
 fn find_head_end(buf: &[u8]) -> Option<usize> {
@@ -316,7 +363,13 @@ fn find_head_end(buf: &[u8]) -> Option<usize> {
 /// Убрать hop-by-hop proxy-заголовки; опционально добавить Proxy-Authorization.
 /// Работает и для CONNECT, и для обычного запроса — правится только блок
 /// заголовков до \r\n\r\n, остальные байты (начало тела) не трогаются.
-fn rewrite_head(head: &[u8], auth: Option<&str>, strip_proxy_headers: bool) -> Vec<u8> {
+///
+/// `force_close`: мы форвардим ТОЛЬКО первый запрос соединения, дальше идёт
+/// слепой pipe — keep-alive для plain-HTTP через мост опасен (второй запрос
+/// ушёл бы без auth и/или на сокет первого хоста). Поэтому не-CONNECT
+/// запросы принудительно закрываются: клиент откроет новое соединение.
+/// HTTPS (CONNECT-туннели) это не касается.
+fn rewrite_head(head: &[u8], auth: Option<&str>, strip_proxy_headers: bool, force_close: bool) -> Vec<u8> {
     let end = match find_head_end(head) {
         Some(i) => i,
         None => return head.to_vec(),
@@ -337,6 +390,11 @@ fn rewrite_head(head: &[u8], auth: Option<&str>, strip_proxy_headers: bool) -> V
         if strip_proxy_headers && lower.starts_with(b"proxy-connection:") {
             continue;
         }
+        if force_close
+            && (lower.starts_with(b"connection:") || lower.starts_with(b"proxy-connection:"))
+        {
+            continue;
+        }
         out.push(line);
     }
     let mut result = Vec::with_capacity(head.len() + 64);
@@ -349,55 +407,87 @@ fn rewrite_head(head: &[u8], auth: Option<&str>, strip_proxy_headers: bool) -> V
     if let Some(a) = auth {
         result.extend_from_slice(format!("\r\nProxy-Authorization: Basic {a}").as_bytes());
     }
+    if force_close {
+        result.extend_from_slice(b"\r\nConnection: close");
+    }
     result.extend_from_slice(rest); // rest начинается с \r\n\r\n
     result
 }
 
+/// Результат поиска назначения для хоста.
+#[derive(Clone, Copy, PartialEq)]
+enum Pin {
+    /// Назначения нет — обычный маршрут и failover.
+    None,
+    /// Закреплён за живым индексом пула.
+    Pinned(usize),
+    /// Назначение есть, но индекс за пределами пула (rules и argv разошлись).
+    /// По семантике закрепления это жёсткий отказ, а НЕ failover: уйти на
+    /// другой прокси = сменить выходной IP сервиса.
+    Broken,
+}
+
 /// Назначенный прокси для хоста: самый длинный суффикс-матч из assignments.
-/// None — назначения нет, обычный порядок failover.
-fn preferred_upstream(state: &State, host: &str) -> Option<usize> {
+fn preferred_upstream(state: &State, host: &str) -> Pin {
     let mut best: Option<(usize, usize)> = None; // (длина домена, индекс)
     for (domain, idx) in &state.assignments {
-        if *idx < state.upstreams.len() && host_matches(host, domain) {
-            if best.map(|(l, _)| domain.len() > l).unwrap_or(true) {
-                best = Some((domain.len(), *idx));
-            }
+        if host_matches(host, domain) && best.map(|(l, _)| domain.len() > l).unwrap_or(true) {
+            best = Some((domain.len(), *idx));
         }
     }
-    best.map(|(_, i)| i)
+    match best {
+        None => Pin::None,
+        Some((_, i)) if i < state.upstreams.len() => Pin::Pinned(i),
+        Some(_) => Pin::Broken,
+    }
+}
+
+/// Одна попытка коннекта к upstream'у №i с учётом статистики и cooldown.
+async fn try_upstream(state: &State, i: usize, pinned: bool) -> Option<TcpStream> {
+    let u = &state.upstreams[i];
+    match timeout(CONNECT_TIMEOUT, TcpStream::connect((u.host.as_str(), u.port))).await {
+        Ok(Ok(s)) => {
+            u.mark_ok();
+            Some(s)
+        }
+        _ => {
+            u.mark_fail();
+            state.log_err(&if pinned {
+                format!("назначенный прокси {} не отвечает — жду восстановления, IP не меняю", u.masked)
+            } else {
+                format!("прокси {} не отвечает — пробую следующий", u.masked)
+            });
+            None
+        }
+    }
 }
 
 /// Выбрать живой upstream и подключиться.
-/// `pinned` (назначенный домену прокси) — СТРОГО: пробуем только его (двумя
-/// проходами), на другие НЕ уходим — выходной IP сервиса не должен прыгать.
-/// Без назначения — passive failover по всему пулу: первый проход пропускает
-/// остывающие; если никто не ответил — второй пробует всех.
+/// `pinned` (назначенный домену прокси) — СТРОГО: пробуем только его, на
+/// другие НЕ уходим — выходной IP сервиса не должен прыгать.
+/// Без назначения — passive failover: первый проход пропускает остывающих,
+/// второй шанс даётся ТОЛЬКО пропущенным (повторять только что упавших —
+/// удвоение таймаута для клиента без шанса на успех).
 async fn connect_upstream(state: &State, pinned: Option<usize>) -> Option<(TcpStream, usize)> {
     let n = state.upstreams.len();
-    let order: Vec<usize> = match pinned {
-        Some(p) if p < n => vec![p],
-        _ => (0..n).collect(),
+    let (order, is_pin): (Vec<usize>, bool) = match pinned {
+        Some(p) if p < n => (vec![p], true),
+        Some(_) => return None, // битый индекс — сюда не должен дойти (Pin::Broken отсекается раньше)
+        None => ((0..n).collect(), false),
     };
-    for pass in 0..2 {
-        for &i in &order {
-            let u = &state.upstreams[i];
-            if pass == 0 && u.cooling() {
-                continue;
-            }
-            match timeout(CONNECT_TIMEOUT, TcpStream::connect((u.host.as_str(), u.port))).await {
-                Ok(Ok(s)) => {
-                    u.mark_ok();
-                    return Some((s, i));
-                }
-                _ => {
-                    u.mark_fail();
-                    state.log_err(&format!("прокси {} не отвечает — пробую следующий", u.masked));
-                }
-            }
+    let mut skipped: Vec<usize> = Vec::new();
+    for &i in &order {
+        if state.upstreams[i].cooling() {
+            skipped.push(i);
+            continue;
         }
-        // Если на первом проходе никто не был в отлёжке — второй бессмысленен.
-        if pass == 0 && !state.upstreams.iter().any(|u| u.cooling()) {
-            break;
+        if let Some(s) = try_upstream(state, i, is_pin).await {
+            return Some((s, i));
+        }
+    }
+    for &i in &skipped {
+        if let Some(s) = try_upstream(state, i, is_pin).await {
+            return Some((s, i));
         }
     }
     None
@@ -502,7 +592,13 @@ fn parse_request(head: &[u8]) -> Result<Parsed, String> {
     }
     // absolute-form: GET http://host:port/path
     let u = url::Url::parse(&target).map_err(|e| format!("bad absolute-URI: {e}"))?;
-    let host = u.host_str().ok_or("absolute-URI without host")?.to_string();
+    // host_str() для IPv6 отдаёт хост СО скобками — для connect() их надо снять.
+    let host = u
+        .host_str()
+        .ok_or("absolute-URI without host")?
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_string();
     let port = u.port_or_known_default().unwrap_or(80);
     Ok(Parsed {
         is_connect: false,
@@ -521,10 +617,6 @@ impl Drop for ActiveGuard<'_> {
 }
 
 async fn handle(mut client: TcpStream, state: Arc<State>) {
-    state.total.fetch_add(1, Ordering::Relaxed);
-    state.active.fetch_add(1, Ordering::Relaxed);
-    let _guard = ActiveGuard(&state);
-
     let head = match read_head(&mut client).await {
         Ok(h) => h,
         Err(e) => {
@@ -543,26 +635,52 @@ async fn handle(mut client: TcpStream, state: Arc<State>) {
         }
     };
 
-    // Запрос к самому мосту (healthz/stats).
+    // Запрос к самому мосту (healthz/stats) — метрики НЕ трогаем: поллинг
+    // дашборда раз в 5с иначе рисует тысячи фантомных «соединений» за ночь.
     if let Some(path) = req.local_path {
         serve_local(&mut client, &path, &state).await;
         return;
     }
 
-    let route = decide(&state, &req.host);
+    state.total.fetch_add(1, Ordering::Relaxed);
+    state.active.fetch_add(1, Ordering::Relaxed);
+    let _guard = ActiveGuard(&state);
+
+    // Назначение сильнее режима: закреплённый домен идёт через свой upstream,
+    // даже если smart-режим отправил бы его напрямую (или домен попал в
+    // direct_domains) — иначе он утёк бы с реальным IP пользователя.
+    let pin = preferred_upstream(&state, &req.host);
+    let route = match pin {
+        Pin::Pinned(_) => Route::Upstream,
+        Pin::Broken => {
+            state.errors.fetch_add(1, Ordering::Relaxed);
+            state.log_err(&format!(
+                "назначение для {} указывает на прокси вне пула — отказываю (IP менять нельзя)",
+                req.host
+            ));
+            let _ = client
+                .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
+                .await;
+            return;
+        }
+        Pin::None => decide(&state, &req.host),
+    };
 
     // Устанавливаем исходящее соединение. Для Upstream запоминаем auth ИМЕННО
     // того прокси, к которому реально подключились (failover мог выбрать не первый).
+    // via_* считаем только по факту успешного коннекта — неудачи идут в errors.
     let (mut server, upstream_auth): (TcpStream, Option<String>) = match route {
         Route::Direct => {
-            state.via_direct.fetch_add(1, Ordering::Relaxed);
             match timeout(
                 CONNECT_TIMEOUT,
                 TcpStream::connect((req.host.as_str(), req.port)),
             )
             .await
             {
-                Ok(Ok(s)) => (s, None),
+                Ok(Ok(s)) => {
+                    state.via_direct.fetch_add(1, Ordering::Relaxed);
+                    (s, None)
+                }
                 _ => {
                     state.errors.fetch_add(1, Ordering::Relaxed);
                     state.log_err(&format!("прямое соединение с {}:{} не удалось", req.host, req.port));
@@ -574,16 +692,23 @@ async fn handle(mut client: TcpStream, state: Arc<State>) {
             }
         }
         Route::Upstream => {
-            state.via_upstream.fetch_add(1, Ordering::Relaxed);
-            let preferred = preferred_upstream(&state, &req.host);
-            match connect_upstream(&state, preferred).await {
+            let pinned = match pin {
+                Pin::Pinned(i) => Some(i),
+                _ => None,
+            };
+            match connect_upstream(&state, pinned).await {
                 Some((s, i)) => {
+                    state.via_upstream.fetch_add(1, Ordering::Relaxed);
                     let auth = state.upstreams[i].auth.clone();
                     (s, auth)
                 }
                 None => {
                     state.errors.fetch_add(1, Ordering::Relaxed);
-                    state.log_err("все upstream-прокси недоступны");
+                    state.log_err(if pinned.is_some() {
+                        "назначенный прокси недоступен — жду восстановления"
+                    } else {
+                        "все upstream-прокси недоступны"
+                    });
                     let _ = client
                         .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
                         .await;
@@ -607,9 +732,18 @@ async fn handle(mut client: TcpStream, state: Arc<State>) {
                 {
                     return;
                 }
+                // Клиент мог оптимистично прислать TLS ClientHello одним write
+                // с CONNECT — хвост за \r\n\r\n обязан уйти серверу, иначе
+                // TLS-handshake зависнет до таймаута.
+                if let Some(end) = find_head_end(&head) {
+                    let tail = &head[end + 4..];
+                    if !tail.is_empty() && server.write_all(tail).await.is_err() {
+                        return;
+                    }
+                }
             } else {
                 // Обычный HTTP напрямую: чистим proxy-заголовки, форвардим.
-                let clean = rewrite_head(&head, None, true);
+                let clean = rewrite_head(&head, None, true, true);
                 if server.write_all(&clean).await.is_err() {
                     return;
                 }
@@ -619,7 +753,7 @@ async fn handle(mut client: TcpStream, state: Arc<State>) {
             // Форвардим первый запрос (CONNECT или обычный) upstream'у,
             // впрыснув auth. Ответ (включая "200 Connection Established")
             // придёт клиенту от самого upstream'а через pipe ниже.
-            let rewritten = rewrite_head(&head, upstream_auth.as_deref(), false);
+            let rewritten = rewrite_head(&head, upstream_auth.as_deref(), false, !req.is_connect);
             if server.write_all(&rewritten).await.is_err() {
                 state.errors.fetch_add(1, Ordering::Relaxed);
                 state.log_err(&format!("upstream оборвал соединение ({})", req.host));
