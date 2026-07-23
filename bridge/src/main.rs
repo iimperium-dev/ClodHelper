@@ -98,9 +98,12 @@ struct RulesFile {
     direct_domains: Option<Vec<String>>,
     /// Домен → индекс upstream'а (порядок --upstream в argv): «Claude через
     /// прокси №0, ChatGPT через №1». Матч по суффиксу, самый длинный
-    /// выигрывает. Индекс за пределами пула игнорируется. Назначенный прокси
-    /// пробуется ПЕРВЫМ, при его недоступности — обычный failover по остальным
-    /// (доступность важнее назначения).
+    /// выигрывает. Индекс за пределами пула игнорируется.
+    ///
+    /// Назначение — СТРОГОЕ закрепление: используется ТОЛЬКО назначенный
+    /// прокси, без failover на другие. Смена выходного IP опаснее короткого
+    /// простоя: AI-сервисы (особенно Anthropic) флагают аккаунты за скачки
+    /// IP. Failover работает только для доменов без назначения («Авто»).
     assignments: Option<std::collections::HashMap<String, usize>>,
 }
 
@@ -364,14 +367,15 @@ fn preferred_upstream(state: &State, host: &str) -> Option<usize> {
     best.map(|(_, i)| i)
 }
 
-/// Выбрать живой upstream и подключиться (passive failover).
-/// `preferred` (назначенный домену прокси) пробуется первым; дальше — все по
-/// порядку. Первый проход пропускает остывающие; если никто не ответил —
-/// второй проход пробует всех (лучше попытаться через «плохой», чем отказать).
-async fn connect_upstream(state: &State, preferred: Option<usize>) -> Option<(TcpStream, usize)> {
+/// Выбрать живой upstream и подключиться.
+/// `pinned` (назначенный домену прокси) — СТРОГО: пробуем только его (двумя
+/// проходами), на другие НЕ уходим — выходной IP сервиса не должен прыгать.
+/// Без назначения — passive failover по всему пулу: первый проход пропускает
+/// остывающие; если никто не ответил — второй пробует всех.
+async fn connect_upstream(state: &State, pinned: Option<usize>) -> Option<(TcpStream, usize)> {
     let n = state.upstreams.len();
-    let order: Vec<usize> = match preferred {
-        Some(p) if p < n => std::iter::once(p).chain((0..n).filter(|i| *i != p)).collect(),
+    let order: Vec<usize> = match pinned {
+        Some(p) if p < n => vec![p],
         _ => (0..n).collect(),
     };
     for pass in 0..2 {
