@@ -71,7 +71,7 @@ export function StepMode({
               key={it.key}
               onClick={() => onChange(selected ? null : it.key)}
               className={cn(
-                "block w-full rounded-2xl border p-5 text-left transition-all",
+                "block w-full rounded-[10px] border p-5 text-left transition-all",
                 selected
                   ? "border-vb-emerald bg-vb-emerald/5 shadow-[0_0_0_1px_rgba(16,185,129,0.4)]"
                   : "border-vb-border bg-vb-surface/40 hover:border-vb-silver-dim",
@@ -80,7 +80,7 @@ export function StepMode({
               <div className="flex items-start gap-4">
                 <div
                   className={cn(
-                    "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl",
+                    "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg",
                     selected
                       ? "bg-vb-emerald/15 text-vb-emerald"
                       : "bg-vb-bg text-vb-silver-dim",
@@ -121,7 +121,7 @@ export function StepMode({
       <button
         onClick={() => onCursorChange(!cursor)}
         className={cn(
-          "mt-4 block w-full rounded-2xl border p-5 text-left transition-all",
+          "mt-4 block w-full rounded-[10px] border p-5 text-left transition-all",
           cursor
             ? "border-vb-emerald bg-vb-emerald/5 shadow-[0_0_0_1px_rgba(16,185,129,0.4)]"
             : "border-vb-border bg-vb-surface/40 hover:border-vb-silver-dim",
@@ -130,7 +130,7 @@ export function StepMode({
         <div className="flex items-start gap-4">
           <div
             className={cn(
-              "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl",
+              "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg",
               cursor
                 ? "bg-vb-emerald/15 text-vb-emerald"
                 : "bg-vb-bg text-vb-silver-dim",

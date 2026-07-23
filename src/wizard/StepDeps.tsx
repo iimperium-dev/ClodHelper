@@ -136,7 +136,7 @@ function DepRow({
   downloadUrl: string;
 }) {
   return (
-    <div className="flex items-center gap-4 rounded-xl border border-vb-border bg-vb-surface/40 p-4">
+    <div className="flex items-center gap-4 rounded-lg border border-vb-border bg-vb-surface/40 p-4">
       <div className="flex h-9 w-9 shrink-0 items-center justify-center">
         {state === "checking" && (
           <Loader2 className="h-5 w-5 animate-spin text-vb-silver-dim" />

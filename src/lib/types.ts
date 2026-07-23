@@ -88,7 +88,7 @@ export interface ShimTestResult {
 
 // ─── App-level navigation ────────────────────────────────────────
 
-export type AppView = "dashboard" | "settings" | "wizard";
+export type AppView = "overview" | "proxies" | "apps" | "settings" | "wizard";
 
 // ─── Persistent settings (mirror of Rust Settings) ───────────────
 
@@ -166,6 +166,12 @@ export interface BridgeUpstreamHealth {
   fail: number;
 }
 
+/** Ошибка из кольцевого буфера моста: секунды-от-старта + текст. */
+export interface BridgeErrorEntry {
+  t: number;
+  msg: string;
+}
+
 export interface BridgeHealth {
   status: string;
   version: string;
@@ -179,4 +185,19 @@ export interface BridgeHealth {
   via_direct: number;
   errors: number;
   upstreams: BridgeUpstreamHealth[];
+  /** Последние ошибки (мост 1.1.0+; у старых может отсутствовать). */
+  last_errors?: BridgeErrorEntry[];
 }
+
+// ─── Прокси-пул ──────────────────────────────────────────────────
+
+/** TCP-пинг одного прокси из пула. ms=null — не подключились. */
+export interface ProxyPing {
+  url: string;
+  host: string;
+  port: number;
+  ms: number | null;
+}
+
+/** Группы сервисов для назначений (mirror tasks::SERVICE_GROUPS). */
+export type ServiceGroup = "anthropic" | "openai" | "google" | "other_ai";

@@ -253,7 +253,7 @@ export function SuccessScreen({
             transition={{ duration: 0.24, ease: EASE_OUT }}
             className="overflow-hidden"
           >
-            <div className="mt-4 rounded-xl border border-white/[0.04] bg-black/40 p-4">
+            <div className="mt-4 rounded-lg border border-white/[0.04] bg-black/40 p-4">
               <div className="max-h-[200px] overflow-y-auto pr-1">
                 {log.length === 0 ? (
                   <div className="font-mono text-[11px] text-vb-silver-dim/60">

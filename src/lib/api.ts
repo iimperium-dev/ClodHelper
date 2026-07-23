@@ -12,6 +12,7 @@ import type {
   NodeInfo,
   ProxyCheckResult,
   ProxyConfig,
+  ProxyPing,
   PythonInfo,
   ShimStatus,
   ShimTestResult,
@@ -172,6 +173,11 @@ export async function bridgeHealth(): Promise<BridgeHealth> {
   return invoke<BridgeHealth>("bridge_health");
 }
 
+/** Установленный exe моста — легаси-python (без /healthz)? Кэшируется по mtime. */
+export async function bridgeExeLegacy(): Promise<boolean> {
+  return invoke<boolean>("bridge_exe_legacy");
+}
+
 export async function bridgeSetRouteMode(mode: "smart" | "all"): Promise<void> {
   return invoke<void>("bridge_set_route_mode", { mode });
 }
@@ -179,4 +185,56 @@ export async function bridgeSetRouteMode(mode: "smart" | "all"): Promise<void> {
 /** Обновить установленный мост из ресурсов приложения (stop → copy → start). */
 export async function bridgeUpdate(): Promise<string> {
   return invoke<string>("bridge_update");
+}
+
+// ─── Прокси-пул ──────────────────────────────────────────────────
+
+/** Пул прокси (1..5 URL, [0] — основной). */
+export async function proxiesGet(): Promise<string[]> {
+  return invoke<string[]>("proxies_get");
+}
+
+/** Заменить пул: валидация + перерегистрация задачи + рестарт моста. */
+export async function proxiesSet(urls: string[]): Promise<string[]> {
+  return invoke<string[]>("proxies_set", { urls });
+}
+
+export async function proxyAssignmentsGet(): Promise<Record<string, number>> {
+  return invoke<Record<string, number>>("proxy_assignments_get");
+}
+
+export async function proxyAssignmentsSet(
+  assignments: Record<string, number>,
+): Promise<void> {
+  return invoke<void>("proxy_assignments_set", { assignments });
+}
+
+/** Лёгкий TCP-пинг всего пула (параллельно). */
+export async function proxiesPing(): Promise<ProxyPing[]> {
+  return invoke<ProxyPing[]>("proxies_ping");
+}
+
+/** Имена (тэги) прокси: URL → имя. */
+export async function proxyLabelsGet(): Promise<Record<string, string>> {
+  return invoke<Record<string, string>>("proxy_labels_get");
+}
+
+/** Задать/убрать имя прокси (пустое = убрать). */
+export async function proxyLabelSet(
+  url: string,
+  label: string,
+): Promise<Record<string, string>> {
+  return invoke<Record<string, string>>("proxy_label_set", { url, label });
+}
+
+// ─── Окна (для трей-попапа) ──────────────────────────────────────
+
+/** Показать главное окно (из трей-попапа). */
+export async function showMainWindow(): Promise<void> {
+  return invoke<void>("show_main_window");
+}
+
+/** Полный выход из приложения (мост продолжает работать — он отдельный процесс). */
+export async function quitApp(): Promise<void> {
+  return invoke<void>("quit_app");
 }

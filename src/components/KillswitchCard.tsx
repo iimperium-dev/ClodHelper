@@ -97,7 +97,7 @@ export function KillswitchCard({
       <div className="relative flex items-start gap-4">
         <div
           className={cn(
-            "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-vb-surface-2",
+            "flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-vb-surface-2",
             meta.accent,
           )}
         >

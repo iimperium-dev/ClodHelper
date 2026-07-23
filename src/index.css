@@ -48,11 +48,12 @@
   --font-mono:
     "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
-  /* ── Радиусы ── */
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-card: 16px;
-  --radius-glass: 20px;
+  /* ── Радиусы: блочный стиль (референс OpenRouter) — аккуратное малое
+     скругление, никаких «капсул». Пилюли остаются только у тумблеров/точек. ── */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-card: 10px;
+  --radius-glass: 10px;
 
   /* ── Easing (impeccable/animate.md — ease-out для UI; bounce/elastic забанены) ── */
   --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);   /* плавно */
@@ -81,9 +82,31 @@
     text-rendering: optimizeLegibility;
   }
 
+  /* Тонкое «дыхание» бренда сверху: едва заметный изумрудный свет вместо
+     плоской заливки. Хрома мизерная — правило «акцент редок» не нарушено. */
+  #root {
+    background:
+      radial-gradient(
+        1100px 480px at 50% -12%,
+        oklch(72% 0.17 158 / 0.055),
+        transparent 62%
+      ),
+      var(--color-vb-bg);
+  }
+
   html,
   body {
     overflow: hidden;
+  }
+
+  /* Окно трей-попапа прозрачное: фон и «дыхание» бренда убираем, скруглённую
+     панель с тенью рисует сам попап. */
+  body[data-view="tray"],
+  body[data-view="tray"] #root {
+    background: transparent;
+  }
+  html:has(body[data-view="tray"]) {
+    background: transparent;
   }
 
   * {

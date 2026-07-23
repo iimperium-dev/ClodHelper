@@ -22,7 +22,8 @@
     "framer-motion": "^11.11.0",
     "lucide-react": "^0.453.0",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "simple-icons": "^16.27.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.0.0",

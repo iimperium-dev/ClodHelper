@@ -285,7 +285,7 @@ export function StepInstall({
           initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.25 }}
-          className="mt-5 overflow-hidden rounded-2xl border border-white/[0.06] bg-[rgba(10,10,10,0.55)] backdrop-blur-2xl"
+          className="mt-5 overflow-hidden rounded-[10px] border border-white/[0.06] bg-[rgba(10,10,10,0.55)] backdrop-blur-2xl"
         >
           <div className="border-l-2 border-vb-silver/40 px-6 py-5">
             <div className="text-[15px] font-medium tracking-tight text-vb-silver">

@@ -9,7 +9,7 @@ export function StepWelcome({ onNext }: Props) {
   return (
     <div className="flex h-full flex-col items-center justify-center text-center">
       <div className="glass-card mx-auto max-w-xl p-10">
-        <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-vb-emerald/10">
+        <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-[10px] bg-vb-emerald/10">
           <Sparkles className="h-7 w-7 text-vb-emerald" strokeWidth={1.5} />
         </div>
         <h1 className="text-[28px] font-semibold tracking-tight text-vb-silver">
@@ -65,7 +65,7 @@ function Feature({
   body: string;
 }) {
   return (
-    <div className="rounded-xl border border-vb-border bg-vb-surface/40 p-4">
+    <div className="rounded-lg border border-vb-border bg-vb-surface/40 p-4">
       <div className="flex items-center gap-2 text-vb-silver">
         <span className="text-vb-emerald">{icon}</span>
         <span className="text-[13px] font-medium">{title}</span>
