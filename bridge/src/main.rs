@@ -96,6 +96,12 @@ struct RulesFile {
     proxy_domains: Option<Vec<String>>,
     /// Домены всегда напрямую (выигрывают у proxy_domains в любом режиме).
     direct_domains: Option<Vec<String>>,
+    /// Домен → индекс upstream'а (порядок --upstream в argv): «Claude через
+    /// прокси №0, ChatGPT через №1». Матч по суффиксу, самый длинный
+    /// выигрывает. Индекс за пределами пула игнорируется. Назначенный прокси
+    /// пробуется ПЕРВЫМ, при его недоступности — обычный failover по остальным
+    /// (доступность важнее назначения).
+    assignments: Option<std::collections::HashMap<String, usize>>,
 }
 
 struct Upstream {
@@ -140,13 +146,22 @@ struct State {
     mode: Mode,
     proxy_domains: Vec<String>,
     direct_domains: Vec<String>,
+    /// (домен, индекс upstream'а) — привязка сервисов к конкретным прокси.
+    assignments: Vec<(String, usize)>,
     upstreams: Vec<Upstream>,
     total: AtomicU64,
     active: AtomicU64,
     via_upstream: AtomicU64,
     via_direct: AtomicU64,
     errors: AtomicU64,
+    /// Последние ошибки (секунды-от-старта, текст) — отдаются в /healthz,
+    /// чтобы Dashboard мог показать пользователю ЧТО именно ломалось
+    /// (супервизор запускает мост скрыто, stderr некуда смотреть).
+    last_errors: Mutex<std::collections::VecDeque<(u64, String)>>,
 }
+
+/// Сколько последних ошибок держим для /healthz.
+const LAST_ERRORS_CAP: usize = 20;
 
 impl State {
     fn log(&self, msg: &str) {
@@ -154,9 +169,15 @@ impl State {
             eprintln!("[{:>8.1}s] {msg}", self.started.elapsed().as_secs_f64());
         }
     }
-    /// Ошибки видны и в quiet-режиме.
+    /// Ошибки видны и в quiet-режиме + попадают в кольцевой буфер /healthz.
     fn log_err(&self, msg: &str) {
         eprintln!("[{:>8.1}s] ERROR {msg}", self.started.elapsed().as_secs_f64());
+        if let Ok(mut g) = self.last_errors.lock() {
+            if g.len() >= LAST_ERRORS_CAP {
+                g.pop_front();
+            }
+            g.push_back((self.started.elapsed().as_secs(), msg.to_string()));
+        }
     }
 }
 
@@ -193,10 +214,11 @@ fn parse_upstream(raw: &str) -> Result<Upstream, String> {
     })
 }
 
-fn load_rules(path: Option<&str>) -> (Mode, Vec<String>, Vec<String>) {
+fn load_rules(path: Option<&str>) -> (Mode, Vec<String>, Vec<String>, Vec<(String, usize)>) {
     let mut mode = Mode::All;
     let mut proxy: Vec<String> = DEFAULT_PROXY_DOMAINS.iter().map(|s| s.to_string()).collect();
     let mut direct: Vec<String> = Vec::new();
+    let mut assignments: Vec<(String, usize)> = Vec::new();
     if let Some(p) = path {
         match std::fs::read_to_string(p) {
             // BOM терпим: Блокнот/PowerShell пишут UTF-8 c BOM, serde_json его не ест.
@@ -207,13 +229,14 @@ fn load_rules(path: Option<&str>) -> (Mode, Vec<String>, Vec<String>) {
                     }
                     proxy.extend(r.proxy_domains.unwrap_or_default());
                     direct.extend(r.direct_domains.unwrap_or_default());
+                    assignments = r.assignments.unwrap_or_default().into_iter().collect();
                 }
                 Err(e) => eprintln!("WARN: rules file {p} не парсится ({e}) — дефолты"),
             },
             Err(e) => eprintln!("WARN: rules file {p} не читается ({e}) — дефолты"),
         }
     }
-    (mode, proxy, direct)
+    (mode, proxy, direct, assignments)
 }
 
 // ─── Маршрутизация ───────────────────────────────────────────────
@@ -327,12 +350,33 @@ fn rewrite_head(head: &[u8], auth: Option<&str>, strip_proxy_headers: bool) -> V
     result
 }
 
+/// Назначенный прокси для хоста: самый длинный суффикс-матч из assignments.
+/// None — назначения нет, обычный порядок failover.
+fn preferred_upstream(state: &State, host: &str) -> Option<usize> {
+    let mut best: Option<(usize, usize)> = None; // (длина домена, индекс)
+    for (domain, idx) in &state.assignments {
+        if *idx < state.upstreams.len() && host_matches(host, domain) {
+            if best.map(|(l, _)| domain.len() > l).unwrap_or(true) {
+                best = Some((domain.len(), *idx));
+            }
+        }
+    }
+    best.map(|(_, i)| i)
+}
+
 /// Выбрать живой upstream и подключиться (passive failover).
-/// Первый проход пропускает остывающие; если никто не ответил — второй проход
-/// пробует всех (лучше попытаться через «плохой», чем сразу отказать).
-async fn connect_upstream(state: &State) -> Option<(TcpStream, usize)> {
+/// `preferred` (назначенный домену прокси) пробуется первым; дальше — все по
+/// порядку. Первый проход пропускает остывающие; если никто не ответил —
+/// второй проход пробует всех (лучше попытаться через «плохой», чем отказать).
+async fn connect_upstream(state: &State, preferred: Option<usize>) -> Option<(TcpStream, usize)> {
+    let n = state.upstreams.len();
+    let order: Vec<usize> = match preferred {
+        Some(p) if p < n => std::iter::once(p).chain((0..n).filter(|i| *i != p)).collect(),
+        _ => (0..n).collect(),
+    };
     for pass in 0..2 {
-        for (i, u) in state.upstreams.iter().enumerate() {
+        for &i in &order {
+            let u = &state.upstreams[i];
             if pass == 0 && u.cooling() {
                 continue;
             }
@@ -343,7 +387,7 @@ async fn connect_upstream(state: &State) -> Option<(TcpStream, usize)> {
                 }
                 _ => {
                     u.mark_fail();
-                    state.log(&format!("upstream {} не отвечает — следующий", u.masked));
+                    state.log_err(&format!("прокси {} не отвечает — пробую следующий", u.masked));
                 }
             }
         }
@@ -358,34 +402,44 @@ async fn connect_upstream(state: &State) -> Option<(TcpStream, usize)> {
 // ─── /healthz ────────────────────────────────────────────────────
 
 fn healthz_json(state: &State) -> String {
-    let ups: Vec<String> = state
+    // serde_json вместо ручной сборки: в last_errors живой текст (имена хостов,
+    // ошибки ОС) — экранирование должно быть железным.
+    let ups: Vec<serde_json::Value> = state
         .upstreams
         .iter()
         .map(|u| {
-            format!(
-                "{{\"url\":\"{}\",\"healthy\":{},\"ok\":{},\"fail\":{}}}",
-                u.masked,
-                !u.cooling(),
-                u.ok.load(Ordering::Relaxed),
-                u.fail.load(Ordering::Relaxed),
-            )
+            serde_json::json!({
+                "url": u.masked,
+                "healthy": !u.cooling(),
+                "ok": u.ok.load(Ordering::Relaxed),
+                "fail": u.fail.load(Ordering::Relaxed),
+            })
         })
         .collect();
-    format!(
-        "{{\"status\":\"ok\",\"version\":\"{}\",\"uptime_sec\":{},\"listen\":\"{}\",\
-         \"mode\":\"{}\",\"active\":{},\"total\":{},\"via_upstream\":{},\
-         \"via_direct\":{},\"errors\":{},\"upstreams\":[{}]}}",
-        env!("CARGO_PKG_VERSION"),
-        state.started.elapsed().as_secs(),
-        state.listen,
-        state.mode.as_str(),
-        state.active.load(Ordering::Relaxed),
-        state.total.load(Ordering::Relaxed),
-        state.via_upstream.load(Ordering::Relaxed),
-        state.via_direct.load(Ordering::Relaxed),
-        state.errors.load(Ordering::Relaxed),
-        ups.join(","),
-    )
+    let errors: Vec<serde_json::Value> = state
+        .last_errors
+        .lock()
+        .map(|g| {
+            g.iter()
+                .map(|(t, msg)| serde_json::json!({ "t": t, "msg": msg }))
+                .collect()
+        })
+        .unwrap_or_default();
+    serde_json::json!({
+        "status": "ok",
+        "version": env!("CARGO_PKG_VERSION"),
+        "uptime_sec": state.started.elapsed().as_secs(),
+        "listen": state.listen,
+        "mode": state.mode.as_str(),
+        "active": state.active.load(Ordering::Relaxed),
+        "total": state.total.load(Ordering::Relaxed),
+        "via_upstream": state.via_upstream.load(Ordering::Relaxed),
+        "via_direct": state.via_direct.load(Ordering::Relaxed),
+        "errors": state.errors.load(Ordering::Relaxed),
+        "upstreams": ups,
+        "last_errors": errors,
+    })
+    .to_string()
 }
 
 async fn serve_local(client: &mut TcpStream, path: &str, state: &State) {
@@ -507,7 +561,7 @@ async fn handle(mut client: TcpStream, state: Arc<State>) {
                 Ok(Ok(s)) => (s, None),
                 _ => {
                     state.errors.fetch_add(1, Ordering::Relaxed);
-                    state.log(&format!("DIRECT connect {}:{} failed", req.host, req.port));
+                    state.log_err(&format!("прямое соединение с {}:{} не удалось", req.host, req.port));
                     let _ = client
                         .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
                         .await;
@@ -517,7 +571,8 @@ async fn handle(mut client: TcpStream, state: Arc<State>) {
         }
         Route::Upstream => {
             state.via_upstream.fetch_add(1, Ordering::Relaxed);
-            match connect_upstream(&state).await {
+            let preferred = preferred_upstream(&state, &req.host);
+            match connect_upstream(&state, preferred).await {
                 Some((s, i)) => {
                     let auth = state.upstreams[i].auth.clone();
                     (s, auth)
@@ -563,6 +618,7 @@ async fn handle(mut client: TcpStream, state: Arc<State>) {
             let rewritten = rewrite_head(&head, upstream_auth.as_deref(), false);
             if server.write_all(&rewritten).await.is_err() {
                 state.errors.fetch_add(1, Ordering::Relaxed);
+                state.log_err(&format!("upstream оборвал соединение ({})", req.host));
                 return;
             }
         }
@@ -645,7 +701,7 @@ async fn main() {
         }
     }
 
-    let (mode, proxy_domains, direct_domains) = load_rules(args.rules.as_deref());
+    let (mode, proxy_domains, direct_domains, assignments) = load_rules(args.rules.as_deref());
 
     let state = Arc::new(State {
         started: Instant::now(),
@@ -654,12 +710,14 @@ async fn main() {
         mode,
         proxy_domains,
         direct_domains,
+        assignments,
         upstreams,
         total: AtomicU64::new(0),
         active: AtomicU64::new(0),
         via_upstream: AtomicU64::new(0),
         via_direct: AtomicU64::new(0),
         errors: AtomicU64::new(0),
+        last_errors: Mutex::new(std::collections::VecDeque::new()),
     });
 
     let listener = match TcpListener::bind(&args.listen).await {
