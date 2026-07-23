@@ -103,7 +103,12 @@ pub fn write_rules_file() -> Result<PathBuf, String> {
             .map_err(|e| format!("create dir {}: {e}", parent.display()))?;
     }
     let text = serde_json::to_string_pretty(&json).map_err(|e| format!("serialize rules: {e}"))?;
-    std::fs::write(&path, text).map_err(|e| format!("write {}: {e}", path.display()))?;
+    // Атомарно (tmp + rename): мост читает этот файл при старте, а супервизор
+    // может перезапустить его в любой момент — полузаписанный JSON для моста
+    // 1.2.0 означает отказ запуска (fail-fast), для старых — потерю правил.
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, text).map_err(|e| format!("write {}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("replace {}: {e}", path.display()))?;
     Ok(path)
 }
 
@@ -208,16 +213,19 @@ pub fn register(proxy_url: &str) -> Result<(), String> {
         format!("\" --listen 127.0.0.1:{port} --quiet\"", port = LISTEN_PORT)
     };
 
-    // Все прокси пула → повторяемые --upstream (порядок = индексы для
-    // assignments в rules-файле; переданный proxy_url — первым/основным).
+    // Все прокси пула → повторяемые --upstream. ПОРЯДОК СВЯЩЕНЕН: индексы
+    // assignments в rules-файле считаются по этому же списку — перестановка
+    // здесь без пересчёта rules увела бы закреплённый сервис на другой прокси
+    // (другой выходной IP). Поэтому пул берём как есть из настроек;
+    // proxy_url — только fallback для пустого пула (легаси-установка).
     let pool = {
         let s = crate::settings::load();
-        let mut list = crate::settings::effective_proxies(&s);
-        if list.first().map(|u| u != proxy_url).unwrap_or(true) {
-            list.retain(|u| u != proxy_url);
-            list.insert(0, proxy_url.to_string());
+        let list = crate::settings::effective_proxies(&s);
+        if list.is_empty() {
+            vec![proxy_url.to_string()]
+        } else {
+            list
         }
-        list
     };
     let upstreams_expr: String = pool
         .iter()
@@ -245,7 +253,15 @@ pub fn register(proxy_url: &str) -> Result<(), String> {
         upstreams = upstreams_expr,
         args = args_expr,
     );
-    std::fs::write(&vbs_path, vbs)
+    // UTF-16LE с BOM: wscript без BOM читает .vbs в ANSI-кодировке системы,
+    // и кириллический путь профиля (C:\Users\Пользователь\…) превращается в
+    // кракозябры — мост не стартует ни при одном логине. UTF-16 классический
+    // движок VBS понимает всегда.
+    let vbs_utf16: Vec<u8> = [0xFF_u8, 0xFE]
+        .into_iter()
+        .chain(vbs.encode_utf16().flat_map(|u| u.to_le_bytes()))
+        .collect();
+    std::fs::write(&vbs_path, vbs_utf16)
         .map_err(|e| format!("write {}: {e}", vbs_path.display()))?;
 
     let vbs_e = vbs_path.to_string_lossy().replace('\'', "''");

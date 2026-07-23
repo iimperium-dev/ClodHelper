@@ -80,8 +80,11 @@ pub fn launch_claude_desktop() -> Result<(), String> {
 pub fn launch_claude_code() -> Result<(), String> {
     // Open a new Windows Terminal (preferred) or PowerShell window with
     // `claude` ready to run. Detached so it survives our app's lifetime.
-    let try_wt = Command::new("cmd")
-        .args(["/c", "start", "", "wt", "powershell", "-NoExit", "-Command", "claude"])
+    // wt запускаем НАПРЯМУЮ: через `cmd /c start` спавн «успешен» даже когда
+    // wt не установлен (успех у cmd, не у wt) — fallback никогда не срабатывал
+    // и кнопка молча ничего не открывала.
+    let try_wt = Command::new("wt")
+        .args(["powershell", "-NoExit", "-Command", "claude"])
         .spawn();
     if try_wt.is_ok() {
         return Ok(());
@@ -1069,7 +1072,13 @@ pub async fn bridge_update(app: AppHandle) -> Result<String, String> {
                 }
             }
         }
-        Err(format!("Не удалось скопировать мост: {last_err}"))
+        // Копирование не удалось (exe залочен антивирусом и т.п.) — старый exe
+        // на месте, но мост уже остановлен shim::stop(). Обязательно поднимаем
+        // обратно, иначе прокси лежит намертво до ручного «Запустить».
+        if let Err(e) = shim::start() {
+            tracing::warn!("bridge_update: откат-запуск старого моста не удался: {e}");
+        }
+        Err(format!("Не удалось скопировать мост: {last_err} (старый мост перезапущен)"))
     })
     .await
     .map_err(|e| format!("Внутренняя ошибка: {e}"))?
@@ -1156,22 +1165,32 @@ pub async fn proxies_ping() -> Vec<ProxyPing> {
     let handles: Vec<_> = pool
         .into_iter()
         .map(|url| {
-            tokio::task::spawn_blocking(move || {
+            tokio::spawn(async move {
                 let (host, port) = match proxy::parse(&url) {
                     Ok(c) => (c.host, c.port),
                     Err(_) => return ProxyPing { url, host: String::new(), port: 0, ms: None },
                 };
-                use std::net::{TcpStream, ToSocketAddrs};
-                let ms = format!("{host}:{port}")
-                    .to_socket_addrs()
-                    .ok()
-                    .and_then(|mut a| a.next())
-                    .and_then(|addr| {
-                        let t = std::time::Instant::now();
-                        TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(4))
-                            .ok()
-                            .map(|_| t.elapsed().as_millis() as u64)
-                    });
+                let (h, p) = (host.clone(), port);
+                let probe = tokio::task::spawn_blocking(move || {
+                    use std::net::{TcpStream, ToSocketAddrs};
+                    format!("{h}:{p}")
+                        .to_socket_addrs()
+                        .ok()
+                        .and_then(|mut a| a.next())
+                        .and_then(|addr| {
+                            let t = std::time::Instant::now();
+                            TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(4))
+                                .ok()
+                                .map(|_| t.elapsed().as_millis() as u64)
+                        })
+                });
+                // DNS-резолв внутри блокирующей задачи своего таймаута не имеет —
+                // ограничиваем всё целиком, иначе зависший резолвер держит
+                // «пинг» в UI десятки секунд.
+                let ms = match tokio::time::timeout(std::time::Duration::from_secs(6), probe).await {
+                    Ok(Ok(ms)) => ms,
+                    _ => None,
+                };
                 ProxyPing { url, host, port, ms }
             })
         })

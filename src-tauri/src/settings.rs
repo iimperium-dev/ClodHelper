@@ -6,10 +6,29 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
 use crate::apps::AppProfile;
+
+/// Все мутации настроек — под одной блокировкой: tauri-команды конкурентны,
+/// а load-modify-save без неё теряет чужие изменения (второй писатель молча
+/// откатывает, например, только что сохранённый пул прокси).
+static SETTINGS_LOCK: Mutex<()> = Mutex::new(());
+
+fn with_settings<F>(f: F) -> Result<Settings, String>
+where
+    F: FnOnce(&mut Settings) -> Result<(), String>,
+{
+    let _g = SETTINGS_LOCK
+        .lock()
+        .map_err(|_| "settings lock poisoned".to_string())?;
+    let mut s = load();
+    f(&mut s)?;
+    save(&s)?;
+    Ok(s)
+}
 
 const SETTINGS_FILE: &str = "settings.json";
 const APP_DIR: &str = "Clod Helper";
@@ -85,60 +104,91 @@ pub fn save(settings: &Settings) -> Result<(), String> {
     }
     let text = serde_json::to_string_pretty(settings)
         .map_err(|e| format!("serialize: {e}"))?;
-    fs::write(&path, text)
-        .map_err(|e| format!("Не смог записать {}: {e}", path.display()))?;
+    // Атомарно (tmp + rename): параллельный читатель не должен увидеть
+    // обрезанный JSON и молча откатиться к Settings::default().
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, text)
+        .map_err(|e| format!("Не смог записать {}: {e}", tmp.display()))?;
+    fs::rename(&tmp, &path)
+        .map_err(|e| format!("Не смог заменить {}: {e}", path.display()))?;
     Ok(())
 }
 
-pub fn set_proxy_url(url: String) -> Result<Settings, String> {
-    let mut s = load();
-    // Основной прокси и пул держим в синхроне: [0] всегда = proxy_url.
-    if s.proxies.is_empty() {
-        s.proxies = vec![url.clone()];
-    } else {
-        s.proxies[0] = url.clone();
-    }
-    s.proxy_url = Some(url);
-    save(&s)?;
-    Ok(s)
+/// Перемапить индексы назначений на новый порядок пула ПО URL: назначение
+/// обязано продолжать указывать на ТОТ ЖЕ прокси (тот же выходной IP), как бы
+/// пул ни переставляли/укорачивали. Съехавший индекс = закреплённый Claude
+/// молча уезжает на другой IP. Назначения на исчезнувший URL снимаются
+/// (сервис возвращается в «Авто»).
+fn remap_assignments(s: &mut Settings, old_pool: &[String], new_pool: &[String]) {
+    s.proxy_assignments = std::mem::take(&mut s.proxy_assignments)
+        .into_iter()
+        .filter_map(|(svc, idx)| {
+            let url = old_pool.get(idx)?;
+            let new_idx = new_pool.iter().position(|u| u == url)?;
+            Some((svc, new_idx))
+        })
+        .collect();
 }
 
-/// Заменить пул целиком (1..=5, [0] — основной). Назначения, указывающие за
-/// пределы нового пула, вычищаются.
+pub fn set_proxy_url(url: String) -> Result<Settings, String> {
+    with_settings(|s| {
+        // Основной прокси и пул держим в синхроне: [0] всегда = proxy_url.
+        let old_pool = effective_proxies(s);
+        let mut new_pool = old_pool.clone();
+        if let Some(pos) = new_pool.iter().position(|u| *u == url) {
+            // URL уже в пуле — «сделать основным» перестановкой, не дублируя.
+            new_pool.remove(pos);
+            new_pool.insert(0, url.clone());
+        } else if new_pool.is_empty() {
+            new_pool.push(url.clone());
+        } else {
+            new_pool[0] = url.clone();
+        }
+        remap_assignments(s, &old_pool, &new_pool);
+        s.proxy_labels.retain(|u, _| new_pool.contains(u));
+        s.proxy_url = Some(url);
+        s.proxies = new_pool;
+        Ok(())
+    })
+}
+
+/// Заменить пул целиком (1..=5, [0] — основной). Индексы назначений
+/// перемапливаются по URL; назначения на удалённые прокси снимаются.
 pub fn set_proxies(urls: Vec<String>) -> Result<Settings, String> {
     if urls.is_empty() || urls.len() > 5 {
         return Err("Пул прокси: от 1 до 5 адресов".into());
     }
-    let mut s = load();
-    s.proxy_url = Some(urls[0].clone());
-    s.proxy_assignments.retain(|_, idx| *idx < urls.len());
-    s.proxy_labels.retain(|url, _| urls.contains(url));
-    s.proxies = urls;
-    save(&s)?;
-    Ok(s)
+    with_settings(|s| {
+        let old_pool = effective_proxies(s);
+        remap_assignments(s, &old_pool, &urls);
+        s.proxy_labels.retain(|url, _| urls.contains(url));
+        s.proxy_url = Some(urls[0].clone());
+        s.proxies = urls;
+        Ok(())
+    })
 }
 
 /// Задать/убрать имя (тэг) прокси. Пустое имя = убрать.
 pub fn set_proxy_label(url: String, label: String) -> Result<Settings, String> {
-    let mut s = load();
-    let label = label.trim().to_string();
-    if label.is_empty() {
-        s.proxy_labels.remove(&url);
-    } else {
-        s.proxy_labels.insert(url, label);
-    }
-    save(&s)?;
-    Ok(s)
+    with_settings(|s| {
+        let label = label.trim().to_string();
+        if label.is_empty() {
+            s.proxy_labels.remove(&url);
+        } else {
+            s.proxy_labels.insert(url, label);
+        }
+        Ok(())
+    })
 }
 
 pub fn set_proxy_assignments(
     map: std::collections::HashMap<String, usize>,
 ) -> Result<Settings, String> {
-    let mut s = load();
-    let pool_len = effective_proxies(&s).len();
-    s.proxy_assignments = map.into_iter().filter(|(_, idx)| *idx < pool_len).collect();
-    save(&s)?;
-    Ok(s)
+    with_settings(|s| {
+        let pool_len = effective_proxies(s).len();
+        s.proxy_assignments = map.into_iter().filter(|(_, idx)| *idx < pool_len).collect();
+        Ok(())
+    })
 }
 
 /// Загрузить настройки, гарантируя что встроенные пресеты присутствуют.
@@ -147,6 +197,7 @@ pub fn set_proxy_assignments(
 /// недостающие builtin-профили, сохраняя пользовательский `enabled` у уже
 /// существующих. Кастомные профили не трогает.
 pub fn load_with_presets() -> Settings {
+    let _g = SETTINGS_LOCK.lock().ok();
     let mut s = load();
     let presets = crate::apps::builtin_presets();
     let mut changed = false;
@@ -176,23 +227,40 @@ pub fn load_with_presets() -> Settings {
 }
 
 /// Заменить список профилей целиком (UI прислал новое состояние enabled/добавил своё).
+/// UI шлёт runtime-снимок, где exe_path/app_id пустеют, если приложение в
+/// момент опроса недоступно (отключённый диск, «не найдено») — надёжные
+/// сохранённые автодетект-поля пустотой не затираем.
 pub fn set_profiles(profiles: Vec<AppProfile>) -> Result<Settings, String> {
-    let mut s = load();
-    s.app_profiles = profiles;
-    save(&s)?;
-    Ok(s)
+    with_settings(|s| {
+        let old = std::mem::take(&mut s.app_profiles);
+        s.app_profiles = profiles
+            .into_iter()
+            .map(|mut p| {
+                if let Some(prev) = old.iter().find(|o| o.id == p.id) {
+                    if p.exe_path.is_none() {
+                        p.exe_path = prev.exe_path.clone();
+                    }
+                    if p.app_id.is_none() {
+                        p.app_id = prev.app_id.clone();
+                    }
+                }
+                p
+            })
+            .collect();
+        Ok(())
+    })
 }
 
 pub fn set_killswitch(enabled: bool) -> Result<Settings, String> {
-    let mut s = load();
-    s.killswitch_enabled = enabled;
-    save(&s)?;
-    Ok(s)
+    with_settings(|s| {
+        s.killswitch_enabled = enabled;
+        Ok(())
+    })
 }
 
 pub fn set_route_mode(mode: String) -> Result<Settings, String> {
-    let mut s = load();
-    s.route_mode = Some(mode);
-    save(&s)?;
-    Ok(s)
+    with_settings(|s| {
+        s.route_mode = Some(mode);
+        Ok(())
+    })
 }

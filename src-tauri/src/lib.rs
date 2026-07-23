@@ -196,35 +196,45 @@ fn show_tray_popup(app: &tauri::AppHandle, cx: f64, cy: f64) {
     };
     // Повторный клик при открытом попапе: blur уже спрятал его до того, как
     // пришёл Click, так что здесь попап почти всегда скрыт — просто покажем.
-    let size = win.outer_size().unwrap_or(tauri::PhysicalSize::new(332, 424));
-    let (w, h) = (size.width as f64, size.height as f64);
-
-    let mut x = cx - w + 24.0;
-    let mut y = cy - h - 8.0;
-
-    // Кламп в границы монитора, на котором кликнули.
-    if let Ok(monitors) = win.available_monitors() {
-        let m = monitors.iter().find(|m| {
-            let p = m.position();
-            let s = m.size();
-            cx >= p.x as f64
-                && cx < p.x as f64 + s.width as f64
-                && cy >= p.y as f64
-                && cy < p.y as f64 + s.height as f64
-        });
-        if let Some(m) = m {
-            let (mx, my) = (m.position().x as f64, m.position().y as f64);
-            let (mw, mh) = (m.size().width as f64, m.size().height as f64);
-            x = x.clamp(mx + 8.0, (mx + mw - w - 8.0).max(mx + 8.0));
-            // Таскбар сверху: клик в верхней трети экрана → попап под курсором.
-            if y < my + 8.0 {
-                y = cy + 16.0;
+    // Позиция над курсором + кламп в границы монитора клика.
+    let place = |w: f64, h: f64| -> (f64, f64) {
+        let mut x = cx - w + 24.0;
+        let mut y = cy - h - 8.0;
+        if let Ok(monitors) = win.available_monitors() {
+            let m = monitors.iter().find(|m| {
+                let p = m.position();
+                let s = m.size();
+                cx >= p.x as f64
+                    && cx < p.x as f64 + s.width as f64
+                    && cy >= p.y as f64
+                    && cy < p.y as f64 + s.height as f64
+            });
+            if let Some(m) = m {
+                let (mx, my) = (m.position().x as f64, m.position().y as f64);
+                let (mw, mh) = (m.size().width as f64, m.size().height as f64);
+                x = x.clamp(mx + 8.0, (mx + mw - w - 8.0).max(mx + 8.0));
+                // Таскбар сверху: клик в верхней трети экрана → попап под курсором.
+                if y < my + 8.0 {
+                    y = cy + 16.0;
+                }
+                y = y.clamp(my + 8.0, (my + mh - h - 8.0).max(my + 8.0));
             }
-            y = y.clamp(my + 8.0, (my + mh - h - 8.0).max(my + 8.0));
+        }
+        (x, y)
+    };
+
+    let size = win.outer_size().unwrap_or(tauri::PhysicalSize::new(332, 424));
+    let (x, y) = place(size.width as f64, size.height as f64);
+    let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
+    // Смешанные DPI: перенос окна на монитор с другим масштабом меняет его
+    // physical-размер — первый кламп считался по старому. Перемеряем и, если
+    // размер сменился, позиционируем ещё раз по фактическому.
+    if let Ok(after) = win.outer_size() {
+        if after.width != size.width || after.height != size.height {
+            let (x2, y2) = place(after.width as f64, after.height as f64);
+            let _ = win.set_position(tauri::PhysicalPosition::new(x2, y2));
         }
     }
-
-    let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
     let _ = win.show();
     let _ = win.set_focus();
 }
