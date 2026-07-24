@@ -1,7 +1,7 @@
 [package]
 name = "clod-helper"
-version = "0.4.0"
-description = "Установщик Claude Code и Claude Desktop через прокси"
+version = "0.5.0"
+description = "РЈСЃС‚Р°РЅРѕРІС‰РёРє Claude Code Рё Claude Desktop С‡РµСЂРµР· РїСЂРѕРєСЃРё"
 authors = ["iimperium"]
 edition = "2021"
 
@@ -13,12 +13,12 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-# image-png — смена иконки трея на лету (живой статус моста)
+# image-png вЂ” СЃРјРµРЅР° РёРєРѕРЅРєРё С‚СЂРµСЏ РЅР° Р»РµС‚Сѓ (Р¶РёРІРѕР№ СЃС‚Р°С‚СѓСЃ РјРѕСЃС‚Р°)
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-opener = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-autostart = "2"
-# Системные тосты (мост упал/ожил, высокий пинг)
+# РЎРёСЃС‚РµРјРЅС‹Рµ С‚РѕСЃС‚С‹ (РјРѕСЃС‚ СѓРїР°Р»/РѕР¶РёР», РІС‹СЃРѕРєРёР№ РїРёРЅРі)
 tauri-plugin-notification = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
