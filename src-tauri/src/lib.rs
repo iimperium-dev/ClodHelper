@@ -77,6 +77,7 @@ pub fn run() {
             commands::bridge_exe_legacy,
             commands::bridge_set_route_mode,
             commands::bridge_update,
+            commands::wizard_install,
             // Прокси-пул
             commands::proxies_get,
             commands::proxies_set,

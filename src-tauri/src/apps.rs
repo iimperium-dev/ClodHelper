@@ -217,13 +217,20 @@ fn profile_installed(p: &AppProfile) -> (bool, Option<String>) {
 
 // ─── Ярлык на рабочем столе ──────────────────────────────────────
 
+/// Рабочий стол через известную папку Windows (dirs → SHGetKnownFolderPath):
+/// при OneDrive Known Folder Move реальный Desktop лежит в OneDrive, и сырой
+/// `USERPROFILE\Desktop` его не видит — ярлык «не находился», а запуск падал
+/// в fallback без прокси.
+pub fn desktop_dir() -> Option<PathBuf> {
+    dirs::desktop_dir().or_else(|| {
+        std::env::var("USERPROFILE")
+            .ok()
+            .map(|p| PathBuf::from(p).join("Desktop"))
+    })
+}
+
 fn desktop_shortcut_path(name: &str) -> Option<PathBuf> {
-    let userprofile = std::env::var("USERPROFILE").ok()?;
-    Some(
-        PathBuf::from(userprofile)
-            .join("Desktop")
-            .join(format!("{name} (proxy).lnk")),
-    )
+    Some(desktop_dir()?.join(format!("{name} (proxy).lnk")))
 }
 
 /// Собрать статус всех профилей для UI.
@@ -641,9 +648,20 @@ fn find_in_dir(dir: &std::path::Path, name: &str) -> Vec<String> {
     }
 }
 
-/// Все пути exe по имени через `where` (может вернуть несколько).
+/// Все пути exe по имени (может вернуть несколько). Через PowerShell
+/// Get-Command с UTF-8-прелюдией: `where.exe` пишет в пайп OEM-866, и пути
+/// с кириллицей (профиль «Пётр») превращались в кашу → killswitch молча
+/// пропускал эти exe.
 fn which_all(name: &str) -> Vec<String> {
-    let out = run_silent("where", &[name]);
+    let script = format!(
+        "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; \
+         (Get-Command '{}' -All -ErrorAction SilentlyContinue -CommandType Application).Source",
+        name.replace('\'', "''"),
+    );
+    let out = run_silent(
+        "powershell.exe",
+        &["-NoProfile", "-NonInteractive", "-Command", &script],
+    );
     match out {
         Some(s) => s
             .lines()

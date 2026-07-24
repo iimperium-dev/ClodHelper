@@ -139,6 +139,12 @@ pub fn disable() -> Result<(), String> {
 
 /// Выполнить PS-скрипт БЕЗ elevation (read-only статус). Возвращает stdout.
 fn run_ps_capture(script: &str) -> Option<String> {
+    // UTF-8-прелюдия: PS 5.1 пишет в пайп OEM-866 — кириллические пути exe
+    // в правилах превращались бы в кашу (см. tasks::run_ps).
+    let script = format!(
+        "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; \
+         $OutputEncoding=[System.Text.Encoding]::UTF8; {script}"
+    );
     let mut cmd = Command::new("powershell.exe");
     cmd.args([
         "-NoProfile",
@@ -146,7 +152,7 @@ fn run_ps_capture(script: &str) -> Option<String> {
         "-ExecutionPolicy",
         "Bypass",
         "-Command",
-        script,
+        script.as_str(),
     ]);
     apply_no_window(&mut cmd);
     let out = cmd.output().ok()?;
@@ -162,7 +168,13 @@ fn run_ps_capture(script: &str) -> Option<String> {
 /// обёртки. Маркер CLODHELPER_FW_DONE пишем в файл-результат, т.к. stdout
 /// elevated-процесса нам напрямую недоступен.
 fn run_ps_elevated(inner_script: &str) -> Result<(), String> {
-    let tmp = std::env::temp_dir();
+    // Скрипт кладём в СВОЮ папку настроек, не в общий %TEMP%: «скрытый
+    // elevated powershell -File из темпа» — хрестоматийная AV-эвристика,
+    // плюс чужие tmp-клинеры могут удалить файл между записью и запуском.
+    let tmp = dirs::config_dir()
+        .map(|d| d.join("Clod Helper"))
+        .unwrap_or_else(std::env::temp_dir);
+    let _ = std::fs::create_dir_all(&tmp);
     let script_path = tmp.join("clodhelper-fw.ps1");
     let result_path = tmp.join("clodhelper-fw-result.txt");
 

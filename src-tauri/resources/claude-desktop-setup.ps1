@@ -229,7 +229,9 @@ $vbsContent = @"
 Set sh = CreateObject("WScript.Shell")
 sh.Run Chr(34) & "$bridgePath" & Chr(34) & " --upstream " & Chr(34) & "$ProxyUrl" & Chr(34) & " --listen 127.0.0.1:$Port --quiet", 0, False
 "@
-Set-Content -Path $StartupVbs -Value $vbsContent -Encoding ASCII
+# Unicode (UTF-16), не ASCII: кириллический путь профиля в ASCII превращается
+# в '?', и автозапуск ломается у пользователей с русским именем Windows.
+Set-Content -Path $StartupVbs -Value $vbsContent -Encoding Unicode
 Write-Ok "автозагрузка прописана ($StartupVbs)"
 
 # ─── Шаг 4: запуск прямо сейчас ──────────────────────────────────

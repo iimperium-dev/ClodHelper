@@ -38,10 +38,10 @@ pub fn launch_claude_desktop() -> Result<(), String> {
     // Prefer the shortcut we created on desktop — it carries the
     // --proxy-server flag. If the user deleted it, fall back to launching
     // Claude.exe directly out of the MSIX install location.
-    let userprofile = std::env::var("USERPROFILE")
-        .map_err(|e| format!("USERPROFILE не задан: {e}"))?;
-    let shortcut = std::path::PathBuf::from(&userprofile)
-        .join("Desktop")
+    // Desktop — через known-folder: при OneDrive KFM сырой USERPROFILE\Desktop
+    // не видит ярлык, и запуск тихо падал в fallback БЕЗ прокси (реальный IP).
+    let shortcut = crate::apps::desktop_dir()
+        .ok_or_else(|| "Не нашёл рабочий стол".to_string())?
         .join("Claude Desktop (proxy).lnk");
 
     if shortcut.exists() {
@@ -108,11 +108,9 @@ pub fn launch_claude_code() -> Result<(), String> {
 pub fn launch_cursor() -> Result<(), String> {
     // Предпочитаем ярлык «Cursor (proxy)» — он несёт --proxy-server. Если его
     // нет (пользователь удалил) — запускаем Cursor.exe напрямую с флагом.
-    let userprofile = std::env::var("USERPROFILE")
-        .map_err(|e| format!("USERPROFILE не задан: {e}"))?;
-    let shortcut = std::path::PathBuf::from(&userprofile)
-        .join("Desktop")
-        .join("Cursor (proxy).lnk");
+    // Desktop через known-folder (OneDrive-aware).
+    let shortcut = system::cursor_shortcut_path()
+        .ok_or_else(|| "Не нашёл рабочий стол".to_string())?;
 
     if shortcut.exists() {
         let mut cmd = Command::new("cmd");
@@ -1082,6 +1080,111 @@ pub async fn bridge_update(app: AppHandle) -> Result<String, String> {
     })
     .await
     .map_err(|e| format!("Внутренняя ошибка: {e}"))?
+}
+
+// ─── Новый мастер (3 шага): установка одним вызовом ──────────────
+
+/// Результат установки нового мастера.
+#[derive(Debug, Serialize)]
+pub struct WizardInstallResult {
+    /// Реальная проверка соединения через мост (не «зелёный pill по флагу»).
+    pub test: shim::ShimTestResult,
+    /// Включилось ли системное проксирование (env). false — не фатально,
+    /// тумблер есть в Обзоре.
+    pub env_on: bool,
+}
+
+/// Установка для нового мастера: мост из ресурсов → настройки + задача
+/// автозапуска + старт → системное проксирование → пресеты приложений →
+/// честная проверка соединения. Прогресс — события "wizard:step"
+/// ("<фаза>:start|ok|err"). Легаси PS-скрипты (python-мост, npm, режимы
+/// установки) в этом пути не участвуют — всё делают существующие Rust-пути.
+#[tauri::command]
+pub async fn wizard_install(
+    app: AppHandle,
+    proxy_url: String,
+) -> Result<WizardInstallResult, String> {
+    let step = |phase: &str, state: &str| {
+        let _ = app.emit("wizard:step", format!("{phase}:{state}"));
+    };
+    proxy::parse(&proxy_url)?;
+
+    // 1) Мост: копия из ресурсов в %LOCALAPPDATA%\ClaudeDesktopProxy.
+    step("bridge", "start");
+    let src = resolve_resource(&app, "clod-bridge.exe")?;
+    let dst = shim::bridge_exe_path()
+        .ok_or_else(|| "Не нашёл папку ClaudeDesktopProxy".to_string())?;
+    let copied = tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let _ = shim::stop(); // переустановка поверх живого моста: exe залочен
+        if let Some(parent) = dst.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("create dir {}: {e}", parent.display()))?;
+        }
+        let mut last_err = String::new();
+        for _ in 0..3 {
+            match std::fs::copy(&src, &dst) {
+                Ok(_) => {
+                    last_err.clear();
+                    break;
+                }
+                Err(e) => {
+                    last_err = e.to_string();
+                    std::thread::sleep(std::time::Duration::from_millis(400));
+                }
+            }
+        }
+        if last_err.is_empty() {
+            Ok(())
+        } else {
+            Err(format!("Не удалось установить мост: {last_err}"))
+        }
+    })
+    .await
+    .map_err(|e| format!("Внутренняя ошибка: {e}"))?;
+    if let Err(e) = copied {
+        step("bridge", "err");
+        return Err(e);
+    }
+    step("bridge", "ok");
+
+    // 2) Настройки + задача автозапуска + запуск моста.
+    step("task", "start");
+    let url = proxy_url.clone();
+    let started = tokio::task::spawn_blocking(move || -> Result<(), String> {
+        settings::set_proxy_url(url.clone())?;
+        crate::tasks::register(&url)?;
+        shim::restart()
+    })
+    .await
+    .map_err(|e| format!("Внутренняя ошибка: {e}"))?;
+    if let Err(e) = started {
+        step("task", "err");
+        return Err(e);
+    }
+    step("task", "ok");
+
+    // 3) Системное проксирование — главный выключатель новой модели.
+    //    Неудача не фатальна: тумблер есть в Обзоре.
+    step("env", "start");
+    let env_on = tokio::task::spawn_blocking(|| {
+        env_proxy::set(&format!("http://127.0.0.1:{}", shim::LISTEN_PORT)).is_ok()
+    })
+    .await
+    .unwrap_or(false);
+    step("env", if env_on { "ok" } else { "err" });
+
+    // 4) Пресеты профилей приложений — чтобы раздел «Приложения» был готов.
+    step("presets", "start");
+    let _ = tokio::task::spawn_blocking(settings::load_with_presets).await;
+    step("presets", "ok");
+
+    // 5) Честная проверка: реальный запрос через мост, не зелёный pill.
+    step("test", "start");
+    tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+    let test = shim::test().await;
+    step("test", if test.ok { "ok" } else { "err" });
+
+    Ok(WizardInstallResult { test, env_on })
 }
 
 // ─── Прокси-пул (до 5 upstream'ов + назначения по сервисам) ──────

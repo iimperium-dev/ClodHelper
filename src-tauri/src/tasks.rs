@@ -160,6 +160,23 @@ fn bridge_supports_rules(exe: &std::path::Path) -> bool {
 static EXE_PROBE_CACHE: std::sync::Mutex<Option<(std::time::SystemTime, bool)>> =
     std::sync::Mutex::new(None);
 
+/// Понимает ли мост режим `--supervise` (1.3.0+)? Проба: `--supervise
+/// --version` — новый мост ставит флаг и выходит 0 на --version, старый
+/// падает на неизвестном аргументе. Если да — задача Планировщика вешается
+/// ПРЯМО на exe (без VBS/wscript: малварь-паттерн для антивирусов, WSH
+/// отключаем политиками, VBScript депрекейтнут в Win11 24H2+).
+fn bridge_supports_supervise(exe: &std::path::Path) -> bool {
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args(["--supervise", "--version"]);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd.output().map(|o| o.status.success()).unwrap_or(false)
+}
+
 /// Установленный мост — легаси (старый PyInstaller-python, без /healthz и
 /// --rules)? По этому флагу UI показывает «Обновить мост» вместо вечного
 /// спиннера. false, если exe не найден вовсе.
@@ -201,18 +218,6 @@ pub fn register(proxy_url: &str) -> Result<(), String> {
     let vbs_path = runner_vbs_path()
         .ok_or_else(|| "Не нашёл папку ClaudeDesktopProxy".to_string())?;
 
-    // --rules только для нового Rust-моста (см. bridge_supports_rules).
-    let args_expr = if bridge_supports_rules(&exe) {
-        let rules_path = write_rules_file()?;
-        format!(
-            "\" --listen 127.0.0.1:{port} --rules \" & Chr(34) & \"{rules}\" & Chr(34) & \" --quiet\"",
-            port = LISTEN_PORT,
-            rules = rules_path.to_string_lossy(),
-        )
-    } else {
-        format!("\" --listen 127.0.0.1:{port} --quiet\"", port = LISTEN_PORT)
-    };
-
     // Все прокси пула → повторяемые --upstream. ПОРЯДОК СВЯЩЕНЕН: индексы
     // assignments в rules-файле считаются по этому же списку — перестановка
     // здесь без пересчёта rules увела бы закреплённый сервис на другой прокси
@@ -227,47 +232,88 @@ pub fn register(proxy_url: &str) -> Result<(), String> {
             list
         }
     };
-    let upstreams_expr: String = pool
-        .iter()
-        .map(|u| {
+
+    let supports_rules = bridge_supports_rules(&exe);
+    let supports_supervise = supports_rules && bridge_supports_supervise(&exe);
+
+    // Действие задачи: мост 1.3.0+ супервизорит себя сам — задача вешается
+    // ПРЯМО на exe, VBS/wscript исчезают (антивирусный малварь-паттерн
+    // «exe пишет VBS + задача на wscript» + депрекация VBScript).
+    // Старые мосты — прежний VBS-путь, до первого «Обновить мост».
+    let (execute_e, argument_e) = if supports_supervise {
+        let rules_path = write_rules_file()?;
+        let mut parts: Vec<String> = vec![
+            "--supervise".into(),
+            "--listen".into(),
+            format!("127.0.0.1:{LISTEN_PORT}"),
+        ];
+        for u in &pool {
+            parts.push("--upstream".into());
+            parts.push(format!("\"{}\"", u.replace('"', "")));
+        }
+        parts.push("--rules".into());
+        parts.push(format!("\"{}\"", rules_path.to_string_lossy()));
+        parts.push("--quiet".into());
+        // Старый runner-vbs больше не нужен — подчищаем, чтобы не смущал AV.
+        if vbs_path.exists() {
+            let _ = std::fs::remove_file(&vbs_path);
+        }
+        (
+            exe.to_string_lossy().replace('\'', "''"),
+            parts.join(" ").replace('\'', "''"),
+        )
+    } else {
+        // Легаси: runner-СУПЕРВИЗОР на VBS — скрытый запуск, перезапуск через
+        // 5с. --rules только для Rust-моста (см. bridge_supports_rules).
+        let args_expr = if supports_rules {
+            let rules_path = write_rules_file()?;
             format!(
-                " & \" --upstream \" & Chr(34) & \"{}\" & Chr(34)",
-                u.replace('"', "")
+                "\" --listen 127.0.0.1:{port} --rules \" & Chr(34) & \"{rules}\" & Chr(34) & \" --quiet\"",
+                port = LISTEN_PORT,
+                rules = rules_path.to_string_lossy(),
             )
-        })
-        .collect();
+        } else {
+            format!("\" --listen 127.0.0.1:{port} --quiet\"", port = LISTEN_PORT)
+        };
+        let upstreams_expr: String = pool
+            .iter()
+            .map(|u| {
+                format!(
+                    " & \" --upstream \" & Chr(34) & \"{}\" & Chr(34)",
+                    u.replace('"', "")
+                )
+            })
+            .collect();
+        let vbs = format!(
+            "' Clod bridge supervisor: держит мост запущенным; упавший процесс\r\n\
+             ' перезапускается через 5 секунд. Остановка — Stop-ScheduledTask.\r\n\
+             Set sh = CreateObject(\"WScript.Shell\")\r\n\
+             Do\r\n\
+             code = sh.Run(Chr(34) & \"{exe}\" & Chr(34){upstreams} & {args}, 0, True)\r\n\
+             WScript.Sleep 5000\r\n\
+             Loop\r\n",
+            exe = exe.to_string_lossy(),
+            upstreams = upstreams_expr,
+            args = args_expr,
+        );
+        // UTF-16LE с BOM: wscript без BOM читает .vbs в ANSI-кодировке системы,
+        // и кириллический путь профиля превращается в кракозябры — мост не
+        // стартовал бы ни при одном логине.
+        let vbs_utf16: Vec<u8> = [0xFF_u8, 0xFE]
+            .into_iter()
+            .chain(vbs.encode_utf16().flat_map(|u| u.to_le_bytes()))
+            .collect();
+        std::fs::write(&vbs_path, vbs_utf16)
+            .map_err(|e| format!("write {}: {e}", vbs_path.display()))?;
+        (
+            "wscript.exe".to_string(),
+            format!("\"{}\"", vbs_path.to_string_lossy()).replace('\'', "''"),
+        )
+    };
 
-    // Runner-СУПЕРВИЗОР: скрытый запуск, ожидание, перезапуск упавшего моста
-    // через 5с. Цикл бесконечный — умирает только вместе с wscript (Stop-
-    // ScheduledTask). Если exe исчез (деинсталляция) — sh.Run кидает ошибку,
-    // vbs завершается, цикл не молотит вхолостую.
-    let vbs = format!(
-        "' Clod bridge supervisor: держит мост запущенным; упавший процесс\r\n\
-         ' перезапускается через 5 секунд. Остановка — Stop-ScheduledTask.\r\n\
-         Set sh = CreateObject(\"WScript.Shell\")\r\n\
-         Do\r\n\
-         code = sh.Run(Chr(34) & \"{exe}\" & Chr(34){upstreams} & {args}, 0, True)\r\n\
-         WScript.Sleep 5000\r\n\
-         Loop\r\n",
-        exe = exe.to_string_lossy(),
-        upstreams = upstreams_expr,
-        args = args_expr,
-    );
-    // UTF-16LE с BOM: wscript без BOM читает .vbs в ANSI-кодировке системы,
-    // и кириллический путь профиля (C:\Users\Пользователь\…) превращается в
-    // кракозябры — мост не стартует ни при одном логине. UTF-16 классический
-    // движок VBS понимает всегда.
-    let vbs_utf16: Vec<u8> = [0xFF_u8, 0xFE]
-        .into_iter()
-        .chain(vbs.encode_utf16().flat_map(|u| u.to_le_bytes()))
-        .collect();
-    std::fs::write(&vbs_path, vbs_utf16)
-        .map_err(|e| format!("write {}: {e}", vbs_path.display()))?;
-
-    let vbs_e = vbs_path.to_string_lossy().replace('\'', "''");
     let script = format!(
         "$user = \"$env:USERDOMAIN\\$env:USERNAME\"; \
-         $action = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument ('\"' + '{vbs_e}' + '\"'); \
+         $action = New-ScheduledTaskAction -Execute '{execute_e}' -Argument '{argument_e}'; \
          $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user; \
          $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries \
            -StartWhenAvailable -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) \
@@ -337,6 +383,13 @@ pub fn migrate_from_startup_vbs() {
 
 fn run_ps(script: &str) -> Option<String> {
     use std::process::Command;
+    // UTF-8-прелюдия обязательна: PowerShell 5.1 пишет в пайп OEM-кодировкой
+    // (cp866 на русской Windows), и from_utf8_lossy превращает кириллицу
+    // (пути профиля, тексты ошибок) в кашу U+FFFD.
+    let script = format!(
+        "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; \
+         $OutputEncoding=[System.Text.Encoding]::UTF8; {script}"
+    );
     let mut cmd = Command::new("powershell.exe");
     cmd.args([
         "-NoProfile",
@@ -344,7 +397,7 @@ fn run_ps(script: &str) -> Option<String> {
         "-ExecutionPolicy",
         "Bypass",
         "-Command",
-        script,
+        script.as_str(),
     ]);
     #[cfg(target_os = "windows")]
     {

@@ -315,9 +315,13 @@ Write-Step 4 5 "Проверяю что Anthropic API доступен чере�
 try {
     # /v1/messages без auth даст 401 — это означает что прокси работает,
     # и API нас видит. ERR_TIMED_OUT / 502 — значит прокси мёртв или плохой.
+    # -Proxy ОБЯЗАТЕЛЕН: Invoke-WebRequest на PS 5.1 игнорирует env
+    # HTTP(S)_PROXY — без него запрос шёл НАПРЯМУЮ (ложный успех по гео-403,
+    # а при зарезанном DPI прямом коннекте — ложный провал установки).
     $resp = Invoke-WebRequest -Uri "https://api.anthropic.com/v1/messages" `
         -Method POST `
         -UseBasicParsing `
+        -Proxy $BridgeUrl `
         -TimeoutSec 15 `
         -ErrorAction Stop
     Write-Warn "API ответил неожиданно ($($resp.StatusCode)). Возможно прокси MITM-ит трафик."

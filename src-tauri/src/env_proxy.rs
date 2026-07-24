@@ -14,8 +14,6 @@
 
 use serde::Serialize;
 
-const KEYS: &[&str] = &["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"];
-
 /// Текущее состояние глобальных прокси-переменных.
 #[derive(Debug, Clone, Serialize)]
 pub struct GlobalProxyEnv {
@@ -84,6 +82,22 @@ pub fn read() -> GlobalProxyEnv {
 /// Действует на процессы, запущенные ПОСЛЕ (WM_SETTINGCHANGE рассылается
 /// автоматически). Прав администратора не требует (User scope).
 pub fn set(proxy_url: &str) -> Result<(), String> {
+    // Чужие значения (корпоративный прокси, свой VPN-тул) сохраняем ПЕРЕД
+    // перезаписью: «выключить» обязано вернуть их, а не стереть насовсем —
+    // иначе у пользователя «после вашей проги сломался интернет для CLI».
+    let bridge_needle = format!("127.0.0.1:{}", crate::shim::LISTEN_PORT);
+    let mut foreign = std::collections::HashMap::new();
+    for key in ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"] {
+        if let Some(v) = read_user_env(key) {
+            if !v.contains(&bridge_needle) {
+                foreign.insert(key.to_string(), v);
+            }
+        }
+    }
+    if !foreign.is_empty() {
+        let _ = crate::settings::set_saved_proxy_env(Some(foreign));
+    }
+
     let no_proxy = merged_no_proxy();
     let url_e = proxy_url.replace('\'', "''");
     let np_e = no_proxy.replace('\'', "''");
@@ -129,8 +143,22 @@ fn merged_no_proxy() -> String {
 /// Уже запущенные процессы (включая нас) свои унаследованные копии сохраняют
 /// до перезапуска — это ожидаемо.
 pub fn clear() -> Result<(), String> {
+    // Если при включении мы перезаписали чужие значения — возвращаем их,
+    // а не просто зануляем (см. set()).
+    let saved = crate::settings::load().saved_proxy_env.unwrap_or_default();
     let mut script = String::new();
-    for key in KEYS {
+    for key in ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"] {
+        match saved.get(key) {
+            Some(v) => script.push_str(&format!(
+                "[Environment]::SetEnvironmentVariable('{key}', '{}', 'User'); ",
+                v.replace('\'', "''"),
+            )),
+            None => script.push_str(&format!(
+                "[Environment]::SetEnvironmentVariable('{key}', $null, 'User'); ",
+            )),
+        }
+    }
+    for key in ["http_proxy", "https_proxy"] {
         script.push_str(&format!(
             "[Environment]::SetEnvironmentVariable('{key}', $null, 'User'); ",
         ));
@@ -140,6 +168,7 @@ pub fn clear() -> Result<(), String> {
     let out = run_ps_capture(&script)
         .ok_or_else(|| "powershell.exe не выполнил очистку".to_string())?;
     if out.contains("ENV_CLEARED") {
+        let _ = crate::settings::set_saved_proxy_env(None);
         Ok(())
     } else {
         Err(format!("Не удалось очистить переменные: {out}"))
@@ -156,6 +185,12 @@ fn read_user_env(name: &str) -> Option<String> {
 
 fn run_ps_capture(script: &str) -> Option<String> {
     use std::process::Command;
+    // UTF-8-прелюдия: без неё PS 5.1 пишет в пайп OEM-866 и кириллица в
+    // значениях/ошибках превращается в кашу (см. tasks::run_ps).
+    let script = format!(
+        "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; \
+         $OutputEncoding=[System.Text.Encoding]::UTF8; {script}"
+    );
     let mut cmd = Command::new("powershell.exe");
     cmd.args([
         "-NoProfile",
@@ -163,7 +198,7 @@ fn run_ps_capture(script: &str) -> Option<String> {
         "-ExecutionPolicy",
         "Bypass",
         "-Command",
-        script,
+        script.as_str(),
     ]);
     #[cfg(target_os = "windows")]
     {

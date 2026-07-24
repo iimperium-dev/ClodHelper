@@ -68,6 +68,11 @@ pub struct Settings {
     /// Пользовательские имена (тэги) прокси: URL → имя («Немецкий», «Резерв»).
     #[serde(default)]
     pub proxy_labels: std::collections::HashMap<String, String>,
+    /// Чужие прокси-переменные (корпоративный прокси, свой VPN-тул), которые
+    /// мы перезаписали при включении системного проксирования. «Выключить»
+    /// возвращает их, а не стирает настройку пользователя насовсем.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub saved_proxy_env: Option<std::collections::HashMap<String, String>>,
 }
 
 /// Полный пул прокси: proxies, а для легаси-установок — единственный proxy_url.
@@ -247,6 +252,16 @@ pub fn set_profiles(profiles: Vec<AppProfile>) -> Result<Settings, String> {
                 p
             })
             .collect();
+        Ok(())
+    })
+}
+
+/// Снимок чужих env-переменных до перезаписи (None = снять снимок).
+pub fn set_saved_proxy_env(
+    value: Option<std::collections::HashMap<String, String>>,
+) -> Result<Settings, String> {
+    with_settings(|s| {
+        s.saved_proxy_env = value;
         Ok(())
     })
 }

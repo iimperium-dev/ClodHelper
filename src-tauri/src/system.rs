@@ -45,13 +45,9 @@ pub fn find_cursor_exe() -> Option<std::path::PathBuf> {
 }
 
 /// Путь к ярлыку «Cursor (proxy)» на рабочем столе пользователя.
+/// Через known-folder (OneDrive-aware), не сырой USERPROFILE\Desktop.
 pub fn cursor_shortcut_path() -> Option<std::path::PathBuf> {
-    let userprofile = std::env::var("USERPROFILE").ok()?;
-    Some(
-        std::path::PathBuf::from(userprofile)
-            .join("Desktop")
-            .join("Cursor (proxy).lnk"),
-    )
+    Some(crate::apps::desktop_dir()?.join("Cursor (proxy).lnk"))
 }
 
 pub fn detect_cursor() -> CursorInfo {

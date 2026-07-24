@@ -56,7 +56,10 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "resources/*"
+      "resources/clod-bridge.exe",
+      "resources/claude-setup.ps1",
+      "resources/claude-desktop-setup.ps1",
+      "resources/cursor-setup.ps1"
     ],
     "publisher": "iimperium",
     "copyright": "Copyright (c) 2026 iimperium",
@@ -64,6 +67,9 @@
     "shortDescription": "Прокси для Claude Code, Claude Desktop и Cursor IDE",
     "longDescription": "Clod Helper — десктопная утилита для установки и настройки Claude Code (CLI), Claude Desktop и Cursor IDE через купленный HTTP-прокси. Нужен в регионах где Anthropic API заблокирован напрямую.",
     "windows": {
+      "webviewInstallMode": {
+        "type": "embedBootstrapper"
+      },
       "nsis": {
         "installerIcon": "icons/icon.ico",
         "installMode": "currentUser",
