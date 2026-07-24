@@ -18,6 +18,13 @@
 //! CLI совместим со старым мостом: --upstream URL (повторяемый), --listen
 //! HOST:PORT, --quiet. Новое: --rules FILE (JSON: mode/proxy_domains/
 //! direct_domains). Без rules-файла ведёт себя ровно как старый мост (all).
+//!
+//! --supervise: режим самосупервизии — процесс перезапускает сам себя как
+//! воркер и поднимает упавшего через 5с. Задача Планировщика вешается прямо
+//! на exe: VBS/wscript-цикл (малварь-паттерн для антивирусов + депрекация
+//! VBScript в Win11 24H2+) больше не нужен. windows_subsystem="windows" —
+//! окна консоли нет ни у супервизора, ни у воркера.
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -772,6 +779,8 @@ struct Args {
     listen: String,
     quiet: bool,
     rules: Option<String>,
+    /// Режим супервизора: перезапускать себя-воркера при падении.
+    supervise: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -780,6 +789,7 @@ fn parse_args() -> Result<Args, String> {
         listen: "127.0.0.1:8888".into(),
         quiet: false,
         rules: None,
+        supervise: false,
     };
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
@@ -800,6 +810,7 @@ fn parse_args() -> Result<Args, String> {
                 a.rules = Some(argv.get(i).ok_or("--rules requires FILE")?.clone());
             }
             "--quiet" => a.quiet = true,
+            "--supervise" => a.supervise = true,
             "--version" => {
                 println!("clod-bridge {}", env!("CARGO_PKG_VERSION"));
                 std::process::exit(0);
@@ -814,6 +825,45 @@ fn parse_args() -> Result<Args, String> {
     Ok(a)
 }
 
+/// Цикл самосупервизии: спавним себя-воркера (те же argv минус --supervise),
+/// ждём завершения, через 5с поднимаем заново. Замена VBS/wscript-циклу.
+/// Один супервизор на exe — эксклюзивный lock-файл (share_mode 0).
+fn run_supervisor() -> ! {
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("ERROR: current_exe: {e}");
+            std::process::exit(1);
+        }
+    };
+    #[cfg(target_os = "windows")]
+    let _lock = {
+        use std::os::windows::fs::OpenOptionsExt;
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .share_mode(0)
+            .open(exe.with_extension("supervisor.lock"))
+        {
+            Ok(f) => f,
+            // Лок занят → супервизор уже работает (задача + watchdog GUI
+            // могли стартовать одновременно) — тихо уходим, дубли не плодим.
+            Err(_) => std::process::exit(0),
+        }
+    };
+    let child_args: Vec<String> = std::env::args()
+        .skip(1)
+        .filter(|a| a != "--supervise")
+        .collect();
+    loop {
+        match std::process::Command::new(&exe).args(&child_args).status() {
+            Ok(s) => eprintln!("supervisor: мост завершился ({s}) — перезапуск через 5с"),
+            Err(e) => eprintln!("supervisor: не удалось запустить воркер: {e}"),
+        }
+        std::thread::sleep(Duration::from_secs(5));
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let args = match parse_args() {
@@ -822,11 +872,15 @@ async fn main() {
             eprintln!("ERROR: {e}");
             eprintln!(
                 "usage: clod-bridge --upstream http://user:pass@host:port [--upstream …] \
-                 [--listen 127.0.0.1:8888] [--rules FILE] [--quiet]"
+                 [--listen 127.0.0.1:8888] [--rules FILE] [--quiet] [--supervise]"
             );
             std::process::exit(1);
         }
     };
+
+    if args.supervise {
+        run_supervisor();
+    }
 
     let mut upstreams = Vec::new();
     for raw in &args.upstreams {
