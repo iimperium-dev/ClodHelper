@@ -1,81 +1,65 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Loader2, AlertTriangle, XCircle } from "lucide-react";
+import { AlertTriangle, ArrowUpDown, Loader2 } from "lucide-react";
 import { Button } from "../components/Button";
 import { CountryFlag } from "../components/CountryFlag";
-import type { ProxyCheckResult, ProxyConfig } from "../lib/types";
-import { checkProxy, parseProxy } from "../lib/api";
+import { checkProxy } from "../lib/api";
+import { isParseReject, parseProxyInput, type ParsedProxy } from "../lib/proxyParse";
+import type { ProxyCheckResult } from "../lib/types";
+import { cn } from "../lib/cn";
 
 interface Props {
-  proxy: ProxyConfig | null;
-  check: ProxyCheckResult | null;
-  onChange: (p: ProxyConfig, c: ProxyCheckResult) => void;
-  onBack: () => void;
-  onNext: () => void;
+  initialUrl: string | null;
+  onNext: (url: string) => void;
 }
 
-type Status =
-  | { kind: "idle" }
-  | { kind: "checking" }
-  | { kind: "ok"; result: ProxyCheckResult; parsed: ProxyConfig }
-  | { kind: "error"; message: string; result?: ProxyCheckResult };
+/*
+  Шаг 1 нового мастера: приветствие + умный ввод прокси.
+  Парсер — тот же parseProxyInput, что в разделе «Прокси» (любые форматы
+  шопов, эскалация при неоднозначности). Гео-проверка информативная, НЕ
+  блокирует «Дальше»: настоящая проверка соединения будет на шаге установки.
+*/
+export function StepProxy({ initialUrl, onNext }: Props) {
+  const [input, setInput] = useState(initialUrl ?? "");
+  const [swapped, setSwapped] = useState(false);
 
-export function StepProxy({ proxy, check, onChange, onBack, onNext }: Props) {
-  const [url, setUrl] = useState(proxy?.url ?? "");
-  const [status, setStatus] = useState<Status>(() => {
-    if (proxy && check?.reachable) return { kind: "ok", result: check, parsed: proxy };
-    return { kind: "idle" };
-  });
-  const timerRef = useRef<number | null>(null);
-  const reqIdRef = useRef(0);
+  const parsedResult = useMemo(() => parseProxyInput(input), [input]);
+  const parseError = isParseReject(parsedResult) ? parsedResult.error : null;
+  const parsedBase: ParsedProxy | null = isParseReject(parsedResult) ? null : parsedResult;
+  const parsed: ParsedProxy | null =
+    parsedBase && swapped && parsedBase.alt ? parsedBase.alt : parsedBase;
+  const ambiguous = !!parsedBase?.alt;
+  const needsReview = ambiguous || parsed?.confidence === "low";
 
-  function scheduleCheck(value: string) {
-    if (timerRef.current) {
-      window.clearTimeout(timerRef.current);
-    }
-    const trimmed = value.trim();
-    if (trimmed.length < 10) {
-      setStatus({ kind: "idle" });
+  // Гео-проверка с дебаунсом; устаревший ответ не применяем.
+  const [check, setCheck] = useState<
+    { state: "idle" } | { state: "checking" } | { state: "done"; result: ProxyCheckResult | null }
+  >({ state: "idle" });
+  const checkUrl = useRef<string | null>(null);
+  useEffect(() => {
+    if (!parsed) {
+      checkUrl.current = null;
+      setCheck({ state: "idle" });
       return;
     }
-    setStatus({ kind: "checking" });
-    timerRef.current = window.setTimeout(() => {
-      void runCheck(trimmed);
-    }, 800);
-  }
-
-  async function runCheck(value: string) {
-    const myId = ++reqIdRef.current;
-    try {
-      const parsed = await parseProxy(value);
-      const result = await checkProxy(value);
-      if (myId !== reqIdRef.current) return;
-      if (result.reachable) {
-        setStatus({ kind: "ok", result, parsed });
-        onChange(parsed, result);
-      } else {
-        setStatus({
-          kind: "error",
-          message: result.error ?? "Прокси не отвечает",
-          result,
+    const url = parsed.url;
+    checkUrl.current = url;
+    setCheck({ state: "checking" });
+    const t = window.setTimeout(() => {
+      checkProxy(url)
+        .then((r) => {
+          if (checkUrl.current === url) setCheck({ state: "done", result: r });
+        })
+        .catch(() => {
+          if (checkUrl.current === url) setCheck({ state: "done", result: null });
         });
-      }
-    } catch (e: any) {
-      if (myId !== reqIdRef.current) return;
-      setStatus({
-        kind: "error",
-        message: typeof e === "string" ? e : (e?.message ?? "Неверный формат URL"),
-      });
-    }
-  }
+    }, 700);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parsed?.url]);
 
-  useEffect(() => {
-    return () => {
-      if (timerRef.current) window.clearTimeout(timerRef.current);
-    };
-  }, []);
-
-  const canNext = status.kind === "ok";
+  const geo = check.state === "done" ? check.result : null;
+  const isRu = geo?.country_code?.toUpperCase() === "RU";
 
   return (
     <div className="mx-auto max-w-2xl pt-4">
@@ -83,8 +67,8 @@ export function StepProxy({ proxy, check, onChange, onBack, onNext }: Props) {
         Вставьте прокси
       </h2>
       <p className="mt-1.5 text-[13px] text-vb-silver-dim">
-        Скопируйте строку целиком из письма продавца. Мы сами разберём её на
-        части.
+        Скопируйте строку целиком из письма продавца — формат любой, мы сами
+        разберём её на части. Дальше всё настроится автоматически.
       </p>
 
       <button
@@ -100,180 +84,140 @@ export function StepProxy({ proxy, check, onChange, onBack, onNext }: Props) {
         <span className="text-vb-emerald/80">proxy6.net →</span>
       </button>
 
-      <div className="mt-5 glass-card p-6">
-        <label className="block text-[11px] uppercase tracking-wider text-vb-silver-dim">
-          URL прокси
-        </label>
+      <div className="surface-card mt-5 p-5">
         <input
           type="text"
           spellCheck={false}
           autoCapitalize="off"
           autoCorrect="off"
-          value={url}
+          value={input}
           onChange={(e) => {
-            const v = e.target.value;
-            setUrl(v);
-            scheduleCheck(v);
+            setInput(e.target.value);
+            setSwapped(false);
           }}
-          placeholder="http://имя:пароль@адрес:порт"
-          className="mt-2 w-full rounded-lg border border-vb-border bg-vb-bg/60 px-4 py-3 font-mono text-[13px] text-vb-silver outline-none transition-colors focus:border-vb-emerald/60"
+          placeholder="Например: 1.2.3.4:8000:логин:пароль"
+          className="w-full rounded-lg border border-vb-border bg-vb-surface-2 px-3.5 py-2.5 font-mono text-[13px] text-vb-fg outline-none transition-colors focus:border-vb-emerald/60"
+          autoFocus
         />
 
-        <div className="mt-3 min-h-[22px] px-1">
-          <AnimatePresence mode="wait">
-            {status.kind === "idle" && (
-              <motion.div
-                key="idle"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.15 }}
-                className="text-[11px] text-vb-silver-dim/70"
-              >
-                Введите URL — мы автоматически проверим
-              </motion.div>
-            )}
-
-            {status.kind === "checking" && (
-              <motion.div
-                key="checking"
-                initial={{ opacity: 0, y: 2 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -2 }}
-                transition={{ duration: 0.18 }}
-                className="flex items-center gap-2"
-              >
-                <Loader2
-                  size={12}
-                  className="animate-spin text-vb-silver-dim"
-                />
-                <span className="text-[11px] font-mono text-vb-silver-dim">
-                  Проверка прокси…
+        {input.trim() &&
+          (parsed ? (
+            <div
+              className={cn(
+                "mt-3 rounded-lg border p-3",
+                needsReview
+                  ? "border-vb-warn/35 bg-vb-warn/[0.05]"
+                  : "border-vb-emerald/25 bg-vb-emerald/[0.04]",
+              )}
+            >
+              {needsReview && (
+                <p className="mb-2 text-[12px] text-vb-warn">
+                  {ambiguous
+                    ? "Формат неоднозначный — проверьте, где хост, а где логин:"
+                    : "Не до конца уверен в разборе — проверьте поля:"}
+                </p>
+              )}
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px]">
+                <span className="text-vb-silver-dim">
+                  Хост <span className="font-mono text-vb-fg">{parsed.host}</span>
                 </span>
-              </motion.div>
-            )}
-
-            {status.kind === "ok" && (
-              <motion.div
-                key="ok"
-                initial={{ opacity: 0, y: 2 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -2 }}
-                transition={{ duration: 0.22 }}
-                className="flex min-w-0 items-center gap-2"
-              >
-                <motion.div
-                  initial={{ scale: 0 }}
-                  animate={{ scale: 1 }}
-                  transition={{ type: "spring", stiffness: 600, damping: 20 }}
-                  className="h-1.5 w-1.5 shrink-0 rounded-full bg-vb-emerald shadow-[0_0_8px_rgba(16,185,129,0.6)]"
-                />
-                {status.result.country_code && (
-                  <CountryFlag code={status.result.country_code} />
+                <span className="text-vb-silver-dim">
+                  Порт <span className="tnum font-mono text-vb-fg">{parsed.port}</span>
+                </span>
+                {parsed.username !== undefined && (
+                  <>
+                    <span className="text-vb-silver-dim">
+                      Логин <span className="font-mono text-vb-fg">{parsed.username}</span>
+                    </span>
+                    <span className="text-vb-silver-dim">
+                      Пароль{" "}
+                      {parsed.password ? (
+                        <span className="font-mono text-vb-fg">····</span>
+                      ) : (
+                        <span className="text-vb-warn">пусто</span>
+                      )}
+                    </span>
+                  </>
                 )}
-                <span className="min-w-0 truncate font-mono text-[11px] text-vb-emerald/90">
-                  {[
-                    status.result.ip,
-                    status.result.isp,
-                    status.result.latency_ms != null
-                      ? `${status.result.latency_ms}ms`
-                      : null,
-                  ]
-                    .filter(Boolean)
-                    .join(" • ")}
-                </span>
-              </motion.div>
-            )}
+              </div>
+              {ambiguous && (
+                <button
+                  type="button"
+                  onClick={() => setSwapped((v) => !v)}
+                  className="mt-2 flex items-center gap-1.5 rounded-lg border border-vb-border px-2.5 py-1 text-[12px] font-medium text-vb-silver transition-colors hover:border-vb-border-strong hover:bg-vb-surface-2 active:scale-[0.97]"
+                >
+                  <ArrowUpDown className="h-3 w-3" />
+                  Поменять местами
+                </button>
+              )}
 
-            {status.kind === "error" && (
-              <motion.div
-                key="error"
-                initial={{ opacity: 0, y: 2 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -2 }}
-                transition={{ duration: 0.18 }}
-                className="flex items-start gap-2"
-              >
-                <XCircle size={12} className="mt-0.5 shrink-0 text-vb-loss" />
-                <span className="text-[11px] text-vb-loss">
-                  {status.message}
-                </span>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-
-        {status.kind === "ok" && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            transition={{ duration: 0.25 }}
-            className="mt-4 grid grid-cols-2 gap-x-6 gap-y-1.5 rounded-lg border border-vb-border/60 bg-vb-bg/40 p-3 font-mono text-[12px]"
-          >
-            <Field k="host" v={status.parsed.host} />
-            <Field k="port" v={String(status.parsed.port)} />
-            <Field k="user" v={status.parsed.username} />
-            <Field
-              k="pass"
-              v={"•".repeat(Math.min(status.parsed.password.length, 10))}
-            />
-            {status.result.country_name && (
-              <Field
-                k="страна"
-                v={status.result.country_name}
-                accent
-              />
-            )}
-            {status.result.isp && (
-              <Field k="провайдер" v={status.result.isp} accent />
-            )}
-          </motion.div>
-        )}
-
-        {url.includes("@") &&
-          /(\d+\.\d+\.\d+\.\d+)/.test(url) &&
-          status.kind === "ok" &&
-          status.result.country_code === "ru" && (
-            <div className="mt-3 flex items-start gap-2 rounded-lg border border-vb-warn/30 bg-vb-warn/5 px-3 py-2 text-[12px] text-vb-warn">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>
-                Этот прокси в России. Claude его не примет — нужен зарубежный.
-              </span>
+              {/* Гео-строка: информация, не блокировка */}
+              <div className="mt-2.5 border-t border-vb-border/50 pt-2.5">
+                <AnimatePresence mode="wait">
+                  {check.state === "checking" ? (
+                    <motion.div
+                      key="checking"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      className="flex items-center gap-2 text-[12px] text-vb-silver-dim"
+                    >
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Проверяю доступность…
+                    </motion.div>
+                  ) : geo?.country_code ? (
+                    <motion.div
+                      key="geo"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      className="flex items-center gap-2 text-[12px] text-vb-silver"
+                    >
+                      <CountryFlag code={geo.country_code} />
+                      {geo.country_name ?? geo.country_code}
+                      {geo.latency_ms != null && (
+                        <span className="tnum text-vb-silver-faint">
+                          · {geo.latency_ms} мс
+                        </span>
+                      )}
+                    </motion.div>
+                  ) : check.state === "done" ? (
+                    <motion.div
+                      key="nogeo"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      className="text-[12px] text-vb-silver-dim"
+                    >
+                      Быстрая проверка не прошла — не страшно: настоящая
+                      проверка будет на следующем шаге.
+                    </motion.div>
+                  ) : null}
+                </AnimatePresence>
+                {isRu && (
+                  <div className="mt-2 flex items-start gap-2 rounded-lg border border-vb-warn/30 bg-vb-warn/5 px-3 py-2 text-[12px] text-vb-warn">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                    Этот прокси в России. Claude его не примет — нужен зарубежный.
+                  </div>
+                )}
+              </div>
             </div>
-          )}
+          ) : parseError ? (
+            <p className="mt-2.5 text-[12px] text-vb-warn">{parseError}</p>
+          ) : (
+            <p className="mt-2.5 text-[12px] text-vb-loss">
+              Не получилось разобрать. Примеры:{" "}
+              <span className="font-mono">1.2.3.4:8000:login:pass</span>,{" "}
+              <span className="font-mono">login:pass@1.2.3.4:8000</span>
+            </p>
+          ))}
       </div>
 
-      <div className="mt-8 flex items-center justify-between">
-        <Button variant="ghost" onClick={onBack}>
-          Назад
-        </Button>
-        <Button onClick={onNext} disabled={!canNext}>
+      <div className="mt-8 flex items-center justify-end">
+        <Button onClick={() => parsed && onNext(parsed.url)} disabled={!parsed}>
           Дальше
         </Button>
       </div>
-    </div>
-  );
-}
-
-function Field({
-  k,
-  v,
-  accent,
-}: {
-  k: string;
-  v: string;
-  accent?: boolean;
-}) {
-  return (
-    <div className="flex justify-between gap-2">
-      <span className="text-vb-silver-dim">{k}</span>
-      <span
-        className={
-          accent ? "truncate text-vb-emerald/90" : "truncate text-vb-silver"
-        }
-      >
-        {v}
-      </span>
     </div>
   );
 }

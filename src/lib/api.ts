@@ -17,6 +17,7 @@ import type {
   ShimStatus,
   ShimTestResult,
   ShortcutTarget,
+  WizardInstallResult,
 } from "./types";
 
 export async function detectNode(): Promise<NodeInfo> {
@@ -55,6 +56,11 @@ export async function runInstall(params: {
   proxyUrl: string;
 }): Promise<void> {
   return invoke<void>("run_install", params);
+}
+
+/** Установка нового мастера одним вызовом (прогресс — событие "wizard:step"). */
+export async function wizardInstall(proxyUrl: string): Promise<WizardInstallResult> {
+  return invoke<WizardInstallResult>("wizard_install", { proxyUrl });
 }
 
 // ─── Shim control ────────────────────────────────────────────────

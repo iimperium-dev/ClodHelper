@@ -3,11 +3,9 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Titlebar } from "./components/Titlebar";
 import { Sidebar, NAV_ORDER } from "./components/Sidebar";
 import { WizardShell } from "./components/WizardShell";
-import { StepWelcome } from "./wizard/StepWelcome";
-import { StepMode } from "./wizard/StepMode";
 import { StepProxy } from "./wizard/StepProxy";
-import { StepDeps } from "./wizard/StepDeps";
 import { StepInstall } from "./wizard/StepInstall";
+import { StepDone } from "./wizard/StepDone";
 import { Overview } from "./pages/Overview";
 import { Proxies } from "./pages/Proxies";
 import { Apps } from "./pages/Apps";
@@ -15,15 +13,7 @@ import { Settings } from "./pages/Settings";
 import { TrayPopup } from "./pages/TrayPopup";
 import { StatusProvider } from "./lib/status";
 import { settingsGet, shimScriptPath, shimStatus } from "./lib/api";
-import type {
-  AppView,
-  InstallMode,
-  NodeInfo,
-  ProxyCheckResult,
-  ProxyConfig,
-  PythonInfo,
-  WizardStep,
-} from "./lib/types";
+import type { AppView, WizardInstallResult, WizardStep } from "./lib/types";
 
 /** Окно трей-попапа рендерит тот же bundle с ?view=tray. */
 const IS_TRAY = new URLSearchParams(window.location.search).get("view") === "tray";
@@ -84,14 +74,10 @@ function App() {
     setView(next);
   };
 
-  // ─── Wizard state (legacy) ───────────────────────────────────
-  const [step, setStep] = useState<WizardStep>("welcome");
-  const [mode, setMode] = useState<InstallMode | null>(null);
-  const [cursor, setCursor] = useState(false);
-  const [proxy, setProxy] = useState<ProxyConfig | null>(null);
-  const [proxyCheck, setProxyCheck] = useState<ProxyCheckResult | null>(null);
-  const [node, setNode] = useState<NodeInfo | null>(null);
-  const [python, setPython] = useState<PythonInfo | null>(null);
+  // ─── Wizard state: 3 шага (прокси → установка → готово) ──────
+  const [step, setStep] = useState<WizardStep>("proxy");
+  const [wizProxyUrl, setWizProxyUrl] = useState<string | null>(null);
+  const [wizResult, setWizResult] = useState<WizardInstallResult | null>(null);
 
   // ─── Трей-попап: отдельная вьюха в прозрачном окне ───────────
   if (IS_TRAY) {
@@ -102,70 +88,38 @@ function App() {
     );
   }
 
-  // ─── Wizard (первый запуск) ──────────────────────────────────
-  // StatusProvider и здесь: логотип в titlebar показывает живой статус.
+  // ─── Wizard (первый запуск): 3 шага, без легаси-режимов ──────
+  // StatusProvider и здесь: логотип в сайдбаре показывает живой статус.
   if (view === "wizard") {
     return (
       <StatusProvider>
         <div className="flex h-screen w-screen flex-col overflow-hidden">
           <Titlebar />
-        <div className="min-h-0 flex-1">
-          <WizardShell step={step}>
-            {step === "welcome" && <StepWelcome onNext={() => setStep("mode")} />}
-            {step === "mode" && (
-              <StepMode
-                value={mode}
-                cursor={cursor}
-                onChange={setMode}
-                onCursorChange={setCursor}
-                onBack={() => setStep("welcome")}
-                onNext={() => setStep("proxy")}
-              />
-            )}
-            {step === "proxy" && (
-              <StepProxy
-                proxy={proxy}
-                check={proxyCheck}
-                onChange={(p, c) => {
-                  setProxy(p);
-                  setProxyCheck(c);
-                }}
-                onBack={() => setStep("mode")}
-                onNext={() => setStep("deps")}
-              />
-            )}
-            {step === "deps" && (mode || cursor) && (
-              <StepDeps
-                mode={mode}
-                cursor={cursor}
-                node={node}
-                python={python}
-                onChange={(n, p) => {
-                  setNode(n);
-                  setPython(p);
-                }}
-                onBack={() => setStep("proxy")}
-                onNext={() => setStep("install")}
-              />
-            )}
-            {step === "install" && (mode || cursor) && proxy && (
-              <StepInstall
-                mode={mode}
-                cursor={cursor}
-                proxyUrl={proxy.url}
-                onBack={() => setStep("deps")}
-                onDone={() => setView("overview")}
-                onRestartWithCode={
-                  mode === "desktop"
-                    ? () => {
-                        setMode("code");
-                        setStep("mode");
-                      }
-                    : undefined
-                }
-              />
-            )}
-          </WizardShell>
+          <div className="min-h-0 flex-1">
+            <WizardShell step={step}>
+              {step === "proxy" && (
+                <StepProxy
+                  initialUrl={wizProxyUrl}
+                  onNext={(url) => {
+                    setWizProxyUrl(url);
+                    setStep("install");
+                  }}
+                />
+              )}
+              {step === "install" && wizProxyUrl && (
+                <StepInstall
+                  proxyUrl={wizProxyUrl}
+                  onBack={() => setStep("proxy")}
+                  onDone={(r) => {
+                    setWizResult(r);
+                    setStep("done");
+                  }}
+                />
+              )}
+              {step === "done" && wizResult && (
+                <StepDone result={wizResult} onFinish={() => setView("overview")} />
+              )}
+            </WizardShell>
           </div>
         </div>
       </StatusProvider>

@@ -45,26 +45,14 @@ export interface ProxyCheckResult {
   isp?: string;
 }
 
-export interface WizardState {
-  step: WizardStep;
-  mode: InstallMode | null;
-  cursor: boolean;
-  proxy: ProxyConfig | null;
-  proxy_check: ProxyCheckResult | null;
-  node: NodeInfo | null;
-  python: PythonInfo | null;
-  install_log: string[];
-  install_done: boolean;
-  install_error: string | null;
-}
+/** Новый мастер: 3 шага (прокси → установка → готово). */
+export type WizardStep = "proxy" | "install" | "done";
 
-export type WizardStep =
-  | "welcome"
-  | "mode"
-  | "proxy"
-  | "deps"
-  | "install"
-  | "done";
+/** Результат wizard_install: честная проверка + состояние env. */
+export interface WizardInstallResult {
+  test: ShimTestResult;
+  env_on: boolean;
+}
 
 // ─── Dashboard / Shim ────────────────────────────────────────────
 
