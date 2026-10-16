@@ -80,6 +80,42 @@ pub struct AppProfileStatus {
 
 /// Встроенные пресеты. Пути/AppID НЕ хардкодим намертво — при первом запросе
 /// пробуем найти на диске; в settings храним то что нашли (или None).
+#[cfg(not(target_os = "windows"))]
+pub fn builtin_presets() -> Vec<AppProfile> {
+    // macOS: все профили — обычные .app (exe_path = путь к бандлу), запуск
+    // через `open -a … --args --proxy-server`. process_names — для единообразия
+    // UI: killswitch на macOS недоступен.
+    vec![
+        crate::claude_desktop::preset(),
+        AppProfile {
+            id: "vscode".into(),
+            name: "VS Code".into(),
+            kind: LaunchKind::ExeFlag,
+            exe_path: find_vscode_exe().map(|p| p.to_string_lossy().to_string()),
+            app_id: None,
+            process_names: vec!["Code".into(), "node".into(), "git".into()],
+            enabled: false,
+            builtin: true,
+        },
+        AppProfile {
+            id: "codex".into(),
+            name: "ChatGPT Codex".into(),
+            kind: LaunchKind::ExeFlag,
+            exe_path: find_codex_app().map(|p| p.to_string_lossy().to_string()),
+            app_id: None,
+            process_names: vec!["Codex".into(), "codex".into(), "node".into()],
+            enabled: false,
+            builtin: true,
+        },
+    ]
+}
+
+#[cfg(not(target_os = "windows"))]
+fn find_codex_app() -> Option<PathBuf> {
+    crate::macos::find_app(&["Codex.app"])
+}
+
+#[cfg(target_os = "windows")]
 pub fn builtin_presets() -> Vec<AppProfile> {
     vec![
         crate::claude_desktop::preset(),
@@ -125,6 +161,12 @@ pub fn builtin_presets() -> Vec<AppProfile> {
 
 // ─── Детект приложений ───────────────────────────────────────────
 
+#[cfg(not(target_os = "windows"))]
+pub fn find_vscode_exe() -> Option<PathBuf> {
+    crate::macos::find_app(&["Visual Studio Code.app"])
+}
+
+#[cfg(target_os = "windows")]
 pub fn find_vscode_exe() -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Ok(local) = std::env::var("LOCALAPPDATA") {
@@ -165,6 +207,12 @@ pub fn find_codex_app_id() -> Option<String> {
     result
 }
 
+#[cfg(not(target_os = "windows"))]
+fn find_codex_app_id_uncached() -> Option<String> {
+    None
+}
+
+#[cfg(target_os = "windows")]
 fn find_codex_app_id_uncached() -> Option<String> {
     // Известный PackageFamilyName Codex стабилен между версиями (меняется только
     // версия в PackageFullName). Проверяем что пакет установлен через Get-AppxPackage.
@@ -200,12 +248,11 @@ fn profile_installed(p: &AppProfile) -> (bool, Option<String>) {
                 .exe_path
                 .clone()
                 .filter(|s| PathBuf::from(s).exists())
-                .or_else(|| {
-                    if p.id == "vscode" {
-                        find_vscode_exe().map(|x| x.to_string_lossy().to_string())
-                    } else {
-                        None
-                    }
+                .or_else(|| match p.id.as_str() {
+                    "vscode" => find_vscode_exe().map(|x| x.to_string_lossy().to_string()),
+                    #[cfg(not(target_os = "windows"))]
+                    "codex" => find_codex_app().map(|x| x.to_string_lossy().to_string()),
+                    _ => None,
                 });
             (path.is_some(), path)
         }
@@ -236,8 +283,14 @@ pub fn desktop_dir() -> Option<PathBuf> {
     })
 }
 
+/// Расширение ярлыка: `.lnk` на Windows, `.app`-обёртка на macOS.
+#[cfg(target_os = "windows")]
+pub const SHORTCUT_EXT: &str = "lnk";
+#[cfg(not(target_os = "windows"))]
+pub const SHORTCUT_EXT: &str = "app";
+
 fn desktop_shortcut_path(name: &str) -> Option<PathBuf> {
-    Some(desktop_dir()?.join(format!("{name} (proxy).lnk")))
+    Some(desktop_dir()?.join(format!("{name} (proxy).{SHORTCUT_EXT}")))
 }
 
 /// Собрать статус всех профилей для UI.
@@ -300,6 +353,15 @@ fn launch_exe(p: &AppProfile) -> Result<(), String> {
     // Терминал VS Code (и Claude Code в нём) покрывается глобальными User
     // env-переменными (env_proxy.rs) — правка settings.json больше не нужна.
 
+    // macOS: бандл запускаем через LaunchServices. Env через `open` не
+    // передаётся — его дают глобальные переменные (launchctl setenv).
+    #[cfg(not(target_os = "windows"))]
+    {
+        if exe.trim_end_matches('/').ends_with(".app") {
+            return open_app(&exe, &proxy, &p.name);
+        }
+    }
+
     let mut cmd = Command::new(&exe);
     cmd.arg(format!("--proxy-server={proxy}"));
     // env для дочерних процессов (терминал → Claude Code → bash/node/git).
@@ -313,6 +375,25 @@ fn launch_exe(p: &AppProfile) -> Result<(), String> {
     cmd.spawn()
         .map_err(|e| format!("Не удалось запустить {}: {e}", p.name))?;
     Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn open_app(app: &str, proxy: &str, name: &str) -> Result<(), String> {
+    let out = Command::new("/usr/bin/open")
+        .arg("-a")
+        .arg(app)
+        .arg("--args")
+        .arg(format!("--proxy-server={proxy}"))
+        .output()
+        .map_err(|e| format!("Не удалось запустить {name}: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Не удалось запустить {name}: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))
+    }
 }
 
 fn launch_msix(p: &AppProfile) -> Result<(), String> {
@@ -435,6 +516,51 @@ pub enum ShortcutTarget {
 ///
 /// Реализовано через PowerShell (WScript.Shell.CreateShortcut) — нативно, без
 /// сторонних зависимостей. Возвращает путь к созданному ярлыку.
+///
+/// macOS: `.app`-обёртка (см. macos::create_app_wrapper) на рабочем столе или
+/// в `~/Applications` («Программы» — оттуда её можно перетащить в Dock).
+#[cfg(not(target_os = "windows"))]
+pub fn create_shortcut(
+    p: &AppProfile,
+    target: ShortcutTarget,
+) -> Result<String, String> {
+    use crate::macos::{self, sh_quote};
+
+    let (installed, location) = profile_installed(p);
+    if !installed {
+        return Err(format!("{} не найден — сначала установите приложение", p.name));
+    }
+    let app = location.ok_or_else(|| "Нет пути к приложению".to_string())?;
+    let body = if p.id == crate::claude_desktop::PROFILE_ID {
+        // Лаунчер сам проверит мост/политику и покажет причину отказа.
+        let launcher = crate::claude_desktop::install_launcher()?;
+        format!(
+            "exec /bin/sh {} --show-error",
+            sh_quote(&launcher.to_string_lossy())
+        )
+    } else {
+        format!(
+            "exec /usr/bin/open -a {} --args {}",
+            sh_quote(&app),
+            sh_quote(&format!("--proxy-server={}", local_proxy_url()))
+        )
+    };
+    let dir = match target {
+        ShortcutTarget::Desktop => desktop_dir(),
+        ShortcutTarget::StartMenu => dirs::home_dir().map(|h| h.join("Applications")),
+    }
+    .ok_or_else(|| "Не нашёл папку для ярлыка".to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+    let name = format!("{} (proxy)", p.name);
+    let dest = dir.join(format!("{name}.{SHORTCUT_EXT}"));
+    macos::create_app_wrapper(&dest, &name, &body, Some(std::path::Path::new(&app)))?;
+    if matches!(target, ShortcutTarget::StartMenu) {
+        macos::reveal_in_finder(&dest);
+    }
+    Ok(dest.to_string_lossy().to_string())
+}
+
+#[cfg(target_os = "windows")]
 pub fn create_shortcut(
     p: &AppProfile,
     target: ShortcutTarget,
@@ -489,6 +615,7 @@ pub fn create_shortcut(
     Ok(out)
 }
 
+#[cfg(target_os = "windows")]
 fn run_create_shortcut_ps(
     name: &str,
     target_path: &str,
@@ -575,6 +702,10 @@ fn run_create_shortcut_ps(
 ///
 /// Возвращает уникальный список существующих путей.
 pub fn resolve_process_paths(enabled_profiles: &[AppProfile]) -> Vec<String> {
+    // macOS: killswitch недоступен (firewall_stub.rs) — путей не ищем.
+    if cfg!(not(target_os = "windows")) {
+        return Vec::new();
+    }
     let mut paths: Vec<String> = Vec::new();
     let mut push = |p: String| {
         if !p.is_empty() && !paths.contains(&p) && PathBuf::from(&p).exists() {

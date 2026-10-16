@@ -44,3 +44,8 @@ __pycache__/
 
 # Bridge exe (reproducible: npm run bridge:build из bridge/ Rust-крейта)
 src-tauri/resources/clod-bridge.exe
+
+# macOS-бинарник моста (собирается: npm run bridge:build:mac) и
+# проверочная сборка под macOS с Windows
+src-tauri/resources/clod-bridge
+src-tauri/target-macos-check

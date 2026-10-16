@@ -5,8 +5,9 @@
 //! метаданные издателя и asInvoker-манифест заметно снижают скоринг.
 
 fn main() {
-    #[cfg(target_os = "windows")]
-    {
+    // Целевая ОС, а не ОС сборки: #[cfg] в build.rs смотрит на хост.
+    // Для macOS ресурсы не нужны (метаданные несёт Info.plist бандла).
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let mut res = winresource::WindowsResource::new();
         res.set(
             "FileDescription",

@@ -14,7 +14,11 @@ use crate::apps::{AppProfile, LaunchKind};
 
 pub const PROFILE_ID: &str = "claude-desktop";
 pub const PROXY_PORT: u16 = 8890;
+#[cfg(target_os = "windows")]
 const LAUNCHER: &str = include_str!("../resources/claude-desktop-launch.ps1");
+/// macOS: exe_path — путь к бандлу `Claude.app`.
+#[cfg(not(target_os = "windows"))]
+const LAUNCHER: &str = include_str!("../resources/claude-desktop-launch.sh");
 static INSTALL_CACHE: Mutex<Option<(Instant, Option<Installation>)>> = Mutex::new(None);
 
 #[derive(Debug, Clone, Deserialize)]
@@ -24,6 +28,53 @@ pub struct Installation {
     pub kind: LaunchKind,
 }
 
+#[cfg(target_os = "windows")]
+const DETECT_ARGS: &str = "-DetectOnly";
+#[cfg(not(target_os = "windows"))]
+const DETECT_ARGS: &str = "--detect-only";
+
+#[cfg(target_os = "windows")]
+fn launch_args() -> String {
+    format!("-Port {PROXY_PORT}")
+}
+/// Порт зашит в sh-лаунчер (8890), как и в его проверке /healthz.
+#[cfg(not(target_os = "windows"))]
+fn launch_args() -> String {
+    String::new()
+}
+
+/// macOS: тот же лаунчер, что у ярлыка, — через stdin, без временных файлов.
+#[cfg(not(target_os = "windows"))]
+fn run_script(arguments: &str) -> Result<String, String> {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut child = Command::new("/bin/sh")
+        .arg("-s")
+        .arg("--")
+        .args(arguments.split_whitespace())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Не удалось запустить Claude Desktop: {e}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(LAUNCHER.as_bytes());
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("Не удалось запустить Claude Desktop: {e}"))?;
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if error.is_empty() {
+            "Не удалось запустить Claude Desktop через прокси".into()
+        } else {
+            error
+        });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+#[cfg(target_os = "windows")]
 fn run_script(arguments: &str) -> Result<String, String> {
     let mut cmd = Command::new("powershell.exe");
     cmd.args([
@@ -60,7 +111,7 @@ fn run_script(arguments: &str) -> Result<String, String> {
 }
 
 pub fn detect_fresh() -> Result<Option<Installation>, String> {
-    let json = run_script("-DetectOnly")?;
+    let json = run_script(DETECT_ARGS)?;
     serde_json::from_str(&json)
         .map_err(|e| format!("Не удалось определить установку Claude Desktop: {e}"))
 }
@@ -71,7 +122,7 @@ pub fn detect() -> Option<Installation> {
         if time.elapsed() < Duration::from_secs(60)
             && installation
                 .as_ref()
-                .map_or(true, |i| PathBuf::from(&i.exe_path).is_file())
+                .map_or(true, |i| PathBuf::from(&i.exe_path).exists())
         {
             return installation.clone();
         }
@@ -89,10 +140,14 @@ pub fn preset() -> AppProfile {
         kind: installation
             .as_ref()
             .map(|i| i.kind.clone())
-            .unwrap_or(LaunchKind::Msix),
+            .unwrap_or(if cfg!(target_os = "windows") {
+                LaunchKind::Msix
+            } else {
+                LaunchKind::ExeFlag
+            }),
         exe_path: installation.as_ref().map(|i| i.exe_path.clone()),
         app_id: installation.and_then(|i| i.app_id),
-        process_names: vec!["Claude.exe".into()],
+        process_names: vec![if cfg!(target_os = "windows") { "Claude.exe" } else { "Claude" }.into()],
         enabled: false,
         builtin: true,
     }
@@ -101,7 +156,7 @@ pub fn preset() -> AppProfile {
 pub fn launch() -> Result<(), String> {
     // The launcher checks the bridge and rejects existing Desktop processes:
     // Electron's single-instance handoff would otherwise ignore the proxy flag.
-    run_script(&format!("-Port {PROXY_PORT}")).map(|_| ())
+    run_script(&launch_args()).map(|_| ())
 }
 
 /// Install a stable launcher outside WindowsApps. A .lnk never pins a Store
@@ -112,10 +167,17 @@ pub fn install_launcher() -> Result<PathBuf, String> {
         .join("ClaudeDesktopProxy");
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("Не удалось создать папку запуска Claude: {e}"))?;
-    let path = dir.join("claude-desktop-launch.ps1");
-    // Windows PowerShell 5.1 needs a BOM to read Russian messages correctly.
-    let text = format!("\u{feff}{}", LAUNCHER.trim_start_matches('\u{feff}'));
+    #[cfg(target_os = "windows")]
+    let (path, text) = (
+        dir.join("claude-desktop-launch.ps1"),
+        // Windows PowerShell 5.1 needs a BOM to read Russian messages correctly.
+        format!("\u{feff}{}", LAUNCHER.trim_start_matches('\u{feff}')),
+    );
+    #[cfg(not(target_os = "windows"))]
+    let (path, text) = (dir.join("claude-desktop-launch.sh"), LAUNCHER.to_string());
     std::fs::write(&path, text).map_err(|e| format!("Не удалось сохранить запуск Claude: {e}"))?;
+    #[cfg(not(target_os = "windows"))]
+    crate::macos::set_mode(&path, 0o755);
     Ok(path)
 }
 

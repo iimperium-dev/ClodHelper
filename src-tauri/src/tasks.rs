@@ -20,15 +20,23 @@
 //!
 //! Регистрация НЕ требует админа: задача в пользовательской папке, LogonType
 //! Interactive, RunLevel Limited (проверено вживую на Win11).
+//!
+//! macOS: вместо задачи — LaunchAgent `ru.iimperium.clodbridge` в
+//! `~/Library/LaunchAgents` с KeepAlive (модуль `launchd` ниже). launchd сам
+//! перезапускает упавший мост, поэтому `--supervise` там не используется.
 
 use std::path::PathBuf;
 
 use serde::Serialize;
 
-use crate::shim::{self, LISTEN_PORT};
+use crate::shim;
+#[cfg(target_os = "windows")]
+use crate::shim::LISTEN_PORT;
 
+#[cfg(target_os = "windows")]
 pub const TASK_NAME: &str = "ClodBridge";
 /// Runner-vbs в папке установки моста (%LOCALAPPDATA%\ClaudeDesktopProxy).
+#[cfg(target_os = "windows")]
 const RUNNER_VBS: &str = "clod-bridge-task.vbs";
 /// Правила маршрутизации моста (mode smart/all) — читает clod-bridge при старте.
 const RULES_FILE: &str = "bridge-rules.json";
@@ -41,6 +49,7 @@ pub struct BridgeTaskStatus {
     pub state: Option<String>,
 }
 
+#[cfg(target_os = "windows")]
 fn runner_vbs_path() -> Option<PathBuf> {
     shim::install_dir().map(|d| d.join(RUNNER_VBS))
 }
@@ -117,6 +126,22 @@ pub fn is_registered() -> bool {
     status().registered
 }
 
+/// Все прокси пула → повторяемые `--upstream`. ПОРЯДОК СВЯЩЕНЕН: индексы
+/// assignments в rules-файле считаются по этому же списку — перестановка
+/// без пересчёта rules увела бы закреплённый сервис на другой прокси
+/// (другой выходной IP). Поэтому пул берём как есть из настроек;
+/// proxy_url — только fallback для пустого пула (легаси-установка).
+fn upstream_pool(proxy_url: &str) -> Vec<String> {
+    let s = crate::settings::load();
+    let list = crate::settings::effective_proxies(&s);
+    if list.is_empty() {
+        vec![proxy_url.to_string()]
+    } else {
+        list
+    }
+}
+
+#[cfg(target_os = "windows")]
 pub fn status() -> BridgeTaskStatus {
     let script = format!(
         "$t = Get-ScheduledTask -TaskName '{TASK_NAME}' -ErrorAction SilentlyContinue; \
@@ -165,6 +190,7 @@ static EXE_PROBE_CACHE: std::sync::Mutex<Option<(std::time::SystemTime, bool)>> 
 /// падает на неизвестном аргументе. Если да — задача Планировщика вешается
 /// ПРЯМО на exe (без VBS/wscript: малварь-паттерн для антивирусов, WSH
 /// отключаем политиками, VBScript депрекейтнут в Win11 24H2+).
+#[cfg(target_os = "windows")]
 fn bridge_supports_supervise(exe: &std::path::Path) -> bool {
     let mut cmd = std::process::Command::new(exe);
     cmd.args(["--supervise", "--version"]);
@@ -206,6 +232,7 @@ pub fn bridge_exe_is_legacy() -> bool {
 /// Пишет runner-vbs с актуальным upstream-URL, регистрирует задачу и — только
 /// ПОСЛЕ успешной регистрации — удаляет легаси .vbs из Startup (порядок важен:
 /// если регистрация упала, старый автозапуск остаётся рабочим fallback'ом).
+#[cfg(target_os = "windows")]
 pub fn register(proxy_url: &str) -> Result<(), String> {
     let exe = shim::bridge_exe_path()
         .ok_or_else(|| "Не нашёл папку ClaudeDesktopProxy".to_string())?;
@@ -218,20 +245,7 @@ pub fn register(proxy_url: &str) -> Result<(), String> {
     let vbs_path = runner_vbs_path()
         .ok_or_else(|| "Не нашёл папку ClaudeDesktopProxy".to_string())?;
 
-    // Все прокси пула → повторяемые --upstream. ПОРЯДОК СВЯЩЕНЕН: индексы
-    // assignments в rules-файле считаются по этому же списку — перестановка
-    // здесь без пересчёта rules увела бы закреплённый сервис на другой прокси
-    // (другой выходной IP). Поэтому пул берём как есть из настроек;
-    // proxy_url — только fallback для пустого пула (легаси-установка).
-    let pool = {
-        let s = crate::settings::load();
-        let list = crate::settings::effective_proxies(&s);
-        if list.is_empty() {
-            vec![proxy_url.to_string()]
-        } else {
-            list
-        }
-    };
+    let pool = upstream_pool(proxy_url);
 
     let supports_rules = bridge_supports_rules(&exe);
     let supports_supervise = supports_rules && bridge_supports_supervise(&exe);
@@ -339,6 +353,7 @@ pub fn register(proxy_url: &str) -> Result<(), String> {
 }
 
 /// Запустить задачу (мост поднимется скрыто через runner-vbs).
+#[cfg(target_os = "windows")]
 pub fn start() -> Result<(), String> {
     let script = format!(
         "Start-ScheduledTask -TaskName '{TASK_NAME}'; Write-Output 'TASK_STARTED'"
@@ -357,6 +372,7 @@ pub fn start() -> Result<(), String> {
 /// в UI не работало бы. Stop-ScheduledTask убивает супервизор (wscript) —
 /// после этого мост можно гасить спокойно. Ошибки глотаем (задачи может
 /// не быть на легаси-установке).
+#[cfg(target_os = "windows")]
 pub fn stop_ignore_errors() {
     let _ = run_ps(&format!(
         "Stop-ScheduledTask -TaskName '{TASK_NAME}' -ErrorAction SilentlyContinue; \
@@ -367,6 +383,7 @@ pub fn stop_ignore_errors() {
 /// Миграция старой установки: есть легаси .vbs в Startup, задачи ещё нет,
 /// upstream известен из settings → регистрируем задачу (она удалит .vbs).
 /// Вызывается фоново при старте приложения; все ошибки — в лог, не наружу.
+#[cfg(target_os = "windows")]
 pub fn migrate_from_startup_vbs() {
     let legacy_exists = shim::startup_vbs_path().map(|p| p.exists()).unwrap_or(false);
     if !legacy_exists || is_registered() {
@@ -381,6 +398,7 @@ pub fn migrate_from_startup_vbs() {
     }
 }
 
+#[cfg(target_os = "windows")]
 fn run_ps(script: &str) -> Option<String> {
     use std::process::Command;
     // UTF-8-прелюдия обязательна: PowerShell 5.1 пишет в пайп OEM-кодировкой
@@ -407,4 +425,104 @@ fn run_ps(script: &str) -> Option<String> {
     }
     let out = cmd.output().ok()?;
     Some(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub use launchd::{migrate_from_startup_vbs, register, start, status, stop_ignore_errors};
+
+/// Автозапуск моста на macOS: LaunchAgent с KeepAlive.
+#[cfg(not(target_os = "windows"))]
+mod launchd {
+    use std::path::PathBuf;
+
+    use super::{bridge_supports_rules, upstream_pool, write_rules_file, BridgeTaskStatus};
+    use crate::macos;
+    use crate::shim::{self, LISTEN_PORT};
+
+    pub const LABEL: &str = "ru.iimperium.clodbridge";
+
+    fn plist_path() -> Option<PathBuf> {
+        macos::launch_agents_dir().map(|d| d.join(format!("{LABEL}.plist")))
+    }
+
+    pub fn status() -> BridgeTaskStatus {
+        let registered = plist_path().is_some_and(|p| p.exists());
+        BridgeTaskStatus {
+            registered,
+            state: registered
+                .then(|| macos::agent_state(LABEL).unwrap_or_else(|| "NotLoaded".into())),
+        }
+    }
+
+    /// Записать plist агента с актуальным пулом и правилами. launchd читает
+    /// plist только при bootstrap, поэтому загруженный агент выгружаем —
+    /// вызывающие сразу делают shim::start/restart (как с задачей на Windows).
+    pub fn register(proxy_url: &str) -> Result<(), String> {
+        let exe = shim::bridge_exe_path()
+            .ok_or_else(|| "Не нашёл папку ClaudeDesktopProxy".to_string())?;
+        if !exe.exists() {
+            return Err(format!(
+                "Не найден {}. Запустите установщик заново.",
+                exe.display()
+            ));
+        }
+        if !bridge_supports_rules(&exe) {
+            return Err(format!(
+                "Мост {} не запускается. Переустановите Clod Helper.",
+                exe.display()
+            ));
+        }
+        let rules_path = write_rules_file()?;
+        let mut args: Vec<String> = vec![
+            exe.to_string_lossy().to_string(),
+            "--listen".into(),
+            format!("127.0.0.1:{LISTEN_PORT}"),
+        ];
+        for u in upstream_pool(proxy_url) {
+            args.push("--upstream".into());
+            args.push(u);
+        }
+        args.push("--rules".into());
+        args.push(rules_path.to_string_lossy().to_string());
+        args.push("--quiet".into());
+
+        let plist = plist_path().ok_or_else(|| "Не нашёл домашнюю папку".to_string())?;
+        let log = shim::install_dir().map(|d| d.join("bridge.log"));
+        macos::write_agent_plist(
+            &plist,
+            &macos::Agent {
+                label: LABEL,
+                program_arguments: &args,
+                keep_alive: true,
+                stderr_log: log.as_deref(),
+            },
+        )?;
+        macos::bootout(LABEL);
+        Ok(())
+    }
+
+    pub fn start() -> Result<(), String> {
+        let plist = plist_path().ok_or_else(|| "Не нашёл домашнюю папку".to_string())?;
+        if !plist.exists() {
+            return Err("Автозапуск моста не настроен".into());
+        }
+        if macos::agent_loaded(LABEL) {
+            let target = format!("{}/{LABEL}", macos::gui_domain());
+            let (ok, out) = macos::launchctl(&["kickstart", &target]);
+            return if ok {
+                Ok(())
+            } else {
+                Err(format!("launchctl kickstart: {}", out.trim()))
+            };
+        }
+        macos::bootstrap(LABEL, &plist)
+    }
+
+    /// Выгрузить агент — иначе KeepAlive поднял бы убитый мост через 5 секунд.
+    pub fn stop_ignore_errors() {
+        macos::bootout(LABEL);
+    }
+
+    /// На macOS легаси-автозапуска (.vbs) не было — мигрировать нечего.
+    pub fn migrate_from_startup_vbs() {}
 }

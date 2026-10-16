@@ -1,16 +1,21 @@
 //! Claude's native fixed proxy policy. This routes cooperating clients; it is
 //! not a network boundary or a claim that all Claude traffic is protected.
 
+use std::process::Command;
+#[cfg(target_os = "windows")]
 use std::{
     path::{Path, PathBuf},
-    process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Serialize};
 
 pub const PROXY_URL: &str = "http://127.0.0.1:8890";
+#[cfg(target_os = "windows")]
 const POLICY_SCRIPT: &str = include_str!("../resources/claude-proxy-policy.ps1");
+/// macOS: `/Library/Managed Preferences/com.anthropic.claudefordesktop.plist`.
+#[cfg(not(target_os = "windows"))]
+const POLICY_SCRIPT: &str = include_str!("../resources/claude-proxy-policy.sh");
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ClaudePolicyStatus {
@@ -33,6 +38,7 @@ struct PolicyResult {
 }
 
 /// Reads the 64-bit machine policy and ownership record, without elevation.
+#[cfg(target_os = "windows")]
 pub fn status() -> Result<ClaudePolicyStatus, String> {
     let mut command = powershell();
     command.arg("-Command").arg(format!(
@@ -80,24 +86,9 @@ pub fn disable() -> Result<ClaudePolicyStatus, String> {
 }
 
 fn mutate(action: &str) -> Result<ClaudePolicyStatus, String> {
-    let files = OperationFiles::create()?;
-    // Windows PowerShell 5.1 reads UTF-8 script files reliably with a BOM.
-    std::fs::write(
-        &files.script,
-        format!("\u{feff}{}", POLICY_SCRIPT.trim_start_matches('\u{feff}')),
-    )
-    .map_err(|e| format!("Не удалось подготовить политику Claude: {e}"))?;
-    let wrapper = elevation_wrapper(action, &files.script, &files.result);
-    let output = powershell()
-        .arg("-Command")
-        .arg(wrapper)
-        .output()
-        .map_err(|e| format!("Не удалось запросить права администратора: {e}"))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let result = std::fs::read_to_string(&files.result).ok();
-    let applied = parse_elevated_result(output.status.success(), &stdout, result.as_deref())?;
-    // Do not trust just an elevated process exit or its result file. Re-read
-    // actual HKLM state before reporting success to the UI.
+    let applied = elevate(action)?;
+    // Do not trust just an elevated process exit or its result. Re-read the
+    // actual policy state (HKLM / Managed Preferences) before reporting success.
     let mut observed = status()?;
     if action == "Enable"
         && (!observed.configured
@@ -114,6 +105,80 @@ fn mutate(action: &str) -> Result<ClaudePolicyStatus, String> {
     Ok(observed)
 }
 
+/// Run the policy operation with administrator rights (one UAC prompt).
+#[cfg(target_os = "windows")]
+fn elevate(action: &str) -> Result<ClaudePolicyStatus, String> {
+    let files = OperationFiles::create()?;
+    // Windows PowerShell 5.1 reads UTF-8 script files reliably with a BOM.
+    std::fs::write(
+        &files.script,
+        format!("\u{feff}{}", POLICY_SCRIPT.trim_start_matches('\u{feff}')),
+    )
+    .map_err(|e| format!("Не удалось подготовить политику Claude: {e}"))?;
+    let wrapper = elevation_wrapper(action, &files.script, &files.result);
+    let output = powershell()
+        .arg("-Command")
+        .arg(wrapper)
+        .output()
+        .map_err(|e| format!("Не удалось запросить права администратора: {e}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let result = std::fs::read_to_string(&files.result).ok();
+    parse_elevated_result(output.status.success(), &stdout, result.as_deref())
+}
+
+/// macOS: the shell script reads Managed Preferences without elevation.
+#[cfg(not(target_os = "windows"))]
+pub fn status() -> Result<ClaudePolicyStatus, String> {
+    use std::io::Write;
+    let mut child = Command::new("/bin/sh")
+        .args(["-s", "--", "Status"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Не удалось прочитать политику Claude: {e}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(POLICY_SCRIPT.as_bytes());
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("Не удалось прочитать политику Claude: {e}"))?;
+    parse_result(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// macOS: one system password prompt via `do shell script … with
+/// administrator privileges`. The script travels as base64 inside the command
+/// (no root-executed file a user process could swap) and always exits 0, so
+/// its JSON reaches stdout even on failure — osascript drops stdout of a
+/// failing command.
+#[cfg(not(target_os = "windows"))]
+fn elevate(action: &str) -> Result<ClaudePolicyStatus, String> {
+    use base64::Engine;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(POLICY_SCRIPT);
+    let shell = format!(
+        "/bin/echo {encoded} | /usr/bin/base64 -D | /bin/sh -s -- {action}; exit 0"
+    );
+    let apple = format!(
+        "do shell script \"{shell}\" with prompt \"Clod Helper настраивает прокси для Claude Desktop.\" with administrator privileges"
+    );
+    let output = Command::new("/usr/bin/osascript")
+        .args(["-e", &apple])
+        .output()
+        .map_err(|e| format!("Не удалось запросить права администратора: {e}"))?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.contains("-128") {
+        return Err("Запрос прав администратора для политики Claude отменён".into());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if !output.status.success() || stdout.trim().is_empty() {
+        return Err(format!(
+            "Не удалось выполнить изменение политики Claude с правами администратора: {}",
+            stderr.trim()
+        ));
+    }
+    parse_result(&stdout)
+}
+
 fn parse_result(payload: &str) -> Result<ClaudePolicyStatus, String> {
     let result: PolicyResult = serde_json::from_str(payload.trim().trim_start_matches('\u{feff}'))
         .map_err(|e| format!("Некорректный ответ проверки политики Claude: {e}"))?;
@@ -128,6 +193,7 @@ fn parse_result(payload: &str) -> Result<ClaudePolicyStatus, String> {
         .ok_or_else(|| "Проверка политики Claude не вернула состояние".into())
 }
 
+#[cfg(target_os = "windows")]
 fn parse_elevated_result(
     successful_exit: bool,
     stdout: &str,
@@ -153,6 +219,7 @@ fn parse_elevated_result(
     })
 }
 
+#[cfg(target_os = "windows")]
 fn elevation_wrapper(action: &str, script: &Path, result: &Path) -> String {
     // Windows paths cannot contain a quote. Quote paths inside the command line
     // and escape apostrophes for the surrounding PowerShell literal.
@@ -182,6 +249,7 @@ fn elevation_wrapper(action: &str, script: &Path, result: &Path) -> String {
     )
 }
 
+#[cfg(target_os = "windows")]
 fn powershell() -> Command {
     let executable = std::env::var_os("SystemRoot")
         .map(PathBuf::from)
@@ -202,12 +270,14 @@ fn powershell() -> Command {
     command
 }
 
+#[cfg(target_os = "windows")]
 struct OperationFiles {
     directory: PathBuf,
     script: PathBuf,
     result: PathBuf,
 }
 
+#[cfg(target_os = "windows")]
 impl OperationFiles {
     fn create() -> Result<Self, String> {
         let parent = dirs::config_dir()
@@ -231,6 +301,7 @@ impl OperationFiles {
     }
 }
 
+#[cfg(target_os = "windows")]
 impl Drop for OperationFiles {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.script);
@@ -259,6 +330,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "windows")]
     fn elevation_denial_missing_result_and_failed_exit_never_report_success() {
         assert!(
             parse_elevated_result(false, "CLOD_POLICY_UAC_CANCELLED\r\n", None)
@@ -276,6 +348,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "windows")]
     fn uac_wrapper_quotes_paths_and_hides_child_window() {
         let wrapper = elevation_wrapper(
             "Enable",

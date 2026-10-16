@@ -78,6 +78,31 @@ pub async fn claude_proxy_disable() -> Result<crate::claude_proxy::ClaudeProxySt
     Ok(status)
 }
 
+/// macOS: новое окно Терминала с `claude`. Терминал запускается через
+/// LaunchServices и получает глобальные прокси-переменные (launchctl setenv).
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+pub fn launch_claude_code() -> Result<(), String> {
+    let out = Command::new("/usr/bin/osascript")
+        .args([
+            "-e",
+            "tell application \"Terminal\" to do script \"claude\"",
+            "-e",
+            "tell application \"Terminal\" to activate",
+        ])
+        .output()
+        .map_err(|e| format!("Не удалось открыть Терминал: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Не удалось открыть Терминал: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))
+    }
+}
+
+#[cfg(target_os = "windows")]
 #[tauri::command]
 pub fn launch_claude_code() -> Result<(), String> {
     // Open a new Windows Terminal (preferred) or PowerShell window with
@@ -106,6 +131,20 @@ pub fn launch_claude_code() -> Result<(), String> {
     Ok(())
 }
 
+/// macOS: прямой запуск бандла с флагом (ярлык-обёртка несёт тот же флаг).
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+pub fn launch_cursor() -> Result<(), String> {
+    let app = system::find_cursor_exe()
+        .ok_or_else(|| "Cursor не найден на этом Mac".to_string())?;
+    apps::open_app(
+        &app.to_string_lossy(),
+        &format!("http://127.0.0.1:{}", shim::LISTEN_PORT),
+        "Cursor",
+    )
+}
+
+#[cfg(target_os = "windows")]
 #[tauri::command]
 pub fn launch_cursor() -> Result<(), String> {
     // Предпочитаем ярлык «Cursor (proxy)» — он несёт --proxy-server. Если его
@@ -117,7 +156,6 @@ pub fn launch_cursor() -> Result<(), String> {
     if shortcut.exists() {
         let mut cmd = Command::new("cmd");
         cmd.args(["/c", "start", "", shortcut.to_str().unwrap_or("")]);
-        #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
             const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -132,7 +170,6 @@ pub fn launch_cursor() -> Result<(), String> {
     let exe = system::find_cursor_exe()
         .ok_or_else(|| "Cursor не найден на этом ПК".to_string())?;
     let mut cmd = Command::new(&exe);
-    #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -151,6 +188,49 @@ pub struct CursorSetupResult {
     pub message: String,
 }
 
+/// macOS: ярлык «Cursor (proxy).app» на рабочем столе.
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+pub async fn setup_cursor() -> Result<CursorSetupResult, String> {
+    tokio::task::spawn_blocking(|| {
+        let Some(app) = system::find_cursor_exe() else {
+            return CursorSetupResult {
+                ok: false,
+                found: false,
+                message: "Cursor не найден на этом Mac. Установите его с cursor.com и повторите.".into(),
+            };
+        };
+        let created = system::cursor_shortcut_path()
+            .ok_or_else(|| "Не нашёл рабочий стол".to_string())
+            .and_then(|dest| {
+                let body = format!(
+                    "exec /usr/bin/open -a {} --args {}",
+                    crate::macos::sh_quote(&app.to_string_lossy()),
+                    crate::macos::sh_quote(&format!(
+                        "--proxy-server=http://127.0.0.1:{}",
+                        shim::LISTEN_PORT
+                    )),
+                );
+                crate::macos::create_app_wrapper(&dest, "Cursor (proxy)", &body, Some(&app))
+            });
+        match created {
+            Ok(()) => CursorSetupResult {
+                ok: true,
+                found: true,
+                message: "Ярлык «Cursor (proxy)» создан на рабочем столе.".into(),
+            },
+            Err(e) => CursorSetupResult {
+                ok: false,
+                found: true,
+                message: format!("Не удалось создать ярлык: {e}"),
+            },
+        }
+    })
+    .await
+    .map_err(|e| format!("Внутренняя ошибка: {e}"))
+}
+
+#[cfg(target_os = "windows")]
 #[tauri::command]
 pub async fn setup_cursor(app: AppHandle) -> Result<CursorSetupResult, String> {
     // Создаёт ярлык «Cursor (proxy)». Сам мост уже поднят шимом — здесь только
@@ -201,6 +281,10 @@ pub async fn run_install(
     cursor: bool,
     proxy_url: String,
 ) -> Result<(), String> {
+    // Легаси-установка через PS-скрипты; новый мастер — wizard_install.
+    if cfg!(not(target_os = "windows")) {
+        return Err("Легаси-установка доступна только на Windows — используйте мастер".into());
+    }
     // Validate proxy first — fail fast with a friendly message.
     proxy::parse(&proxy_url)?;
 
@@ -348,6 +432,7 @@ fn resolve_resource(app: &AppHandle, name: &str) -> Result<std::path::PathBuf, S
 /// Запустить PS-скрипт блокирующе и вернуть объединённый stdout+stderr (UTF-8).
 /// Используется для коротких операций без стриминга в UI (например setup_cursor
 /// с Dashboard). Ошибка — только если powershell не стартовал.
+#[cfg(target_os = "windows")]
 async fn run_ps_capture(
     script: &std::path::Path,
     args: &[&str],
@@ -1036,9 +1121,9 @@ pub async fn bridge_set_route_mode(mode: String) -> Result<(), String> {
 /// (новый exe попадает в resources при апдейте Clod Helper).
 #[tauri::command]
 pub async fn bridge_update(app: AppHandle) -> Result<String, String> {
-    let src = resolve_resource(&app, "clod-bridge.exe")?;
+    let src = resolve_resource(&app, shim::BRIDGE_EXE)?;
     if !src.exists() {
-        return Err("В ресурсах приложения нет clod-bridge.exe".into());
+        return Err(format!("В ресурсах приложения нет {}", shim::BRIDGE_EXE));
     }
     let dst = shim::bridge_exe_path()
         .ok_or_else(|| "Не нашёл папку ClaudeDesktopProxy".to_string())?;
@@ -1051,12 +1136,14 @@ pub async fn bridge_update(app: AppHandle) -> Result<String, String> {
         // Страховка отката: старый exe сохраняем рядом (.bak) — если новый
         // мост у пользователя поведёт себя хуже, можно вернуть вручную.
         if dst.exists() {
-            let _ = std::fs::copy(&dst, dst.with_extension("exe.bak"));
+            let mut bak = dst.clone().into_os_string();
+            bak.push(".bak");
+            let _ = std::fs::copy(&dst, bak);
         }
         // Файл может освобождаться не мгновенно после kill — пара ретраев.
         let mut last_err = String::new();
         for _ in 0..3 {
-            match std::fs::copy(&src, &dst) {
+            match shim::install_bridge_binary(&src, &dst) {
                 Ok(_) => {
                     // Перерегистрировать задачу: новый Rust-мост понимает
                     // --rules, vbs должен его получить (иначе smart-режим не
@@ -1116,7 +1203,7 @@ pub async fn wizard_install(
 
     // 1) Мост: копия из ресурсов в %LOCALAPPDATA%\ClaudeDesktopProxy.
     step("bridge", "start");
-    let src = resolve_resource(&app, "clod-bridge.exe")?;
+    let src = resolve_resource(&app, shim::BRIDGE_EXE)?;
     let dst = shim::bridge_exe_path()
         .ok_or_else(|| "Не нашёл папку ClaudeDesktopProxy".to_string())?;
     let copied = tokio::task::spawn_blocking(move || -> Result<(), String> {
@@ -1127,7 +1214,7 @@ pub async fn wizard_install(
         }
         let mut last_err = String::new();
         for _ in 0..3 {
-            match std::fs::copy(&src, &dst) {
+            match shim::install_bridge_binary(&src, &dst) {
                 Ok(_) => {
                     last_err.clear();
                     break;

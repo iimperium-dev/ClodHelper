@@ -14,7 +14,8 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # image-png вЂ” СЃРјРµРЅР° РёРєРѕРЅРєРё С‚СЂРµСЏ РЅР° Р»РµС‚Сѓ (Р¶РёРІРѕР№ СЃС‚Р°С‚СѓСЃ РјРѕСЃС‚Р°)
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+# macos-private-api — прозрачный трей-попап на macOS (на Windows — no-op).
+tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
 tauri-plugin-opener = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-autostart = "2"

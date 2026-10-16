@@ -38,8 +38,12 @@ const SHIM_FILENAME: &str = "local-proxy.py";
 /// Новый мост — самостоятельный exe (НЕ python.exe). Критично: killswitch
 /// блокирует python.exe, а мост на python.exe душил сам себя. exe-мост под
 /// своим именем не попадает под блок → killswitch не рубит собственный мост.
+#[cfg(target_os = "windows")]
 pub const BRIDGE_EXE: &str = "clod-bridge.exe";
+#[cfg(not(target_os = "windows"))]
+pub const BRIDGE_EXE: &str = "clod-bridge";
 const INSTALL_DIR_REL: &str = "ClaudeDesktopProxy";
+#[cfg(target_os = "windows")]
 const STARTUP_VBS_NAME: &str = "ClaudeDesktopProxy.vbs";
 
 /// Статус шима: жив или нет, и метаданные о процессе если жив.
@@ -283,15 +287,26 @@ pub fn start() -> Result<(), String> {
     // Defender может убрать exe в карантин, и повторный запуск тогда не поможет.
     if let Some(exe) = bridge_exe_path().filter(|path| !path.exists()) {
         if !shim_script_path().is_some_and(|path| path.exists()) {
+            #[cfg(target_os = "windows")]
             return Err(format!(
                 "Не найден {}. Проверьте журнал защиты Windows: файл мог быть помещён в карантин.",
+                exe.display()
+            ));
+            #[cfg(not(target_os = "windows"))]
+            return Err(format!(
+                "Не найден {}. Пройдите мастер установки Clod Helper заново.",
                 exe.display()
             ));
         }
     }
 
-    // Совместимость с совсем старыми установками, у которых ещё нет exe или
-    // сохранённого proxy_url для регистрации задачи.
+    start_legacy(task_error)
+}
+
+/// Совместимость с совсем старыми установками, у которых ещё нет exe или
+/// сохранённого proxy_url для регистрации задачи: Startup .vbs.
+#[cfg(target_os = "windows")]
+fn start_legacy(task_error: Option<String>) -> Result<(), String> {
     let legacy_vbs = startup_vbs_path();
     if let Some(error) = task_error.as_ref() {
         if legacy_vbs.as_ref().map(|path| path.exists()) != Some(true) {
@@ -305,23 +320,26 @@ pub fn start() -> Result<(), String> {
             vbs.display()
         ));
     }
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let mut cmd = std::process::Command::new("wscript.exe");
-        cmd.arg(&vbs);
-        cmd.creation_flags(CREATE_NO_WINDOW);
-        cmd.spawn()
-            .map_err(|e| format!("Не смог запустить {}: {e}", vbs.display()))?;
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = vbs;
-    }
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let mut cmd = std::process::Command::new("wscript.exe");
+    cmd.arg(&vbs);
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd.spawn()
+        .map_err(|e| format!("Не смог запустить {}: {e}", vbs.display()))?;
     // Дать процессу время поднять listener.
     std::thread::sleep(Duration::from_millis(700));
     Ok(())
+}
+
+/// На macOS легаси-автозапуска через .vbs не бывает: задача (LaunchAgent) —
+/// единственный путь запуска.
+#[cfg(not(target_os = "windows"))]
+fn start_legacy(task_error: Option<String>) -> Result<(), String> {
+    Err(match task_error {
+        Some(e) => format!("Не удалось запустить мост: {e}"),
+        None => "Автозапуск моста не настроен — пройдите мастер установки".into(),
+    })
 }
 
 /// Дождаться появления процесса после запуска через Планировщик. Его команда
@@ -399,6 +417,7 @@ pub fn spawn_watchdog() {
 
 /// Путь легаси-автозапуска (.vbs в Startup). Оставлен для миграции: задача
 /// Планировщика (tasks.rs) при регистрации удаляет его.
+#[cfg(target_os = "windows")]
 pub(crate) fn startup_vbs_path() -> Option<PathBuf> {
     let appdata = dirs::config_dir()?; // %APPDATA% on Windows
     Some(
@@ -424,6 +443,28 @@ pub fn bridge_exe_path() -> Option<PathBuf> {
 /// Путь к local-proxy.py в установленной копии (легаси — для миграции/детекта).
 pub fn shim_script_path() -> Option<PathBuf> {
     install_dir().map(|d| d.join(SHIM_FILENAME))
+}
+
+/// Скопировать мост из ресурсов в папку установки (мост уже остановлен).
+///
+/// macOS: перезапись подписанного бинарника НА МЕСТЕ ломает кэш подписи ядра
+/// (тот же inode) — следующий запуск убивается SIGKILL. Поэтому сначала
+/// удаляем старый файл (новый inode), затем копируем, ставим +x и снимаем
+/// карантин, унаследованный от скачанного .app.
+pub fn install_bridge_binary(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        if dst.exists() {
+            std::fs::remove_file(dst)?;
+        }
+    }
+    std::fs::copy(src, dst)?;
+    #[cfg(not(target_os = "windows"))]
+    {
+        crate::macos::set_mode(dst, 0o755);
+        crate::macos::strip_quarantine(dst);
+    }
+    Ok(())
 }
 
 // Примечание: write_startup_vbs (легаси-автозапуск через Startup) удалён —

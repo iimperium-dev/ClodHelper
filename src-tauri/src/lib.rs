@@ -4,7 +4,10 @@ mod claude_policy;
 mod claude_proxy;
 mod commands;
 mod env_proxy;
+#[cfg_attr(not(target_os = "windows"), path = "firewall_stub.rs")]
 mod firewall;
+#[cfg(not(target_os = "windows"))]
+mod macos;
 mod monitor;
 mod proxy;
 mod settings;
@@ -26,6 +29,11 @@ pub fn run() {
                 .unwrap_or_else(|_| "clod_helper_lib=info".into()),
         )
         .init();
+
+    // Из Dock/Finder приложение получает PATH без Homebrew/nvm — node, npm и
+    // claude не нашлись бы. Чиним до любых спавнов.
+    #[cfg(not(target_os = "windows"))]
+    macos::fix_path_env();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -140,8 +148,24 @@ pub fn run() {
                 _ => {}
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app, event| {
+            // macOS: окно спрятано в трей (close-to-tray), а клик по иконке
+            // в Dock должен вернуть его, как у любого mac-приложения.
+            #[cfg(target_os = "macos")]
+            {
+                if let tauri::RunEvent::Reopen { .. } = event {
+                    if let Some(win) = app.get_webview_window("main") {
+                        let _ = win.show();
+                        let _ = win.unminimize();
+                        let _ = win.set_focus();
+                    }
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
+        });
 }
 
 fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<monitor::TrayHandles> {
