@@ -231,23 +231,77 @@ pub fn stop() -> Result<usize, String> {
 
 // ─── Start ───────────────────────────────────────────────────────
 
-/// Запустить шим: через задачу Планировщика (основной путь) или легаси .vbs
-/// из Startup (старые установки до миграции). Оба пути — молча, без окна.
+/// Запустить мост. Если задача Планировщика устарела (например, ссылается на
+/// удалённый runner-vbs), пересоздать её из текущих настроек и попробовать ещё
+/// раз. Легаси .vbs из Startup остаётся последним fallback для старых установок.
 pub fn start() -> Result<(), String> {
     // Явный запуск снимает ручную остановку — watchdog снова сторожит.
     MANUALLY_STOPPED.store(false, Ordering::Relaxed);
-    if crate::tasks::is_registered() {
-        crate::tasks::start()?;
-        // Дать процессу время поднять listener.
-        std::thread::sleep(Duration::from_millis(700));
+
+    // Уже запущенный вручную мост тоже считается успехом. Настройку задачи
+    // отдельно выполняет кнопка «Исправить» и фоновая миграция.
+    if status().running {
         return Ok(());
     }
 
-    let vbs = startup_vbs_path()
-        .ok_or_else(|| "Не нашёл папку Startup".to_string())?;
+    let mut task_error = None;
+    if crate::tasks::is_registered() {
+        match crate::tasks::start() {
+            Ok(()) if wait_for_bridge_process() => return Ok(()),
+            Ok(()) => {
+                task_error = Some(
+                    "задача запущена, но процесс моста не появился (возможно, задача ссылается на удалённый файл)".to_string(),
+                );
+            }
+            Err(e) => task_error = Some(e),
+        }
+        // Остановить зависший wscript/старую задачу перед заменой действия.
+        crate::tasks::stop_ignore_errors();
+    }
+
+    // Самовосстановление: если старый .vbs удалён или задача устарела,
+    // регистрируем актуальное действие из установленного exe и settings.
+    if bridge_exe_path().is_some_and(|exe| exe.exists()) {
+        if let Some(proxy_url) = crate::settings::load().proxy_url {
+            match crate::tasks::register(&proxy_url) {
+                Ok(()) => match crate::tasks::start() {
+                    Ok(()) if wait_for_bridge_process() => return Ok(()),
+                    Ok(()) => {
+                        task_error = Some(
+                            "новая задача запущена, но процесс моста не появился".to_string(),
+                        );
+                    }
+                    Err(e) => task_error = Some(e),
+                },
+                Err(e) => task_error = Some(e),
+            }
+            crate::tasks::stop_ignore_errors();
+        }
+    }
+
+    // Не маскировать отсутствие самого бинарника под поломанный Startup .vbs.
+    // Defender может убрать exe в карантин, и повторный запуск тогда не поможет.
+    if let Some(exe) = bridge_exe_path().filter(|path| !path.exists()) {
+        if !shim_script_path().is_some_and(|path| path.exists()) {
+            return Err(format!(
+                "Не найден {}. Проверьте журнал защиты Windows: файл мог быть помещён в карантин.",
+                exe.display()
+            ));
+        }
+    }
+
+    // Совместимость с совсем старыми установками, у которых ещё нет exe или
+    // сохранённого proxy_url для регистрации задачи.
+    let legacy_vbs = startup_vbs_path();
+    if let Some(error) = task_error.as_ref() {
+        if legacy_vbs.as_ref().map(|path| path.exists()) != Some(true) {
+            return Err(format!("Не удалось запустить мост: {error}"));
+        }
+    }
+    let vbs = legacy_vbs.ok_or_else(|| "Не нашёл папку Startup".to_string())?;
     if !vbs.exists() {
         return Err(format!(
-            "Не найден {}. Запустите установщик заново.",
+            "Не найден {}. Перенастройте автозапуск в Clod Helper.",
             vbs.display()
         ));
     }
@@ -268,6 +322,18 @@ pub fn start() -> Result<(), String> {
     // Дать процессу время поднять listener.
     std::thread::sleep(Duration::from_millis(700));
     Ok(())
+}
+
+/// Дождаться появления процесса после запуска через Планировщик. Его команда
+/// может вернуть успех даже когда вложенный wscript не нашёл runner-vbs.
+fn wait_for_bridge_process() -> bool {
+    for _ in 0..20 {
+        if status().running {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    status().running
 }
 
 pub fn restart() -> Result<(), String> {

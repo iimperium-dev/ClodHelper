@@ -5,6 +5,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Button } from "../components/Button";
 import { AppRow } from "../components/AppRow";
 import { InfoTip } from "../components/InfoTip";
+import { ClaudeProxyControl } from "../components/ClaudeProxyControl";
 import {
   appsAddCustom,
   appsCreateShortcut,
@@ -111,17 +112,14 @@ export function Apps() {
           <h1 className="flex items-center gap-2 text-[24px] font-bold leading-tight tracking-[-0.02em] text-vb-fg">
             Приложения
             <InfoTip>
-              Зачем это, если есть системное проксирование? GUI-приложения на
-              Chromium/Electron (Claude Desktop, Cursor) <b>игнорируют</b>{" "}
-              переменные HTTP_PROXY — прокси им передаётся только флагом при
-              запуске. «Открыть» запускает приложение с этим флагом сейчас,
-              ярлык — делает такой запуск постоянным. CLI-инструменты (Claude
-              Code, git, node) в этом не нуждаются — их покрывает системное
-              проксирование.
+              «Открыть» и ярлык запускают приложение с настройкой прокси.
+              Для Claude Desktop настройте также штатный прокси в разделе ниже:
+              он передаётся агенту и локальному Cowork. Произвольные инструменты
+              могут игнорировать настройки прокси.
             </InfoTip>
           </h1>
           <p className="mt-0.5 text-[13px] text-vb-silver-dim">
-            GUI-приложения, которым нужен запуск с прокси-флагом
+            Запуск приложений и настройка прокси Claude
           </p>
         </div>
         <Button variant="secondary" size="sm" onClick={() => setAdding((v) => !v)}>
@@ -219,7 +217,7 @@ export function Apps() {
           </div>
         )}
       </motion.section>
-
+      <ClaudeProxyControl />
     </motion.div>
   );
 }

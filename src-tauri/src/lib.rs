@@ -1,4 +1,7 @@
 mod apps;
+mod claude_desktop;
+mod claude_policy;
+mod claude_proxy;
 mod commands;
 mod env_proxy;
 mod firewall;
@@ -40,6 +43,9 @@ pub fn run() {
             commands::check_proxy,
             commands::run_install,
             commands::launch_claude_desktop,
+            commands::claude_proxy_status,
+            commands::claude_proxy_enable,
+            commands::claude_proxy_disable,
             commands::launch_claude_code,
             commands::detect_cursor,
             commands::setup_cursor,

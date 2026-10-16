@@ -59,6 +59,8 @@
       "resources/clod-bridge.exe",
       "resources/claude-setup.ps1",
       "resources/claude-desktop-setup.ps1",
+      "resources/claude-desktop-launch.ps1",
+      "resources/claude-proxy-policy.ps1",
       "resources/cursor-setup.ps1"
     ],
     "publisher": "iimperium",

@@ -76,8 +76,10 @@ pub fn read() -> GlobalProxyEnv {
 ///
 /// HTTP_PROXY/HTTPS_PROXY = URL моста; NO_PROXY мержится с существующим
 /// значением пользователя (его домены-исключения сохраняем, локальные адреса
-/// гарантируем). lowercase-варианты убираем: env Windows регистронезависим,
-/// пара UPPER+lower в реестре только путает.
+/// гарантируем). В Windows имена переменных окружения регистронезависимы:
+/// `HTTP_PROXY` и `http_proxy` — одна и та же запись. Поэтому после записи
+/// UPPERCASE нельзя отдельно «удалять lowercase»: это удалит только что
+/// записанное значение и тумблер мгновенно вернётся в состояние «выключен».
 ///
 /// Действует на процессы, запущенные ПОСЛЕ (WM_SETTINGCHANGE рассылается
 /// автоматически). Прав администратора не требует (User scope).
@@ -105,8 +107,6 @@ pub fn set(proxy_url: &str) -> Result<(), String> {
         "[Environment]::SetEnvironmentVariable('HTTP_PROXY', '{url_e}', 'User'); \
          [Environment]::SetEnvironmentVariable('HTTPS_PROXY', '{url_e}', 'User'); \
          [Environment]::SetEnvironmentVariable('NO_PROXY', '{np_e}', 'User'); \
-         [Environment]::SetEnvironmentVariable('http_proxy', $null, 'User'); \
-         [Environment]::SetEnvironmentVariable('https_proxy', $null, 'User'); \
          Write-Output 'ENV_SET'"
     );
     let out = run_ps_capture(&script)
@@ -157,11 +157,6 @@ pub fn clear() -> Result<(), String> {
                 "[Environment]::SetEnvironmentVariable('{key}', $null, 'User'); ",
             )),
         }
-    }
-    for key in ["http_proxy", "https_proxy"] {
-        script.push_str(&format!(
-            "[Environment]::SetEnvironmentVariable('{key}', $null, 'User'); ",
-        ));
     }
     script.push_str("Write-Output 'ENV_CLEARED'");
 

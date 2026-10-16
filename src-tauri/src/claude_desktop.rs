@@ -1,0 +1,151 @@
+//! Claude Desktop discovery and launch share one script with the setup wizard
+//! and desktop shortcuts. Store paths are resolved again on every launch.
+
+use std::{
+    path::PathBuf,
+    process::Command,
+    sync::Mutex,
+    time::{Duration, Instant},
+};
+
+use serde::Deserialize;
+
+use crate::apps::{AppProfile, LaunchKind};
+
+pub const PROFILE_ID: &str = "claude-desktop";
+pub const PROXY_PORT: u16 = 8890;
+const LAUNCHER: &str = include_str!("../resources/claude-desktop-launch.ps1");
+static INSTALL_CACHE: Mutex<Option<(Instant, Option<Installation>)>> = Mutex::new(None);
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Installation {
+    pub exe_path: String,
+    pub app_id: Option<String>,
+    pub kind: LaunchKind,
+}
+
+fn run_script(arguments: &str) -> Result<String, String> {
+    let mut cmd = Command::new("powershell.exe");
+    cmd.args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+    ])
+    .arg(format!(
+        "& {{\n{}\n}} {arguments}",
+        LAUNCHER.trim_start_matches('\u{feff}')
+    ));
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Не удалось запустить Claude Desktop: {e}"))?;
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if error.is_empty() {
+            "Не удалось запустить Claude Desktop через прокси".into()
+        } else {
+            error
+        });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .trim_start_matches('\u{feff}')
+        .to_string())
+}
+
+pub fn detect_fresh() -> Result<Option<Installation>, String> {
+    let json = run_script("-DetectOnly")?;
+    serde_json::from_str(&json)
+        .map_err(|e| format!("Не удалось определить установку Claude Desktop: {e}"))
+}
+
+pub fn detect() -> Option<Installation> {
+    let mut guard = INSTALL_CACHE.lock().ok()?;
+    if let Some((time, installation)) = guard.as_ref() {
+        if time.elapsed() < Duration::from_secs(60)
+            && installation
+                .as_ref()
+                .map_or(true, |i| PathBuf::from(&i.exe_path).is_file())
+        {
+            return installation.clone();
+        }
+    }
+    let installation = detect_fresh().ok().flatten();
+    *guard = Some((Instant::now(), installation.clone()));
+    installation
+}
+
+pub fn preset() -> AppProfile {
+    let installation = detect();
+    AppProfile {
+        id: PROFILE_ID.into(),
+        name: "Claude Desktop".into(),
+        kind: installation
+            .as_ref()
+            .map(|i| i.kind.clone())
+            .unwrap_or(LaunchKind::Msix),
+        exe_path: installation.as_ref().map(|i| i.exe_path.clone()),
+        app_id: installation.and_then(|i| i.app_id),
+        process_names: vec!["Claude.exe".into()],
+        enabled: false,
+        builtin: true,
+    }
+}
+
+pub fn launch() -> Result<(), String> {
+    // The launcher checks the bridge and rejects existing Desktop processes:
+    // Electron's single-instance handoff would otherwise ignore the proxy flag.
+    run_script(&format!("-Port {PROXY_PORT}")).map(|_| ())
+}
+
+/// Install a stable launcher outside WindowsApps. A .lnk never pins a Store
+/// package version; the script also works when the execution alias is disabled.
+pub fn install_launcher() -> Result<PathBuf, String> {
+    let dir = dirs::data_local_dir()
+        .ok_or_else(|| "Не найдена папка LOCALAPPDATA".to_string())?
+        .join("ClaudeDesktopProxy");
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Не удалось создать папку запуска Claude: {e}"))?;
+    let path = dir.join("claude-desktop-launch.ps1");
+    // Windows PowerShell 5.1 needs a BOM to read Russian messages correctly.
+    let text = format!("\u{feff}{}", LAUNCHER.trim_start_matches('\u{feff}'));
+    std::fs::write(&path, text).map_err(|e| format!("Не удалось сохранить запуск Claude: {e}"))?;
+    Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_store_manifest_identity_and_legacy_installation() {
+        let store: Installation = serde_json::from_str(r#"{"exe_path":"C:\\Program Files\\WindowsApps\\AnthropicPBC.Claude_2\\app\\claude.exe","app_id":"AnthropicPBC.Claude_fnn82j28hfe8t!Claude","kind":"msix"}"#).unwrap();
+        assert_eq!(store.kind, LaunchKind::Msix);
+        assert!(store.app_id.unwrap().ends_with("!Claude"));
+        let legacy: Installation = serde_json::from_str(r#"{"exe_path":"C:\\Users\\Иван\\AppData\\Local\\AnthropicClaude\\claude.exe","app_id":null,"kind":"exe_flag"}"#).unwrap();
+        assert_eq!(legacy.kind, LaunchKind::ExeFlag);
+        assert!(legacy.app_id.is_none());
+        assert!(serde_json::from_str::<Option<Installation>>("null")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    #[ignore = "read-only smoke test requiring a locally installed Claude Desktop"]
+    fn detects_installed_desktop() {
+        let installation = detect_fresh()
+            .unwrap()
+            .expect("Claude Desktop must be installed");
+        assert!(PathBuf::from(&installation.exe_path).is_file());
+        assert!(installation.exe_path.to_lowercase().ends_with("claude.exe"));
+        if installation.kind == LaunchKind::Msix {
+            assert!(installation.app_id.unwrap().contains("!Claude"));
+        }
+    }
+}

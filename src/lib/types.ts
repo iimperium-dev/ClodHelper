@@ -119,6 +119,20 @@ export interface AppProfileStatus {
 
 export type ShortcutTarget = "desktop" | "start_menu";
 
+export interface ClaudeProxyStatus {
+  policy: {
+    configured: boolean;
+    managed: boolean;
+    conflict: string | null;
+    proxy_url: string | null;
+    pac_configured: boolean;
+    notice: string | null;
+  };
+  bridge_ready: boolean;
+  bridge_error: string | null;
+  network_enforced: boolean;
+}
+
 // ─── Killswitch ──────────────────────────────────────────────────
 
 export interface KillswitchStatus {

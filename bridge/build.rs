@@ -8,7 +8,10 @@ fn main() {
     #[cfg(target_os = "windows")]
     {
         let mut res = winresource::WindowsResource::new();
-        res.set("FileDescription", "Clod Bridge — local AI proxy bridge (Clod Helper)");
+        res.set(
+            "FileDescription",
+            "Clod Bridge — local AI proxy bridge (Clod Helper)",
+        );
         res.set("ProductName", "Clod Helper Bridge");
         res.set("CompanyName", "iimperium");
         res.set("LegalCopyright", "© iimperium");
@@ -33,6 +36,7 @@ fn main() {
   </compatibility>
 </assembly>"#,
         );
-        res.compile().expect("winresource: не удалось вкомпилировать ресурсы");
+        res.compile()
+            .expect("winresource: не удалось вкомпилировать ресурсы");
     }
 }

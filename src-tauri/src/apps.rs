@@ -82,6 +82,7 @@ pub struct AppProfileStatus {
 /// пробуем найти на диске; в settings храним то что нашли (или None).
 pub fn builtin_presets() -> Vec<AppProfile> {
     vec![
+        crate::claude_desktop::preset(),
         AppProfile {
             id: "vscode".into(),
             name: "VS Code".into(),
@@ -185,6 +186,12 @@ fn find_codex_app_id_uncached() -> Option<String> {
 
 /// Проверить, установлен ли профиль на этом ПК прямо сейчас.
 fn profile_installed(p: &AppProfile) -> (bool, Option<String>) {
+    if p.id == crate::claude_desktop::PROFILE_ID {
+        return match crate::claude_desktop::detect() {
+            Some(i) => (true, i.app_id.or(Some(i.exe_path))),
+            None => (false, None),
+        };
+    }
     match p.kind {
         LaunchKind::ExeFlag | LaunchKind::Custom => {
             // Пресет мог быть сохранён без пути (не найден при установке) —
@@ -273,6 +280,9 @@ fn local_proxy_url() -> String {
 ///   иначе — голая MSIX-активация (UI-прокси может не подхватиться, но
 ///   killswitch-файрвол всё равно держит трафик в мосте).
 pub fn launch(p: &AppProfile) -> Result<(), String> {
+    if p.id == crate::claude_desktop::PROFILE_ID {
+        return crate::claude_desktop::launch();
+    }
     match p.kind {
         LaunchKind::ExeFlag | LaunchKind::Custom => launch_exe(p),
         LaunchKind::Msix => launch_msix(p),
@@ -429,6 +439,25 @@ pub fn create_shortcut(
     p: &AppProfile,
     target: ShortcutTarget,
 ) -> Result<String, String> {
+    if p.id == crate::claude_desktop::PROFILE_ID {
+        let installation = crate::claude_desktop::detect_fresh()?
+            .ok_or_else(|| "Claude Desktop не найден — сначала установите приложение".to_string())?;
+        let launcher = crate::claude_desktop::install_launcher()?;
+        let powershell = std::env::var("SystemRoot")
+            .map(|root| PathBuf::from(root).join("System32/WindowsPowerShell/v1.0/powershell.exe"))
+            .map_err(|_| "Не найдена папка Windows".to_string())?;
+        let arguments = format!(
+            "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File \"{}\" -Port {} -ShowError",
+            launcher.display(), crate::claude_desktop::PROXY_PORT
+        );
+        return run_create_shortcut_ps(
+            &format!("{} (proxy)", p.name),
+            &powershell.to_string_lossy(),
+            &arguments,
+            &installation.exe_path,
+            target,
+        );
+    }
     let (installed, location) = profile_installed(p);
     if !installed {
         return Err(format!("{} не найден — сначала установите приложение", p.name));
@@ -456,7 +485,7 @@ pub fn create_shortcut(
     };
 
     let name = format!("{} (proxy)", p.name);
-    let out = run_create_shortcut_ps(&name, &target_path, &arguments, target)?;
+    let out = run_create_shortcut_ps(&name, &target_path, &arguments, &target_path, target)?;
     Ok(out)
 }
 
@@ -464,6 +493,7 @@ fn run_create_shortcut_ps(
     name: &str,
     target_path: &str,
     arguments: &str,
+    icon_path: &str,
     target: ShortcutTarget,
 ) -> Result<String, String> {
     // Экранируем одинарные кавычки для PS single-quoted строк.
@@ -471,6 +501,7 @@ fn run_create_shortcut_ps(
     let name_e = esc(name);
     let target_e = esc(target_path);
     let args_e = esc(arguments);
+    let icon_e = esc(icon_path);
 
     // Desktop: .lnk в папку рабочего стола.
     // StartMenu: .lnk в пользовательскую папку Programs меню Пуск + открываем
@@ -490,7 +521,7 @@ fn run_create_shortcut_ps(
             name = name_e,
             target = target_e,
             args = args_e,
-            icon = target_e,
+            icon = icon_e,
         ),
         ShortcutTarget::StartMenu => format!(
             "$ws = New-Object -ComObject WScript.Shell; \
@@ -507,10 +538,15 @@ fn run_create_shortcut_ps(
             name = name_e,
             target = target_e,
             args = args_e,
-            icon = target_e,
+            icon = icon_e,
         ),
     };
 
+    // Preserve Unicode desktop paths and stop before reporting success if COM
+    // or Save fails (the UI must not claim that a shortcut was created).
+    let script = format!(
+        "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $ErrorActionPreference='Stop'; {script}"
+    );
     let out = run_silent(
         "powershell.exe",
         &["-NoProfile", "-NonInteractive", "-Command", &script],
@@ -550,6 +586,12 @@ pub fn resolve_process_paths(enabled_profiles: &[AppProfile]) -> Vec<String> {
     let codex_root = if codex_enabled { codex_install_root() } else { None };
 
     for prof in enabled_profiles.iter().filter(|p| p.enabled) {
+        if prof.id == crate::claude_desktop::PROFILE_ID {
+            if let Ok(Some(installation)) = crate::claude_desktop::detect_fresh() {
+                push(installation.exe_path);
+            }
+            continue;
+        }
         for name in &prof.process_names {
             let lname = name.to_lowercase();
             match lname.as_str() {

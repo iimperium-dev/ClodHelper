@@ -34,46 +34,48 @@ pub async fn detect_cursor() -> Result<CursorInfo, String> {
 }
 
 #[tauri::command]
-pub fn launch_claude_desktop() -> Result<(), String> {
-    // Prefer the shortcut we created on desktop — it carries the
-    // --proxy-server flag. If the user deleted it, fall back to launching
-    // Claude.exe directly out of the MSIX install location.
-    // Desktop — через known-folder: при OneDrive KFM сырой USERPROFILE\Desktop
-    // не видит ярлык, и запуск тихо падал в fallback БЕЗ прокси (реальный IP).
-    let shortcut = crate::apps::desktop_dir()
-        .ok_or_else(|| "Не нашёл рабочий стол".to_string())?
-        .join("Claude Desktop (proxy).lnk");
+pub async fn launch_claude_desktop() -> Result<(), String> {
+    tokio::task::spawn_blocking(crate::claude_desktop::launch)
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))?
+}
 
-    if shortcut.exists() {
-        let mut cmd = Command::new("cmd");
-        cmd.args(["/c", "start", "", shortcut.to_str().unwrap_or("")]);
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            cmd.creation_flags(CREATE_NO_WINDOW);
-        }
-        cmd.spawn().map_err(|e| format!("Не удалось запустить ярлык: {e}"))?;
-        return Ok(());
-    }
+/// Claude policy is separate from system proxy/environment settings.
+#[tauri::command]
+pub async fn claude_proxy_status() -> Result<crate::claude_proxy::ClaudeProxyStatus, String> {
+    crate::claude_proxy::status().await
+}
 
-    // Fallback: launch via shell:AppsFolder (MSIX activation).
-    let mut cmd = Command::new("cmd");
-    cmd.args([
-        "/c",
-        "start",
-        "",
-        "shell:AppsFolder\\Claude_pzs8sxrjxfjjc!Claude",
-    ]);
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
+#[tauri::command]
+pub async fn claude_proxy_enable(app: AppHandle) -> Result<crate::claude_proxy::ClaudeProxyStatus, String> {
+    let policy = tokio::task::spawn_blocking(crate::claude_policy::status)
+        .await.map_err(|e| e.to_string())??;
+    if let Some(conflict) = policy.conflict {
+        return Err(conflict);
     }
-    cmd.spawn()
-        .map_err(|e| format!("Не удалось запустить Claude Desktop: {e}"))?;
-    Ok(())
+    // Upgrade only the bridge, preserving its existing shared routing config.
+    // Never point Claude at the old Smart listener as a fallback.
+    if crate::claude_proxy::check_bridge().await.is_err() {
+        bridge_update(app).await?;
+        crate::claude_proxy::wait_for_bridge().await?;
+    }
+    crate::claude_proxy::check_bridge().await?;
+    let policy = tokio::task::spawn_blocking(|| {
+        crate::claude_desktop::install_launcher()?;
+        crate::claude_policy::enable()
+    }).await.map_err(|e| e.to_string())??;
+    let mut status = crate::claude_proxy::status().await?;
+    status.policy = policy;
+    Ok(status)
+}
+
+#[tauri::command]
+pub async fn claude_proxy_disable() -> Result<crate::claude_proxy::ClaudeProxyStatus, String> {
+    let policy = tokio::task::spawn_blocking(crate::claude_policy::disable)
+        .await.map_err(|e| e.to_string())??;
+    let mut status = crate::claude_proxy::status().await?;
+    status.policy = policy; // retain any ownership/restore notice
+    Ok(status)
 }
 
 #[tauri::command]
@@ -927,12 +929,15 @@ pub async fn bridge_task_register() -> Result<crate::tasks::BridgeTaskStatus, St
     let url = settings::load()
         .proxy_url
         .ok_or_else(|| "Прокси ещё не настроен — сначала сохраните его".to_string())?;
-    tokio::task::spawn_blocking(move || crate::tasks::register(&url))
+    tokio::task::spawn_blocking(move || -> Result<crate::tasks::BridgeTaskStatus, String> {
+        crate::tasks::register(&url)?;
+        // Повторная настройка должна сразу восстановить мост, а не только
+        // записать задачу автозапуска до следующего входа в Windows.
+        shim::start()?;
+        Ok(crate::tasks::status())
+    })
         .await
-        .map_err(|e| format!("Внутренняя ошибка: {e}"))??;
-    Ok(tokio::task::spawn_blocking(crate::tasks::status)
-        .await
-        .map_err(|e| format!("Внутренняя ошибка: {e}"))?)
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))?
 }
 
 // ─── Мост: здоровье и маршрутизация ─────────────────────────────

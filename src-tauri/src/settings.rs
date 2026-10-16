@@ -205,10 +205,32 @@ pub fn load_with_presets() -> Settings {
     let _g = SETTINGS_LOCK.lock().ok();
     let mut s = load();
     let presets = crate::apps::builtin_presets();
+    if merge_presets(&mut s.app_profiles, presets) {
+        let _ = save(&s);
+    }
+    s
+}
+
+/// Merge detected presets without filesystem access so migrations can be checked
+/// independently of the installed apps and the user's saved proxy settings.
+fn merge_presets(profiles: &mut Vec<AppProfile>, presets: Vec<AppProfile>) -> bool {
     let mut changed = false;
 
     for preset in presets {
-        if let Some(existing) = s.app_profiles.iter_mut().find(|p| p.id == preset.id) {
+        if let Some(existing) = profiles.iter_mut().find(|p| p.id == preset.id) {
+            // Claude can move between a Store package and a legacy installer.
+            // Refresh detection fields, preserving the user's enabled choice.
+            if preset.id == crate::claude_desktop::PROFILE_ID {
+                if existing.kind != preset.kind || existing.exe_path != preset.exe_path
+                    || existing.app_id != preset.app_id
+                {
+                    existing.kind = preset.kind;
+                    existing.exe_path = preset.exe_path;
+                    existing.app_id = preset.app_id;
+                    changed = true;
+                }
+                continue;
+            }
             // Профиль уже есть — обновим только автодетект-поля (путь/AppID могли
             // появиться если приложение поставили позже), сохранив enabled.
             if existing.exe_path.is_none() && preset.exe_path.is_some() {
@@ -220,15 +242,11 @@ pub fn load_with_presets() -> Settings {
                 changed = true;
             }
         } else {
-            s.app_profiles.push(preset);
+            profiles.push(preset);
             changed = true;
         }
     }
-
-    if changed {
-        let _ = save(&s);
-    }
-    s
+    changed
 }
 
 /// Заменить список профилей целиком (UI прислал новое состояние enabled/добавил своё).
@@ -278,4 +296,103 @@ pub fn set_route_mode(mode: String) -> Result<Settings, String> {
         s.route_mode = Some(mode);
         Ok(())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::apps::LaunchKind;
+
+    fn claude_preset(kind: LaunchKind, exe_path: Option<&str>, app_id: Option<&str>) -> AppProfile {
+        AppProfile {
+            id: crate::claude_desktop::PROFILE_ID.into(),
+            name: "Claude Desktop".into(),
+            kind,
+            exe_path: exe_path.map(str::to_owned),
+            app_id: app_id.map(str::to_owned),
+            process_names: vec!["Claude.exe".into()],
+            enabled: false,
+            builtin: true,
+        }
+    }
+
+    #[test]
+    fn adds_claude_preset_once_preserving_existing_profiles() {
+        let custom = AppProfile {
+            id: "custom-1".into(),
+            name: "My application".into(),
+            kind: LaunchKind::Custom,
+            exe_path: Some(r"C:\Tools\My application.exe".into()),
+            app_id: None,
+            process_names: vec!["My application.exe".into()],
+            enabled: true,
+            builtin: false,
+        };
+        let codex = AppProfile {
+            id: "codex".into(),
+            name: "ChatGPT Codex".into(),
+            kind: LaunchKind::Msix,
+            exe_path: None,
+            app_id: Some("OpenAI.Codex_2p2nqsd0c76g0!App".into()),
+            process_names: vec!["ChatGPT.exe".into()],
+            enabled: true,
+            builtin: true,
+        };
+        let mut profiles = vec![custom, codex.clone()];
+        let previous_profiles = serde_json::to_value(&profiles).unwrap();
+        let claude = claude_preset(
+            LaunchKind::Msix,
+            Some(r"C:\WindowsApps\AnthropicPBC.Claude_2\app\Claude.exe"),
+            Some("AnthropicPBC.Claude_fnn82j28hfe8t!Claude"),
+        );
+        let mut codex_preset = codex;
+        codex_preset.enabled = false;
+        let presets = vec![claude, codex_preset];
+
+        assert!(merge_presets(&mut profiles, presets.clone()));
+        assert_eq!(serde_json::to_value(&profiles[..2]).unwrap(), previous_profiles);
+        assert_eq!(profiles.len(), 3);
+        assert_eq!(profiles[2].id, crate::claude_desktop::PROFILE_ID);
+        assert!(profiles[2].builtin);
+        assert!(!profiles[2].enabled);
+        assert!(!merge_presets(&mut profiles, presets));
+        assert_eq!(profiles.len(), 3);
+    }
+
+    #[test]
+    fn refreshes_claude_installation_without_losing_enabled_choice() {
+        let app_id = Some("AnthropicPBC.Claude_fnn82j28hfe8t!Claude");
+        let mut installed = claude_preset(
+            LaunchKind::Msix,
+            Some(r"C:\WindowsApps\AnthropicPBC.Claude_1\app\Claude.exe"),
+            app_id,
+        );
+        installed.enabled = true;
+        let mut profiles = vec![installed];
+        let changes = [
+            claude_preset(
+                LaunchKind::Msix,
+                Some(r"C:\WindowsApps\AnthropicPBC.Claude_2\app\Claude.exe"),
+                app_id,
+            ),
+            claude_preset(
+                LaunchKind::ExeFlag,
+                Some(r"C:\Users\Иван\AppData\Local\Claude\app-3.0\Claude.exe"),
+                None,
+            ),
+            claude_preset(LaunchKind::Msix, None, None),
+        ];
+
+        for detected in changes {
+            assert!(merge_presets(&mut profiles, vec![detected.clone()]));
+            assert_eq!(profiles.len(), 1);
+            assert_eq!(profiles[0].kind, detected.kind);
+            assert_eq!(profiles[0].exe_path, detected.exe_path);
+            assert_eq!(profiles[0].app_id, detected.app_id);
+            assert!(profiles[0].enabled);
+            assert!(profiles[0].builtin);
+            assert_eq!(profiles[0].process_names, ["Claude.exe"]);
+            assert!(!merge_presets(&mut profiles, vec![detected]));
+        }
+    }
 }

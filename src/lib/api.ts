@@ -5,6 +5,7 @@ import type {
   AppSettings,
   BridgeHealth,
   BridgeTaskStatus,
+  ClaudeProxyStatus,
   CursorInfo,
   CursorSetupResult,
   GlobalProxyEnv,
@@ -103,6 +104,18 @@ export async function settingsSetProxy(url: string): Promise<AppSettings> {
 
 export async function appsList(): Promise<AppProfileStatus[]> {
   return invoke<AppProfileStatus[]>("apps_list");
+}
+
+export function claudeProxyStatus(): Promise<ClaudeProxyStatus> {
+  return invoke<ClaudeProxyStatus>("claude_proxy_status");
+}
+
+export function claudeProxyEnable(): Promise<ClaudeProxyStatus> {
+  return invoke<ClaudeProxyStatus>("claude_proxy_enable");
+}
+
+export function claudeProxyDisable(): Promise<ClaudeProxyStatus> {
+  return invoke<ClaudeProxyStatus>("claude_proxy_disable");
 }
 
 export async function appsSet(

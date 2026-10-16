@@ -614,7 +614,7 @@ export function Overview({ onOpenProxies }: Props) {
             <div className="px-4 pb-4">
               <div className="flex items-center justify-between gap-3 rounded-lg border border-vb-warn/30 bg-vb-warn/[0.05] p-3">
                 <p className="text-[12px] leading-snug text-vb-warn">
-                  Автозапуск устаревший (.vbs) — упавший мост сам не поднимется.
+                  Автозапуск моста не настроен — после сбоя он не восстановится.
                 </p>
                 <Button
                   variant="secondary"
@@ -623,7 +623,7 @@ export function Overview({ onOpenProxies }: Props) {
                   disabled={taskBusy}
                 >
                   {taskBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-                  Перенастроить
+                  Исправить
                 </Button>
               </div>
             </div>
