@@ -329,34 +329,15 @@ mod backend {
             .ok_or_else(|| "Не нашёл домашнюю папку".to_string())?
             .join(".zshenv");
         let text = std::fs::read_to_string(&path).unwrap_or_default();
-        let mut out = String::new();
-        let mut skipping = false;
-        for line in text.lines() {
-            if line.trim() == ZSH_BEGIN {
-                skipping = true;
-                continue;
-            }
-            if skipping {
-                if line.trim() == ZSH_END {
-                    skipping = false;
-                }
-                continue;
-            }
-            out.push_str(line);
-            out.push('\n');
+        if body.is_none() && !text.contains(ZSH_BEGIN) {
+            return Ok(());
         }
-        if let Some(body) = body {
-            if !out.is_empty() && !out.ends_with("\n\n") {
-                out.push('\n');
-            }
-            out.push_str(&format!(
-                "{ZSH_BEGIN}\n# Добавлено Clod Helper: прокси через локальный мост.\n{body}{ZSH_END}\n"
-            ));
-        }
+        let block = body.map(|b| format!("# Добавлено Clod Helper: прокси через локальный мост.\n{b}"));
+        let out = macos::replace_managed_block(&text, ZSH_BEGIN, ZSH_END, block.as_deref());
         if out == text {
             return Ok(());
         }
-        if out.trim().is_empty() && body.is_none() {
+        if out.is_empty() {
             // Файл создали мы и в нём больше ничего нет.
             let _ = std::fs::remove_file(&path);
             return Ok(());

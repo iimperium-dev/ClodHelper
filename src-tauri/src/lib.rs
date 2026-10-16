@@ -6,7 +6,9 @@ mod commands;
 mod env_proxy;
 #[cfg_attr(not(target_os = "windows"), path = "firewall_stub.rs")]
 mod firewall;
-#[cfg(not(target_os = "windows"))]
+// В тестах модуль собирается и на Windows: его чистые функции покрыты
+// юнит-тестами, а реальный прогон на macOS доступен только в CI.
+#[cfg(any(not(target_os = "windows"), test))]
 mod macos;
 mod monitor;
 mod proxy;
@@ -129,6 +131,7 @@ pub fn run() {
                 if let Some(win) = app.get_webview_window("main") {
                     let _ = win.hide();
                 }
+                set_dock_visible(app.handle(), false);
             }
             Ok(())
         })
@@ -139,6 +142,9 @@ pub fn run() {
                     // Полный выход — только через меню трея "Выход".
                     api.prevent_close();
                     let _ = window.hide();
+                    if window.label() == "main" {
+                        set_dock_visible(window.app_handle(), false);
+                    }
                 }
                 // Трей-попап: light dismiss — потерял фокус → спрятался
                 // (паттерн Tailscale/WARP).
@@ -156,11 +162,7 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             {
                 if let tauri::RunEvent::Reopen { .. } = event {
-                    if let Some(win) = app.get_webview_window("main") {
-                        let _ = win.show();
-                        let _ = win.unminimize();
-                        let _ = win.set_focus();
-                    }
+                    show_main_window(app);
                 }
             }
             #[cfg(not(target_os = "macos"))]
@@ -268,4 +270,27 @@ fn show_tray_popup(app: &tauri::AppHandle, cx: f64, cy: f64) {
     }
     let _ = win.show();
     let _ = win.set_focus();
+}
+
+/// macOS: иконка в Dock — только пока видно главное окно (как у менюбар-
+/// утилит). Без этого после автозапуска с --tray в Dock висела иконка без окна.
+pub(crate) fn set_dock_visible(app: &tauri::AppHandle, visible: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.set_dock_visibility(visible);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, visible);
+    }
+}
+
+/// Показать главное окно (меню трея, Dock, кнопка в трей-попапе).
+pub(crate) fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        set_dock_visible(app, true);
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
+    }
 }

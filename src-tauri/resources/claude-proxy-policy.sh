@@ -93,14 +93,20 @@ case "$ACTION" in
 esac
 
 if [ "$ACTION" = Enable ]; then
-    if conflict_now; then status_json; exit 1; fi
+    if conflict_now; then
+        fail "$(status_json | sed -n 's/.*"conflict":"\([^"]*\)".*/\1/p')"
+    fi
     current=$(fixed_state)
     if [ "$(owner_original)" = none ]; then
+        # Наше значение без записи владения (запись удалили вручную): исходным
+        # считаем «ключа не было» — иначе резервная копия была бы невалидной.
+        original=$current
+        [ "$original" = ours ] && original=absent
         # Сначала резервная копия, потом политика — сбой записи восстановим.
         /bin/mkdir -p "$OWNER_DIR" && /bin/chmod 755 "$OWNER_DIR" || fail "Не удалось создать папку резервной копии политики Claude."
-        printf 'ClodHelper 1 %s' "$current" > "$OWNER" || fail "Не удалось сохранить резервную копию политики Claude. Политика прокси не изменена."
+        printf 'ClodHelper 1 %s' "$original" > "$OWNER" || fail "Не удалось сохранить резервную копию политики Claude. Политика прокси не изменена."
         /bin/chmod 644 "$OWNER"
-        [ "$(owner_original)" = "$current" ] || fail "Не удалось подтвердить резервную копию политики Claude. Политика прокси не изменена."
+        [ "$(owner_original)" = "$original" ] || fail "Не удалось подтвердить резервную копию политики Claude. Политика прокси не изменена."
     fi
     [ "$(fixed_state)" = "$current" ] || fail "Политика прокси Claude изменилась во время настройки. Проверьте её перед повторной попыткой."
     /bin/mkdir -p "/Library/Managed Preferences"
@@ -126,10 +132,11 @@ if [ "$original" = none ]; then status_json; exit 0; fi
 current=$(fixed_state)
 changed_externally=false
 if [ "$current" = ours ]; then
+    "$PB" -c "Delete :egressProxyUrl" "$POLICY" >/dev/null 2>&1
     if [ "$original" = empty ]; then
-        "$PB" -c "Set :egressProxyUrl ''" "$POLICY" >/dev/null 2>&1
+        # Add без значения создаёт пустую строку.
+        "$PB" -c "Add :egressProxyUrl string" "$POLICY" >/dev/null 2>&1
     else
-        "$PB" -c "Delete :egressProxyUrl" "$POLICY" >/dev/null 2>&1
         # Пустой файл управляемых настроек создавали мы — убираем его.
         if [ "$("$PB" -c "Print" "$POLICY" 2>/dev/null | tr -d ' \n')" = "Dict{}" ]; then
             /bin/rm -f "$POLICY"

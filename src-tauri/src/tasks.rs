@@ -487,7 +487,14 @@ mod launchd {
         args.push("--quiet".into());
 
         let plist = plist_path().ok_or_else(|| "Не нашёл домашнюю папку".to_string())?;
+        // stderr моста (в --quiet — только ошибки) — для диагностики. launchd
+        // дописывает бесконечно; обрезаем при каждой перерегистрации.
         let log = shim::install_dir().map(|d| d.join("bridge.log"));
+        if let Some(path) = log.as_ref() {
+            if std::fs::metadata(path).is_ok_and(|m| m.len() > 1024 * 1024) {
+                let _ = std::fs::remove_file(path);
+            }
+        }
         macos::write_agent_plist(
             &plist,
             &macos::Agent {

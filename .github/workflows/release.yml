@@ -64,35 +64,8 @@ jobs:
           name: clod-helper-windows
           path: release-assets/*
 
-      - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: release-assets/*
-          generate_release_notes: true
-          draft: false
-          prerelease: false
-          body: |
-            ## Установка
-
-            1. Скачайте `Clod_Helper_*_x64-setup.exe` ниже.
-            2. ПКМ → Свойства → «Разблокировать» → ОК.
-            3. Двойной клик. SmartScreen → «Подробнее» → «Выполнить в любом случае».
-            4. Установщик добавит ярлык. Запускайте.
-
-            Программа не подписана — Windows перестраховывается. Исходники открыты.
-
-            ## macOS (Apple Silicon и Intel, macOS 11+)
-
-            1. Скачайте `*_universal.dmg`, откройте и перетащите Clod Helper в «Программы».
-            2. Первый запуск: ПКМ по приложению → «Открыть» → «Открыть».
-               На macOS 15+: если кнопки «Открыть» нет — Системные настройки → Конфиденциальность и безопасность → «Всё равно открыть».
-            3. Приложение не заверено Apple (Developer ID) — поэтому такое предупреждение. Исходники открыты.
-
   build-macos:
     runs-on: macos-14
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -143,9 +116,43 @@ jobs:
           name: clod-helper-macos
           path: release-assets/*
 
-      # Тело релиза пишет Windows-job; здесь только добавляем .dmg.
-      - name: Attach to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+  # Один job публикует релиз: два параллельных softprops/action-gh-release
+  # гонялись бы за создание одного релиза. Ждёт оба билда; упавший macOS-билд
+  # не блокирует выпуск Windows-версии (публикуется то, что собралось).
+  release:
+    needs: [build, build-macos]
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: clod-helper-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: release-assets/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          body: |
+            ## Установка
+
+            1. Скачайте `Clod_Helper_*_x64-setup.exe` ниже.
+            2. ПКМ → Свойства → «Разблокировать» → ОК.
+            3. Двойной клик. SmartScreen → «Подробнее» → «Выполнить в любом случае».
+            4. Установщик добавит ярлык. Запускайте.
+
+            Программа не подписана — Windows перестраховывается. Исходники открыты.
+
+            ## macOS (Apple Silicon и Intel, macOS 11+)
+
+            1. Скачайте `*_universal.dmg`, откройте и перетащите Clod Helper в «Программы».
+            2. Первый запуск: ПКМ по приложению → «Открыть» → «Открыть».
+               На macOS 15+: если кнопки «Открыть» нет — Системные настройки → Конфиденциальность и безопасность → «Всё равно открыть».
+            3. Приложение не заверено Apple (Developer ID) — поэтому такое предупреждение. Исходники открыты.

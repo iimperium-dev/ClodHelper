@@ -7,6 +7,9 @@
 //! - `.lnk` на рабочем столе → `<Имя> (proxy).app` со sh-скриптом внутри;
 //! - Mark of the Web → атрибут `com.apple.quarantine`.
 
+// На Windows модуль компилируется только в тестах — остальное там не нужно.
+#![cfg_attr(target_os = "windows", allow(dead_code))]
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
@@ -119,23 +122,38 @@ pub fn agent_state(label: &str) -> Option<String> {
 }
 
 /// Загрузить агент (с RunAtLoad он сразу стартует). Уже загруженный — не ошибка.
+///
+/// Ретраи: сразу после bootout launchd ещё досносит службу, и bootstrap
+/// отвечает «5: Input/output error» — ровно сценарий «Перезапустить».
 pub fn bootstrap(label: &str, plist: &Path) -> Result<(), String> {
-    if agent_loaded(label) {
-        return Ok(());
+    let mut last = String::new();
+    for _ in 0..10 {
+        if agent_loaded(label) {
+            return Ok(());
+        }
+        let (ok, out) = launchctl(&["bootstrap", &gui_domain(), &plist.to_string_lossy()]);
+        if ok || agent_loaded(label) {
+            return Ok(());
+        }
+        last = out;
+        std::thread::sleep(std::time::Duration::from_millis(300));
     }
-    let (ok, out) = launchctl(&["bootstrap", &gui_domain(), &plist.to_string_lossy()]);
-    if ok || agent_loaded(label) {
-        Ok(())
-    } else {
-        Err(format!("launchctl bootstrap: {}", out.trim()))
-    }
+    Err(format!("launchctl bootstrap: {}", last.trim()))
 }
 
 /// Выгрузить агент: launchd завершает процесс и больше его не поднимает
-/// (до следующего входа в систему или bootstrap). Ошибки глотаем.
+/// (до следующего входа в систему или bootstrap). Ждём фактической выгрузки
+/// (до ~3 с): bootout асинхронен. Ошибки глотаем.
 pub fn bootout(label: &str) {
-    if agent_loaded(label) {
-        let _ = launchctl(&["bootout", &format!("{}/{label}", gui_domain())]);
+    if !agent_loaded(label) {
+        return;
+    }
+    let _ = launchctl(&["bootout", &format!("{}/{label}", gui_domain())]);
+    for _ in 0..30 {
+        if !agent_loaded(label) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
 }
 
@@ -165,12 +183,7 @@ pub fn strip_quarantine(path: &Path) {
 /// находятся. Берём PATH из login-шелла пользователя и добавляем типовые папки.
 pub fn fix_path_env() {
     let mut parts: Vec<String> = Vec::new();
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-    if let Ok(out) = Command::new(&shell)
-        .args(["-l", "-c", "printf %s \"$PATH\""])
-        .output()
-    {
-        let p = String::from_utf8_lossy(&out.stdout).to_string();
+    if let Some(p) = login_shell_path() {
         parts.extend(p.split(':').filter(|s| !s.is_empty()).map(String::from));
     }
     if let Some(home) = dirs::home_dir() {
@@ -187,6 +200,90 @@ pub fn fix_path_env() {
     let mut seen = std::collections::HashSet::new();
     parts.retain(|p| seen.insert(p.clone()));
     std::env::set_var("PATH", parts.join(":"));
+}
+
+/// PATH из интерактивного login-шелла (`-ilc`: nvm/volta обычно живут в
+/// ~/.zshrc, не в ~/.zprofile). Жёсткий таймаут 3 с — тяжёлый или зависший
+/// конфиг шелла не должен блокировать старт приложения. Маркеры отделяют
+/// PATH от того, что шелл печатает при старте (приветствия, oh-my-zsh).
+fn login_shell_path() -> Option<String> {
+    use std::io::Read;
+    use std::process::Stdio;
+    const BEGIN: &str = "__CLOD_PATH_BEGIN__";
+    const END: &str = "__CLOD_PATH_END__";
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+    let mut child = Command::new(&shell)
+        .args(["-ilc", &format!("printf '{BEGIN}%s{END}' \"$PATH\"")])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(30));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+    let mut out = String::new();
+    child.stdout.take()?.read_to_string(&mut out).ok()?;
+    extract_between(&out, BEGIN, END).map(String::from)
+}
+
+fn extract_between<'a>(text: &'a str, begin: &str, end: &str) -> Option<&'a str> {
+    let start = text.rfind(begin)? + begin.len();
+    let len = text[start..].find(end)?;
+    Some(&text[start..start + len]).filter(|s| !s.is_empty())
+}
+
+/// Заменить управляемый блок `begin…end` в тексте конфига (например
+/// ~/.zshenv) на `block`, либо убрать его при None. Чужие строки не трогает;
+/// незакрытый маркер (пользователь стёр конец) не съедает остаток файла.
+/// Идемпотентна: повторный вызов с тем же блоком текст не меняет.
+pub fn replace_managed_block(text: &str, begin: &str, end: &str, block: Option<&str>) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut kept: Vec<&str> = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        if lines[i].trim() == begin {
+            if let Some(off) = lines[i + 1..].iter().position(|l| l.trim() == end) {
+                i += off + 2;
+                continue;
+            }
+        }
+        kept.push(lines[i]);
+        i += 1;
+    }
+    while kept.last().is_some_and(|l| l.trim().is_empty()) {
+        kept.pop();
+    }
+    let mut out = String::new();
+    for line in &kept {
+        out.push_str(line);
+        out.push('\n');
+    }
+    if let Some(block) = block {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(begin);
+        out.push('\n');
+        out.push_str(block);
+        if !block.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(end);
+        out.push('\n');
+    }
+    out
 }
 
 /// Экранировать строку для sh в одинарных кавычках.
@@ -287,4 +384,106 @@ pub fn create_app_wrapper(
 /// Показать файл в Finder.
 pub fn reveal_in_finder(path: &Path) {
     let _ = Command::new("/usr/bin/open").arg("-R").arg(path).spawn();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const B: &str = "# >>> clod >>>";
+    const E: &str = "# <<< clod <<<";
+
+    #[test]
+    fn managed_block_is_idempotent_and_keeps_user_lines() {
+        let user = "export EDITOR=vim\n# мой конфиг\n";
+        let once = replace_managed_block(user, B, E, Some("export A=1\n"));
+        assert_eq!(once, format!("{user}\n{B}\nexport A=1\n{E}\n"));
+        assert_eq!(replace_managed_block(&once, B, E, Some("export A=1\n")), once);
+        // Замена значения — один блок, не два.
+        let changed = replace_managed_block(&once, B, E, Some("export A=2"));
+        assert_eq!(changed.matches(B).count(), 1);
+        assert!(changed.contains("export A=2\n") && !changed.contains("A=1"));
+        // Удаление возвращает исходный файл.
+        assert_eq!(replace_managed_block(&changed, B, E, None), user);
+        // Файл только с нашим блоком → пусто (вызывающий удалит файл).
+        let only = replace_managed_block("", B, E, Some("x"));
+        assert_eq!(replace_managed_block(&only, B, E, None), "");
+    }
+
+    #[test]
+    fn managed_block_without_end_marker_keeps_rest_of_file() {
+        let broken = format!("a\n{B}\nexport A=1\nexport USER_LINE=1\n");
+        let out = replace_managed_block(&broken, B, E, None);
+        assert!(out.contains("USER_LINE"), "незакрытый маркер съел строки пользователя");
+    }
+
+    #[test]
+    fn sh_quote_survives_apostrophes_and_spaces() {
+        assert_eq!(sh_quote("plain"), "'plain'");
+        assert_eq!(sh_quote("/Users/O'Brien/My App"), r"'/Users/O'\''Brien/My App'");
+    }
+
+    #[test]
+    fn xml_escape_covers_plist_specials() {
+        assert_eq!(
+            xml_escape("http://u:p&<>\"@h:1"),
+            "http://u:p&amp;&lt;&gt;&quot;@h:1"
+        );
+    }
+
+    #[test]
+    fn login_shell_path_markers_ignore_shell_banners() {
+        let out = "Welcome!\n__B__/opt/homebrew/bin:/usr/bin__E__";
+        assert_eq!(extract_between(out, "__B__", "__E__"), Some("/opt/homebrew/bin:/usr/bin"));
+        assert_eq!(extract_between("no markers", "__B__", "__E__"), None);
+        assert_eq!(extract_between("__B____E__", "__B__", "__E__"), None);
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("clod-macos-test-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn agent_plist_escapes_credentials_and_sets_keepalive() {
+        let dir = temp_dir("plist");
+        let path = dir.join("a.plist");
+        let args = vec!["/x/clod-bridge".to_string(), "http://u:p&q@h:1".to_string()];
+        write_agent_plist(
+            &path,
+            &Agent { label: "ru.test", program_arguments: &args, keep_alive: true, stderr_log: None },
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("<string>http://u:p&amp;q@h:1</string>"));
+        assert!(text.contains("<key>KeepAlive</key>\n\t<true/>"));
+        assert!(text.contains("<key>RunAtLoad</key>"));
+        assert!(!path.with_extension("plist.tmp").exists());
+
+        write_agent_plist(
+            &path,
+            &Agent { label: "ru.test", program_arguments: &args, keep_alive: false, stderr_log: None },
+        )
+        .unwrap();
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("KeepAlive"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn app_wrapper_has_bundle_layout() {
+        let dir = temp_dir("wrapper");
+        let dest = dir.join("VS Code (proxy).app");
+        create_app_wrapper(&dest, "VS Code (proxy)", "exec /usr/bin/open -a 'X'", None).unwrap();
+        let launcher = std::fs::read_to_string(dest.join("Contents/MacOS/launcher")).unwrap();
+        assert!(launcher.starts_with("#!/bin/sh\n"));
+        let info = std::fs::read_to_string(dest.join("Contents/Info.plist")).unwrap();
+        assert!(info.contains("<string>launcher</string>"));
+        assert!(info.contains("ru.iimperium.clodhelper.shortcut.vs-code--proxy-"));
+        // Повторное создание заменяет бандл, а не падает.
+        create_app_wrapper(&dest, "VS Code (proxy)", "exec true", None).unwrap();
+        assert!(std::fs::read_to_string(dest.join("Contents/MacOS/launcher")).unwrap().contains("exec true"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

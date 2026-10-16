@@ -30,7 +30,9 @@ export function ClaudeProxyControl() {
       const next = await (enable ? claudeProxyEnable() : claudeProxyDisable());
       setStatus(next);
       setMessage(next.policy.notice ?? (enable
-        ? "Настройка сохранена. Полностью закройте Claude через трей и откройте снова."
+        ? isMac
+          ? "Настройка сохранена. Полностью закройте Claude (Cmd+Q) и откройте снова."
+          : "Настройка сохранена. Полностью закройте Claude через трей и откройте снова."
         : "Прежняя настройка восстановлена. Перезапустите Claude, чтобы применить её."));
     } catch (e) {
       // A later stage can fail after the registry was written. Refresh facts,

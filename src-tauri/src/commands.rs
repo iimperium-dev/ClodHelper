@@ -1404,11 +1404,7 @@ pub async fn proxies_ping() -> Vec<ProxyPing> {
 /// Показать главное окно (кнопка «Открыть приложение» в трей-попапе).
 #[tauri::command]
 pub fn show_main_window(app: AppHandle) {
-    if let Some(win) = app.get_webview_window("main") {
-        let _ = win.show();
-        let _ = win.unminimize();
-        let _ = win.set_focus();
-    }
+    crate::show_main_window(&app);
 }
 
 /// Полный выход из GUI. Мост — отдельный процесс, он продолжает работать.

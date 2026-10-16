@@ -448,23 +448,28 @@ pub fn shim_script_path() -> Option<PathBuf> {
 /// Скопировать мост из ресурсов в папку установки (мост уже остановлен).
 ///
 /// macOS: перезапись подписанного бинарника НА МЕСТЕ ломает кэш подписи ядра
-/// (тот же inode) — следующий запуск убивается SIGKILL. Поэтому сначала
-/// удаляем старый файл (новый inode), затем копируем, ставим +x и снимаем
-/// карантин, унаследованный от скачанного .app.
+/// (тот же inode) — следующий запуск убивается SIGKILL. Поэтому копируем во
+/// временный файл рядом, ставим +x, снимаем карантин (унаследован от
+/// скачанного .app) и атомарно подменяем rename'ом: новый inode, а при сбое
+/// копирования старый мост остаётся на месте.
+#[cfg(not(target_os = "windows"))]
 pub fn install_bridge_binary(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
-    #[cfg(not(target_os = "windows"))]
-    {
-        if dst.exists() {
-            std::fs::remove_file(dst)?;
-        }
+    let mut tmp = dst.as_os_str().to_owned();
+    tmp.push(".new");
+    let tmp = std::path::PathBuf::from(tmp);
+    let _ = std::fs::remove_file(&tmp);
+    if let Err(e) = std::fs::copy(src, &tmp) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
     }
-    std::fs::copy(src, dst)?;
-    #[cfg(not(target_os = "windows"))]
-    {
-        crate::macos::set_mode(dst, 0o755);
-        crate::macos::strip_quarantine(dst);
-    }
-    Ok(())
+    crate::macos::set_mode(&tmp, 0o755);
+    crate::macos::strip_quarantine(&tmp);
+    std::fs::rename(&tmp, dst)
+}
+
+#[cfg(target_os = "windows")]
+pub fn install_bridge_binary(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::copy(src, dst).map(|_| ())
 }
 
 // Примечание: write_startup_vbs (легаси-автозапуск через Startup) удалён —
