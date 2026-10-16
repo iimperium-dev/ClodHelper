@@ -15,6 +15,8 @@
 
 Файл `Clod_Helper_*_x64-setup.exe` — ~10 МБ, Windows 10/11.
 
+Для Mac — `*_universal.dmg` (Apple Silicon и Intel, macOS 11+), см. раздел [macOS](#macos).
+
 ## Установка
 
 1. **Скачайте** `Clod_Helper_*_x64-setup.exe` из релизов.
@@ -68,6 +70,28 @@ Clod Helper не подписан code-signing-сертификатом (сто�
 
 ---
 
+## macOS
+
+Поддерживаются Mac на Apple Silicon (M1 и новее) и на Intel, macOS 11 Big Sur и новее. В релизах лежит universal-образ `*_universal.dmg`.
+
+**Установка.** Откройте `.dmg` и перетащите Clod Helper в «Программы». Приложение не заверено Apple (Developer ID стоит $99/год), поэтому при первом запуске macOS предупредит: нажмите на приложении ПКМ → **Открыть** → **Открыть**. На macOS 15 и новее, если кнопки «Открыть» нет: **Системные настройки → Конфиденциальность и безопасность → «Всё равно открыть»**.
+
+Чем macOS-версия отличается от Windows:
+
+| | Windows | macOS |
+|---|---|---|
+| Автозапуск моста | задача Планировщика | LaunchAgent `ru.iimperium.clodbridge` (launchd сам перезапускает упавший мост) |
+| Системные прокси-переменные | `HKCU\Environment` | `launchctl setenv` (приложения из Dock/Finder) + LaunchAgent при входе + блок в `~/.zshenv` (Терминал) |
+| Настройка Claude Desktop | `HKLM\SOFTWARE\Policies\Claude` (UAC) | `/Library/Managed Preferences/com.anthropic.claudefordesktop.plist` (пароль администратора) |
+| Ярлыки «(proxy)» | `.lnk` | `.app` на рабочем столе или в `~/Applications` |
+| Killswitch | Windows Firewall | **недоступен**: системный файрвол macOS не блокирует трафик по процессам |
+
+Приложения, уже запущенные до включения системного проксирования, переменные не получат: их нужно перезапустить (как и на Windows). Для Терминала достаточно открыть новую вкладку.
+
+macOS иногда удаляет файлы из `/Library/Managed Preferences`, если Mac не управляется через MDM. Если после перезагрузки настройка Claude пропала, нажмите **«Настроить Claude»** ещё раз.
+
+---
+
 ## Для разработчиков
 
 Стек: **Tauri 2 + React 19 + Tailwind 4 + Framer Motion**. Backend на Rust, фронт на TypeScript.
@@ -82,6 +106,19 @@ npm run tauri dev
 # Релизная сборка → src-tauri/target/release/bundle/nsis/*.exe
 npm run tauri build
 ```
+
+На Mac (нужны Xcode Command Line Tools: `xcode-select --install`):
+
+```bash
+npm install
+# Мост → src-tauri/resources/clod-bridge (universal, ad-hoc подпись)
+npm run bridge:build:mac
+npm run tauri dev
+# Релиз → src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+npm run tauri build -- --target universal-apple-darwin
+```
+
+CI (`.github/workflows/release.yml`) собирает `.exe` и `.dmg` параллельно. Отдельные macOS-настройки окна и бандла лежат в `src-tauri/tauri.macos.conf.json`, системный код macOS — в `src-tauri/src/macos.rs`.
 
 Проверки обнаружения Claude Desktop и переноса настроек:
 

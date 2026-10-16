@@ -16,6 +16,7 @@ import {
 } from "../lib/api";
 import type { AppProfileStatus, ShortcutTarget } from "../lib/types";
 import { fadeInUp, staggerContainer } from "../lib/motion";
+import { isMac } from "../lib/platform";
 
 /*
   Приложения: список профилей + добавление своего .exe В ОДНОМ месте
@@ -74,12 +75,19 @@ export function Apps() {
   const pickExe = async () => {
     const selected = await openDialog({
       multiple: false,
-      filters: [{ name: "Программа", extensions: ["exe"] }],
+      // macOS: .app — это папка-бандл, но диалог выбирает её как файл.
+      filters: [{ name: "Программа", extensions: [isMac ? "app" : "exe"] }],
+      defaultPath: isMac ? "/Applications" : undefined,
     });
     if (typeof selected === "string") {
       setCustomPath(selected);
       if (!customName) {
-        const base = selected.split(/[\\/]/).pop()?.replace(/\.exe$/i, "") ?? "";
+        const base =
+          selected
+            .replace(/[\\/]+$/, "")
+            .split(/[\\/]/)
+            .pop()
+            ?.replace(/\.(exe|app)$/i, "") ?? "";
         setCustomName(base);
       }
     }
@@ -153,7 +161,7 @@ export function Apps() {
                     type="text"
                     value={customPath}
                     onChange={(e) => setCustomPath(e.target.value)}
-                    placeholder="Путь к .exe"
+                    placeholder={isMac ? "Путь к .app" : "Путь к .exe"}
                     className="min-w-0 flex-1 truncate rounded-lg border border-vb-border bg-vb-surface-2 px-3 py-2 font-mono text-[12px] text-vb-fg outline-none transition-colors focus:border-vb-emerald/60"
                   />
                   <Button variant="secondary" size="sm" onClick={pickExe}>

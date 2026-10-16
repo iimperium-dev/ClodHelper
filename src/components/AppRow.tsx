@@ -10,6 +10,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { Toggle } from "./Toggle";
+import { isMac } from "../lib/platform";
 import { appBrand, BrandTile } from "./BrandLogos";
 import { cn } from "../lib/cn";
 import type { AppProfileStatus, ShortcutTarget } from "../lib/types";
@@ -62,7 +63,9 @@ export function AppRow({ app, onToggle, onLaunch, onShortcut, onRemove }: Props)
       setFlash(
         target === "desktop"
           ? "Ярлык на рабочем столе"
-          : "Ярлык в Пуске — правым кликом закрепите на панель",
+          : isMac
+            ? "Ярлык в «Программах» — перетащите его в Dock"
+            : "Ярлык в Пуске — правым кликом закрепите на панель",
       );
       window.setTimeout(() => setFlash(null), 4000);
     } catch (e) {
@@ -183,7 +186,7 @@ export function AppRow({ app, onToggle, onLaunch, onShortcut, onRemove }: Props)
                     onClick={() => makeShortcut("start_menu")}
                     className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] text-vb-silver transition-colors hover:bg-vb-surface-2"
                   >
-                    В меню Пуск
+                    {isMac ? "В «Программы»" : "В меню Пуск"}
                   </button>
                 </motion.div>
               )}

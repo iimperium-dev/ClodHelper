@@ -11,6 +11,7 @@ import { Toggle } from "../components/Toggle";
 import { InfoTip } from "../components/InfoTip";
 import { useStatus } from "../lib/status";
 import { fadeInUp, staggerContainer } from "../lib/motion";
+import { isMac, osName } from "../lib/platform";
 
 /*
   Настройки: автозапуск GUI и версии. Прокси-пул и назначения живут в
@@ -46,7 +47,9 @@ export function Settings() {
       }
     } catch {
       setAutostartError(
-        "Не получилось изменить автозапуск (нет прав в Windows). Можно вручную через Пуск → Автозагрузка.",
+        isMac
+          ? "Не получилось изменить автозапуск. Можно вручную: Системные настройки → Основные → Объекты входа."
+          : "Не получилось изменить автозапуск (нет прав в Windows). Можно вручную через Пуск → Автозагрузка.",
       );
     } finally {
       setAutostartBusy(false);
@@ -78,12 +81,12 @@ export function Settings() {
             </div>
             <div className="flex min-w-0 items-center gap-2">
               <div className="text-[14px] font-semibold text-vb-fg">
-                Запускать с Windows
+                Запускать с {osName}
               </div>
               <InfoTip>
-                Clod Helper стартует свёрнутым в трей при входе в Windows.
+                Clod Helper стартует свёрнутым в {isMac ? "строку меню" : "трей"} при входе в {osName}.
                 Сам мост от этого не зависит — он автостартует отдельной
-                задачей Планировщика и работает даже без открытого приложения.
+                {isMac ? "агентом launchd" : "задачей Планировщика"} и работает даже без открытого приложения.
               </InfoTip>
             </div>
           </div>
@@ -120,7 +123,15 @@ export function Settings() {
         <div className="flex items-center justify-between px-4 py-3">
           <span className="text-[13px] text-vb-silver-dim">Автозапуск моста</span>
           <span className="font-mono text-[12px] text-vb-silver">
-            {task === null ? "—" : task.registered ? "Планировщик задач" : "легаси (.vbs)"}
+            {task === null
+              ? "—"
+              : task.registered
+                ? isMac
+                  ? "LaunchAgent (launchd)"
+                  : "Планировщик задач"
+                : isMac
+                  ? "не настроен"
+                  : "легаси (.vbs)"}
           </span>
         </div>
       </motion.section>

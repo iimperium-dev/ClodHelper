@@ -3,6 +3,7 @@ import { Loader2 } from "lucide-react";
 import { Button } from "./Button";
 import { claudeProxyDisable, claudeProxyEnable, claudeProxyStatus } from "../lib/api";
 import type { ClaudeProxyStatus } from "../lib/types";
+import { isMac } from "../lib/platform";
 
 export function ClaudeProxyControl() {
   const [status, setStatus] = useState<ClaudeProxyStatus | null>(null);
@@ -77,7 +78,11 @@ export function ClaudeProxyControl() {
         {status?.policy.managed && <Button size="sm" variant="ghost" disabled={busy} onClick={() => change(false)}>Вернуть прежние настройки</Button>}
         <Button size="sm" variant="ghost" disabled={busy} onClick={refresh}>Проверить</Button>
       </div>
-      <p className="mt-2 text-[11px] text-vb-silver-dim">Для изменения настройки Claude Windows запросит права администратора.</p>
+      <p className="mt-2 text-[11px] text-vb-silver-dim">
+        {isMac
+          ? "Для изменения настройки Claude macOS запросит пароль администратора."
+          : "Для изменения настройки Claude Windows запросит права администратора."}
+      </p>
       <div aria-live="polite">
         {status?.policy.conflict && <p className="mt-2 text-[12px] text-vb-loss">{status.policy.conflict}</p>}
         {status?.bridge_error && <p className="mt-2 text-[12px] text-vb-silver-dim">{status.bridge_error}</p>}

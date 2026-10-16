@@ -8,7 +8,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "bridge:build": "cargo build --release --manifest-path bridge/Cargo.toml && node -e \"require('fs').copyFileSync('bridge/target/release/clod-bridge.exe','src-tauri/resources/clod-bridge.exe')\""
+    "bridge:build": "cargo build --release --manifest-path bridge/Cargo.toml && node -e \"require('fs').copyFileSync('bridge/target/release/clod-bridge.exe','src-tauri/resources/clod-bridge.exe')\"",
+    "bridge:build:mac": "sh scripts/build-bridge-mac.sh"
   },
   "dependencies": {
     "@fontsource/inter": "^5.1.0",

@@ -1,5 +1,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Minus, Square, X } from "lucide-react";
+import { isMac } from "../lib/platform";
 
 /*
   Кастомный titlebar вместо нативной «брови» Windows (decorations: false).
@@ -8,9 +9,22 @@ import { Minus, Square, X } from "lucide-react";
   - Крестик прячет в трей (CloseRequested перехватывается в lib.rs) —
     полный выход по-прежнему через меню трея.
   - Кнопки в стиле Windows 11: широкие зоны, ховер; close — красный.
+
+  macOS: окно с нативным «светофором» поверх контента (titleBarStyle
+  Overlay в tauri.macos.conf.json) — свои кнопки не рисуем, бар остаётся
+  только drag-областью той же высоты.
 */
 export function Titlebar() {
   const win = getCurrentWindow();
+
+  if (isMac) {
+    return (
+      <header
+        data-tauri-drag-region
+        className="z-sticky h-9 shrink-0 select-none border-b border-vb-border/60 bg-vb-bg/90"
+      />
+    );
+  }
 
   return (
     <header
