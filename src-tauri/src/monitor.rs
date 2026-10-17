@@ -83,6 +83,10 @@ const TICK: Duration = Duration::from_secs(5);
 /// Пинг до upstream: раз в 12 тиков (~60с); «высоким» считаем > 1500 мс.
 const LATENCY_EVERY_TICKS: u32 = 12;
 const LATENCY_WARN_MS: u128 = 1500;
+/// Высокий пинг должен повториться столько замеров подряд (~2 мин).
+const PING_ALERT_STREAK: u32 = 2;
+/// Прокси нездоров столько тиков подряд (~30с), прежде чем тревожить.
+const UPSTREAM_ALERT_TICKS: u32 = 6;
 
 /// Ручки трея, которые монитор обновляет на лету (иконка + tooltip;
 /// нативного меню нет — статус живёт в попапе и tooltip'е).
@@ -152,6 +156,11 @@ fn run(app: AppHandle, h: TrayHandles) {
     let mut prev_tooltip = String::new();
     let mut prev_icon: Option<u8> = None;
     let mut nf_ping = Debounce::new(Duration::from_secs(600));
+    // Сколько замеров подряд пинг высокий / тиков подряд прокси нездоров.
+    // Тревожим только затяжные проблемы: единичный потерянный пакет при
+    // TCP-коннекте — это повтор SYN через 1–2с, а не «медленный прокси».
+    let mut ping_high_streak: u32 = 0;
+    let mut upstream_bad_ticks: u32 = 0;
 
     loop {
         let listening = port_listening();
@@ -183,11 +192,12 @@ fn run(app: AppHandle, h: TrayHandles) {
         if tick % LATENCY_EVERY_TICKS == 0 {
             if let Some(hh) = &health {
                 if let Some(addr) = hh.upstreams.first().and_then(|u| upstream_addr(&u.url)) {
-                    last_latency_ms = measure_connect_ms(&addr);
-                    if let Some(ms) = last_latency_ms {
-                        if ms > LATENCY_WARN_MS && nf_ping.ready() {
-                            notify(&app, &format!("Высокий пинг до прокси: {ms} мс — соединения могут тормозить"));
-                        }
+                    last_latency_ms = measure_latency_median(&addr);
+                    let high = last_latency_ms.is_some_and(|ms| ms > LATENCY_WARN_MS);
+                    ping_high_streak = if high { ping_high_streak + 1 } else { 0 };
+                    if ping_high_streak == PING_ALERT_STREAK && internet_ok() && nf_ping.ready() {
+                        let ms = last_latency_ms.unwrap_or_default();
+                        notify(&app, &format!("Прокси отвечает медленно ({ms} мс) уже пару минут — соединения могут тормозить"));
                     }
                 }
             }
@@ -202,7 +212,7 @@ fn run(app: AppHandle, h: TrayHandles) {
             .as_ref()
             .map(|hh| hh.upstreams.iter().all(|u| u.healthy))
             .unwrap_or(true);
-        let high_ping = last_latency_ms.map(|ms| ms > LATENCY_WARN_MS).unwrap_or(false);
+        let high_ping = ping_high_streak >= PING_ALERT_STREAK;
 
         let state = if !listening {
             BridgeState::Down
@@ -245,7 +255,10 @@ fn run(app: AppHandle, h: TrayHandles) {
             }
             _ => {}
         }
-        if prev_upstream_ok && !upstream_ok && nf_upstream.ready() {
+        upstream_bad_ticks = if upstream_ok { 0 } else { upstream_bad_ticks + 1 };
+        // Тревога — только если сбой держится UPSTREAM_ALERT_TICKS тиков (~30с)
+        // и интернет у самого Mac есть: при отвалившемся Wi‑Fi прокси ни при чём.
+        if upstream_bad_ticks == UPSTREAM_ALERT_TICKS && internet_ok() && nf_upstream.ready() {
             let pool = health.as_ref().map(|hh| hh.upstreams.len()).unwrap_or(1);
             notify(&app, &upstream_down_text(pool));
             upstream_alerted = true;
@@ -337,6 +350,28 @@ fn fetch_healthz() -> Option<Health> {
 fn upstream_addr(url_masked: &str) -> Option<String> {
     let rest = url_masked.split("://").nth(1)?;
     Some(rest.rsplit('@').next()?.trim_end_matches('/').to_string())
+}
+
+/// Медиана трёх TCP-коннектов до upstream, мс. Один замер врёт: потерянный
+/// SYN даёт «2–3 секунды» при живом прокси. Неудачные попытки не считаются;
+/// None — не подключились ни разу.
+fn measure_latency_median(addr: &str) -> Option<u128> {
+    let mut v: Vec<u128> = (0..3).filter_map(|_| measure_connect_ms(addr)).collect();
+    if v.is_empty() {
+        return None;
+    }
+    v.sort_unstable();
+    Some(v[v.len() / 2])
+}
+
+/// Есть ли интернет у самого Mac (мимо прокси)? Если нет — проблема в Wi‑Fi,
+/// а не в прокси, и тревожить «прокси не отвечает» нельзя. Два независимых
+/// адреса: Cloudflare и Яндекс DNS.
+fn internet_ok() -> bool {
+    ["1.1.1.1:443", "77.88.8.8:53"].iter().any(|a| {
+        a.parse::<SocketAddr>()
+            .is_ok_and(|addr| TcpStream::connect_timeout(&addr, Duration::from_millis(1500)).is_ok())
+    })
 }
 
 /// Время TCP-коннекта до upstream, мс. None — не подключились (это отдельно
