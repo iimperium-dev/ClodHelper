@@ -179,6 +179,12 @@ export interface AutostartState {
   needs_approval: boolean;
 }
 
+/** Найденная установленная программа (поиск при добавлении, macOS). */
+export interface FoundApp {
+  name: string;
+  path: string;
+}
+
 /** Живые соединения приложения: через мост / мимо моста (macOS). */
 export interface AppTraffic {
   id: string;

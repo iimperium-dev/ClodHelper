@@ -940,3 +940,155 @@ fn run_silent(program: &str, args: &[&str]) -> Option<String> {
         Some(s)
     }
 }
+
+// ─── Поиск установленных приложений (macOS) ─────────────────────
+
+/// Найденное приложение для «Добавить»: имя как в Finder и путь к бандлу.
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+pub struct FoundApp {
+    pub name: String,
+    pub path: String,
+}
+
+/// Кириллица → латиница: «телег» находит Telegram, «хром» — Chrome.
+fn translit(q: &str) -> String {
+    const MAP: &[(char, &str)] = &[
+        ('а', "a"), ('б', "b"), ('в', "v"), ('г', "g"), ('д', "d"), ('е', "e"), ('ё', "e"),
+        ('ж', "zh"), ('з', "z"), ('и', "i"), ('й', "y"), ('к', "k"), ('л', "l"), ('м', "m"),
+        ('н', "n"), ('о', "o"), ('п', "p"), ('р', "r"), ('с', "s"), ('т', "t"), ('у', "u"),
+        ('ф', "f"), ('х', "h"), ('ц', "c"), ('ч', "ch"), ('ш', "sh"), ('щ', "sch"), ('ъ', ""),
+        ('ы', "y"), ('ь', ""), ('э', "e"), ('ю', "yu"), ('я', "ya"),
+    ];
+    q.to_lowercase()
+        .chars()
+        .map(|c| MAP.iter().find(|(k, _)| *k == c).map(|(_, v)| v.to_string()).unwrap_or_else(|| c.to_string()))
+        .collect()
+}
+
+/// Чем выше — тем лучше совпадение: начало имени > начало слова > внутри.
+fn match_score(name: &str, needles: &[String]) -> Option<u32> {
+    let n = name.to_lowercase();
+    needles
+        .iter()
+        .filter(|q| !q.is_empty())
+        .filter_map(|q| {
+            if n.starts_with(q.as_str()) {
+                Some(300)
+            } else if n.split([' ', '-', '_', '.']).any(|w| w.starts_with(q.as_str())) {
+                Some(200)
+            } else if n.contains(q.as_str()) {
+                Some(100)
+            } else if q.chars().count() >= 2
+                && n
+                    .split([' ', '-', '_', '.'])
+                    .filter_map(|w| w.chars().next())
+                    .collect::<String>()
+                    .starts_with(q.as_str())
+            {
+                // Первые буквы слов: «vsc» → Visual Studio Code.
+                Some(150)
+            } else {
+                None
+            }
+        })
+        .max()
+}
+
+/// Отбор и сортировка ответа Spotlight (`путь   kMDItemDisplayName = Имя`).
+fn rank_found(mdfind_out: &str, query: &str, home: &str) -> Vec<FoundApp> {
+    let needles = vec![query.trim().to_lowercase(), translit(query.trim())];
+    let mut found: Vec<(u32, FoundApp)> = Vec::new();
+    for line in mdfind_out.lines() {
+        let (path, name) = match line.split_once("   kMDItemDisplayName = ") {
+            Some((p, n)) => (p.trim(), n.trim().trim_end_matches(".app").to_string()),
+            None => continue,
+        };
+        // Служебные программы внутри других бандлов, системные потроха и
+        // резервные копии в ~/Library — не то, что человек ищет.
+        let inner = path.trim_end_matches(".app");
+        if inner.contains(".app/")
+            || path.starts_with("/System/Library")
+            || path.starts_with("/Library/")
+            || path.starts_with(&format!("{home}/Library"))
+            || path.starts_with("/private")
+            || path.starts_with("/Volumes")
+        {
+            continue;
+        }
+        let file = std::path::Path::new(path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let Some(mut score) = match_score(&name, &needles).max(match_score(&file, &needles)) else {
+            continue;
+        };
+        if path.starts_with("/Applications/") {
+            score += 20;
+        }
+        if found.iter().any(|(_, f)| f.path == path) {
+            continue;
+        }
+        found.push((score, FoundApp { name, path: path.to_string() }));
+    }
+    found.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.name.len().cmp(&b.1.name.len())));
+    found.into_iter().take(6).map(|(_, f)| f).collect()
+}
+
+/// Поиск среди установленных программ через Spotlight: берём все бандлы
+/// приложений разом (с именами как в Finder, в т.ч. «Терминал») и ранжируем
+/// сами — так работают и транслит («телег»), и первые буквы слов («vsc»).
+#[cfg(not(target_os = "windows"))]
+pub fn search_installed(query: &str) -> Vec<FoundApp> {
+    let q = query.trim();
+    if q.chars().count() < 2 {
+        return Vec::new();
+    }
+    let out = Command::new("/usr/bin/mdfind")
+        .args([
+            "-attr",
+            "kMDItemDisplayName",
+            "kMDItemContentType == 'com.apple.application-bundle'",
+        ])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+    let home = dirs::home_dir().map(|h| h.to_string_lossy().to_string()).unwrap_or_default();
+    rank_found(&out, q, &home)
+}
+
+#[cfg(target_os = "windows")]
+pub fn search_installed(_query: &str) -> Vec<FoundApp> {
+    Vec::new()
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::*;
+
+    #[test]
+    fn ranks_and_filters_spotlight_results() {
+        let out = "/Applications/Telegram.app   kMDItemDisplayName = Telegram\n\
+                   /Users/u/Library/Backup/Clod Helper (telegram).app   kMDItemDisplayName = Clod Helper (telegram)\n\
+                   /Applications/Foo.app/Contents/Helpers/Telegram Helper.app   kMDItemDisplayName = Telegram Helper\n\
+                   /Applications/WebTelegram.app   kMDItemDisplayName = WebTelegram\n\
+                   /System/Applications/Utilities/Terminal.app   kMDItemDisplayName = Терминал\n";
+        let r = rank_found(out, "телег", "/Users/u");
+        let names: Vec<&str> = r.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, vec!["Telegram", "WebTelegram"]);
+        let r = rank_found(out, "терм", "/Users/u");
+        assert_eq!(r[0].name, "Терминал");
+        let vs = "/Applications/Visual Studio Code.app   kMDItemDisplayName = Visual Studio Code\n";
+        assert_eq!(rank_found(vs, "vsc", "/Users/u")[0].name, "Visual Studio Code");
+        assert_eq!(translit("хром"), "hrom");
+    }
+
+    /// Живой поиск на этой машине: cargo test live_search -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    #[cfg(target_os = "macos")]
+    fn live_search() {
+        for q in ["телег", "vs", "vsc", "терм", "chat", "хром", "ватс"] {
+            println!("{q} → {:?}", search_installed(q).iter().map(|f| &f.name).collect::<Vec<_>>());
+        }
+    }
+}

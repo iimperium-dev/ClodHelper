@@ -81,6 +81,7 @@ pub fn run() {
             commands::claude_proxy_status,
             commands::telegram_status,
             commands::apps_traffic,
+            commands::apps_search,
             commands::apps_relaunch,
             commands::telegram_setup,
             commands::claude_proxy_enable,

@@ -7,6 +7,7 @@ import type {
   BridgeVersions,
   TelegramStatus,
   AppTraffic,
+  FoundApp,
   AutostartState,
   BridgeTaskStatus,
   ClaudeProxyStatus,
@@ -108,6 +109,11 @@ export async function settingsSetProxy(url: string): Promise<AppSettings> {
 
 export async function appsList(): Promise<AppProfileStatus[]> {
   return invoke<AppProfileStatus[]>("apps_list");
+}
+
+/** Поиск установленных программ по названию (Spotlight, macOS). */
+export function appsSearch(query: string): Promise<FoundApp[]> {
+  return invoke<FoundApp[]>("apps_search", { query });
 }
 
 /** Через мост ли идёт каждое приложение — по живым соединениям (macOS). */

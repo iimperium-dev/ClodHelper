@@ -12,7 +12,6 @@ import {
   Trash2,
 } from "lucide-react";
 import { Button } from "../components/Button";
-import { InfoTip } from "../components/InfoTip";
 import { CountryFlag } from "../components/CountryFlag";
 import {
   bridgeUpdate,
@@ -384,14 +383,11 @@ export function Proxies() {
     >
       <motion.header variants={fadeInUp} className="flex items-end justify-between">
         <div>
-          <h1 className="flex items-center gap-2 text-[24px] font-bold leading-tight tracking-[-0.02em] text-vb-fg">
+          <h1 className="text-[20px] font-semibold leading-tight tracking-[-0.02em] text-vb-fg">
             Прокси
-            <InfoTip>
-              До {MAX_POOL} прокси. <b>Основной</b> — по умолчанию, запасные — если он упал.
-            </InfoTip>
           </h1>
-          <p className="mt-0.5 text-[13px] text-vb-silver-dim">
-            Основной, запасные и назначения по сервисам
+          <p className="text-[12px] text-vb-silver-faint">
+            Основной работает всегда, запасные — если он упал
           </p>
         </div>
         {pool !== null && pool.length < MAX_POOL && (
@@ -701,12 +697,9 @@ export function Proxies() {
 
       {/* ── Назначения по сервисам ── */}
       <motion.section variants={fadeInUp} className="mt-6">
-        <div className="mb-2 flex items-center gap-2 px-1">
+        <div className="mb-2 px-1">
           <h2 className="text-[15px] font-semibold text-vb-fg">Назначения</h2>
-          <InfoTip>
-            Сервис ходит только через выбранный прокси — IP не меняется.
-            <span className="mt-1.5 block text-vb-silver-faint">«Авто» — основной прокси</span>
-          </InfoTip>
+          <p className="text-[12px] text-vb-silver-faint">Сервис всегда выходит через выбранный прокси</p>
         </div>
 
         {!bridgeSupportsAssignments && health !== null && (

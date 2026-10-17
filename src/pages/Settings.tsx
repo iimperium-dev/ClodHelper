@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { Loader2, Power } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
 import { Toggle } from "../components/Toggle";
-import { InfoTip } from "../components/InfoTip";
 import { useStatus } from "../lib/status";
 import { autostartGet, autostartSet } from "../lib/api";
 import { fadeInUp, staggerContainer } from "../lib/motion";
-import { isMac, osName } from "../lib/platform";
+import { isMac } from "../lib/platform";
+import { cn } from "../lib/cn";
 
 /*
   Настройки: автозапуск GUI и версии. Прокси-пул и назначения живут в
@@ -60,29 +60,18 @@ export function Settings() {
       className="mx-auto flex w-full max-w-[520px] flex-col px-6 py-6"
     >
       <motion.header variants={fadeInUp}>
-        <h1 className="text-[24px] font-bold leading-tight tracking-[-0.02em] text-vb-fg">
+        <h1 className="text-[20px] font-semibold leading-tight tracking-[-0.02em] text-vb-fg">
           Настройки
         </h1>
-        <p className="mt-0.5 text-[13px] text-vb-silver-dim">
-          Автозапуск и сведения о приложении
-        </p>
       </motion.header>
 
       {/* ── Автозапуск GUI ── */}
       <motion.section variants={fadeInUp} className="surface-card mt-5 p-4">
         <div className="flex items-center justify-between gap-4">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-vb-surface-2 text-vb-silver-dim">
-              <Power className="h-4 w-4" strokeWidth={1.9} />
-            </div>
-            <div className="flex min-w-0 items-center gap-2">
-              <div className="text-[14px] font-semibold text-vb-fg">
-                Запускать с {osName}
-              </div>
-              <InfoTip>
-                Clod Helper откроется в {isMac ? "строке меню" : "трее"} при входе в {osName}.
-                <span className="mt-1.5 block text-vb-silver-faint">Мост работает и без этого</span>
-              </InfoTip>
+          <div className="min-w-0">
+            <div className="text-[14px] font-medium text-vb-fg">Открывать при входе</div>
+            <div className="text-[12px] text-vb-silver-faint">
+              Значок в {isMac ? "строке меню" : "трее"}. Мост работает и без этого
             </div>
           </div>
           {autostart === null ? (
@@ -97,12 +86,11 @@ export function Settings() {
           )}
         </div>
         {autostartError && (
-          <p className="mt-3 pl-11 text-[12px] text-vb-warn">{autostartError}</p>
+          <p className="mt-3 text-[12px] text-vb-warn">{autostartError}</p>
         )}
         {!autostartError && needsApproval && (
-          <p className="mt-3 pl-11 text-[12px] leading-snug text-vb-warn">
-            macOS ждёт разрешения: Системные настройки → Основные → Объекты входа →
-            включите Clod Helper.
+          <p className="mt-3 text-[12px] leading-snug text-vb-warn">
+            Разрешите в Системных настройках → Объекты входа
           </p>
         )}
       </motion.section>
@@ -116,23 +104,15 @@ export function Settings() {
           </span>
         </div>
         <div className="flex items-center justify-between px-4 py-3">
-          <span className="text-[13px] text-vb-silver-dim">Мост (clod-bridge)</span>
+          <span className="text-[13px] text-vb-silver-dim">Мост</span>
           <span className="font-mono text-[12px] text-vb-silver">
             {health ? `v${health.version}` : "—"}
           </span>
         </div>
         <div className="flex items-center justify-between px-4 py-3">
-          <span className="text-[13px] text-vb-silver-dim">Автозапуск моста</span>
-          <span className="font-mono text-[12px] text-vb-silver">
-            {task === null
-              ? "—"
-              : task.registered
-                ? isMac
-                  ? "LaunchAgent (launchd)"
-                  : "Планировщик задач"
-                : isMac
-                  ? "не настроен"
-                  : "легаси (.vbs)"}
+          <span className="text-[13px] text-vb-silver-dim">Мост запускается сам</span>
+          <span className={cn("text-[12px]", task?.registered ? "text-vb-emerald" : "text-vb-warn")}>
+            {task === null ? "—" : task.registered ? "да" : "нет"}
           </span>
         </div>
       </motion.section>

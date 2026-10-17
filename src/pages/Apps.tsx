@@ -4,8 +4,8 @@ import { FolderOpen, Loader2, Plus } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Button } from "../components/Button";
 import { AppRow, type RowAction, type RowStatus } from "../components/AppRow";
-import { InfoTip } from "../components/InfoTip";
 import { ClaudeProxyControl } from "../components/ClaudeProxyControl";
+import { AppSearchAdd } from "../components/AppSearchAdd";
 import {
   appsAddCustom,
   appsCreateShortcut,
@@ -277,12 +277,8 @@ export function Apps() {
     >
       <motion.header variants={fadeInUp} className="flex items-end justify-between">
         <div>
-          <h1 className="flex items-center gap-2 text-[24px] font-bold leading-tight tracking-[-0.02em] text-vb-fg">
+          <h1 className="text-[20px] font-semibold leading-tight tracking-[-0.02em] text-vb-fg">
             Приложения
-            <InfoTip>
-              «Через мост» — приложение сейчас идёт через ваш прокси.
-              <span className="mt-1.5 block text-vb-silver-faint">Звонки Telegram через прокси не работают</span>
-            </InfoTip>
           </h1>
           <p className="mt-0.5 text-[13px] text-vb-silver-dim">
             Всё, что идёт через ваш прокси
@@ -294,9 +290,22 @@ export function Apps() {
         </Button>
       </motion.header>
 
-      {/* Форма добавления — inline-раскрытие, не модалка */}
+      {/* macOS: умный поиск среди установленных программ */}
+      {isMac && adding && (
+        <AppSearchAdd
+          existing={(apps ?? []).map((a) => a.location ?? "").filter(Boolean)}
+          onAdd={async (name, path) => {
+            setApps(await appsAddCustom(name, path));
+            setAdding(false);
+            void loadTraffic();
+          }}
+          onClose={() => setAdding(false)}
+        />
+      )}
+
+      {/* Windows: форма добавления — inline-раскрытие, не модалка */}
       <AnimatePresence>
-        {adding && (
+        {!isMac && adding && (
           <motion.div
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: "auto" }}

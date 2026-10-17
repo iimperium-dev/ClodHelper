@@ -826,6 +826,14 @@ pub async fn apps_list() -> Result<Vec<AppProfileStatus>, String> {
     .map_err(|e| format!("Внутренняя ошибка: {e}"))
 }
 
+/// Поиск установленных программ по названию (Spotlight, macOS).
+#[tauri::command]
+pub async fn apps_search(query: String) -> Result<Vec<apps::FoundApp>, String> {
+    tokio::task::spawn_blocking(move || apps::search_installed(&query))
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))
+}
+
 /// Через мост ли идёт каждое приложение — по живым соединениям (macOS).
 #[tauri::command]
 pub async fn apps_traffic() -> Result<Vec<crate::traffic::AppTraffic>, String> {
