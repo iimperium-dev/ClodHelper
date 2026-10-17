@@ -232,12 +232,14 @@ impl State {
 
     fn log(&self, msg: &str) {
         if !self.quiet {
+            logfile::maybe_rotate();
             eprintln!("[{}] {msg}", wall_clock());
         }
     }
     /// Ошибки видны и в quiet-режиме + попадают в кольцевой буфер /healthz.
     /// Подряд идущие одинаковые строки схлопываются в «повторилось N раз».
     fn log_err(&self, msg: &str) {
+        logfile::maybe_rotate();
         if let Ok(mut last) = self.last_logged.lock() {
             if last.0 == msg {
                 last.1 += 1;
@@ -254,6 +256,78 @@ impl State {
                 g.pop_front();
             }
             g.push_back((self.started.elapsed().as_secs(), msg.to_string()));
+        }
+    }
+}
+
+/// Собственный файл журнала (`--log FILE`). launchd пишет stderr в
+/// StandardErrorPath бесконечно и сам не ротирует; мост открывает тот же
+/// файл, подставляет его на место stderr и при превышении LOG_MAX_BYTES
+/// переименовывает в `<файл>.1` (одна предыдущая копия) и начинает новый.
+mod logfile {
+    use std::path::{Path, PathBuf};
+    use std::sync::{Mutex, OnceLock};
+
+    pub const LOG_MAX_BYTES: u64 = 1024 * 1024;
+    static PATH: OnceLock<PathBuf> = OnceLock::new();
+    static LOCK: Mutex<()> = Mutex::new(());
+
+    /// `<файл>.1` рядом с журналом.
+    pub fn rotated_path(path: &Path) -> PathBuf {
+        let mut p = path.as_os_str().to_owned();
+        p.push(".1");
+        PathBuf::from(p)
+    }
+
+    /// Переименовать журнал в `.1`, если он больше `limit`. true — ротировали.
+    pub fn rotate_if_needed(path: &Path, limit: u64) -> std::io::Result<bool> {
+        match std::fs::metadata(path) {
+            Ok(m) if m.len() > limit => {
+                std::fs::rename(path, rotated_path(path))?;
+                Ok(true)
+            }
+            Ok(_) => Ok(false),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Открыть журнал на дозапись и подставить его на место stderr.
+    #[cfg(unix)]
+    fn redirect_stderr(path: &Path) -> std::io::Result<()> {
+        use std::os::unix::io::AsRawFd;
+        let f = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+        // SAFETY: dup2 атомарно заменяет fd 2 копией открытого дескриптора;
+        // исходный `f` закрывается при drop, копия живёт до конца процесса.
+        if unsafe { libc::dup2(f.as_raw_fd(), 2) } < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    /// Включить собственный журнал. На Windows stderr моста никуда не пишется
+    /// (задача Планировщика без перенаправления) — флаг принимается, но no-op.
+    pub fn init(path: &str) -> Result<(), String> {
+        #[cfg(unix)]
+        {
+            let path = PathBuf::from(path);
+            let _ = rotate_if_needed(&path, LOG_MAX_BYTES);
+            redirect_stderr(&path).map_err(|e| format!("--log {}: {e}", path.display()))?;
+            let _ = PATH.set(path);
+        }
+        #[cfg(not(unix))]
+        let _ = path;
+        Ok(())
+    }
+
+    /// Вызывается перед каждой записью в журнал: stat — копейки на фоне сети.
+    pub fn maybe_rotate() {
+        #[cfg(unix)]
+        if let Some(path) = PATH.get() {
+            let Ok(_guard) = LOCK.lock() else { return };
+            if matches!(rotate_if_needed(path, LOG_MAX_BYTES), Ok(true)) {
+                let _ = redirect_stderr(path);
+            }
         }
     }
 }
@@ -1093,6 +1167,8 @@ struct Args {
     strict_listen: String,
     quiet: bool,
     rules: Option<String>,
+    /// Собственный файл журнала с ротацией (см. mod logfile).
+    log: Option<String>,
     /// Режим супервизора: перезапускать себя-воркера при падении.
     supervise: bool,
 }
@@ -1108,6 +1184,7 @@ fn parse_args_from(argv: Vec<String>) -> Result<Args, String> {
         strict_listen: "127.0.0.1:8890".into(),
         quiet: false,
         rules: None,
+        log: None,
         supervise: false,
     };
     let mut i = 0;
@@ -1139,6 +1216,10 @@ fn parse_args_from(argv: Vec<String>) -> Result<Args, String> {
             "--rules" => {
                 i += 1;
                 a.rules = Some(argv.get(i).ok_or("--rules requires FILE")?.clone());
+            }
+            "--log" => {
+                i += 1;
+                a.log = Some(argv.get(i).ok_or("--log requires FILE")?.clone());
             }
             "--quiet" => a.quiet = true,
             "--supervise" => a.supervise = true,
@@ -1241,7 +1322,7 @@ async fn main() {
             eprintln!(
                 "usage: clod-bridge --upstream http://user:pass@host:port [--upstream …] \
                  [--listen 127.0.0.1:8888] [--strict-listen 127.0.0.1:8890] \
-                 [--rules FILE] [--quiet] [--supervise]"
+                 [--rules FILE] [--log FILE] [--quiet] [--supervise]"
             );
             std::process::exit(1);
         }
@@ -1252,6 +1333,12 @@ async fn main() {
     }
     #[cfg(unix)]
     raise_fd_limit();
+    if let Some(path) = args.log.as_deref() {
+        if let Err(e) = logfile::init(path) {
+            // Не фатально: пишем в унаследованный stderr, как раньше.
+            eprintln!("ERROR: {e}");
+        }
+    }
 
     let mut upstreams = Vec::new();
     for raw in &args.upstreams {
@@ -1873,5 +1960,33 @@ mod tests {
         let t = wall_clock();
         assert_eq!(t.len(), 20, "{t}");
         assert!(t.starts_with("20") && t.ends_with('Z'));
+    }
+
+    #[test]
+    fn log_rotates_only_past_the_limit() {
+        let dir = std::env::temp_dir().join(format!("clod-log-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("bridge.log");
+        assert!(!logfile::rotate_if_needed(&path, 10).unwrap(), "нет файла — не ошибка");
+        std::fs::write(&path, b"0123456789").unwrap();
+        assert!(!logfile::rotate_if_needed(&path, 10).unwrap());
+        std::fs::write(&path, b"0123456789ab").unwrap();
+        assert!(logfile::rotate_if_needed(&path, 10).unwrap());
+        assert!(!path.exists());
+        let rotated = logfile::rotated_path(&path);
+        assert_eq!(rotated.file_name().unwrap(), "bridge.log.1");
+        assert_eq!(std::fs::read(&rotated).unwrap(), b"0123456789ab");
+        // Вторая ротация затирает старую копию — на диске максимум 2 файла.
+        std::fs::write(&path, b"new-content-xx").unwrap();
+        assert!(logfile::rotate_if_needed(&path, 10).unwrap());
+        assert_eq!(std::fs::read(&rotated).unwrap(), b"new-content-xx");
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(
+            parse_args_from(vec!["--upstream".into(), "http://127.0.0.1:1".into(), "--log".into(), "/x/b.log".into()])
+                .unwrap()
+                .log
+                .as_deref(),
+            Some("/x/b.log")
+        );
     }
 }

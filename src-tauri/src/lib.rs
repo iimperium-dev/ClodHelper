@@ -1,4 +1,5 @@
 mod apps;
+mod autostart;
 mod claude_desktop;
 mod claude_policy;
 mod claude_proxy;
@@ -32,6 +33,10 @@ pub fn cli_mode() -> Option<i32> {
         if let Some(code) = env_proxy::apply_env_cli(&args) {
             return Some(code);
         }
+        #[cfg(target_os = "macos")]
+        if let Some(code) = autostart::login_item_cli(&args) {
+            return Some(code);
+        }
     }
     None
 }
@@ -50,15 +55,20 @@ pub fn run() {
     #[cfg(not(target_os = "windows"))]
     macos::fix_path_env();
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Автозапуск: на Windows — плагин (ключ Run), на macOS — SMAppService
+    // (src/autostart.rs); плагин там больше не регистрируется.
+    #[cfg(target_os = "windows")]
+    let builder = builder.plugin(tauri_plugin_autostart::init(
+        tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+        Some(vec!["--tray"]),
+    ));
+
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            Some(vec!["--tray"]),
-        ))
         .invoke_handler(tauri::generate_handler![
             commands::detect_node,
             commands::detect_python,
@@ -105,6 +115,8 @@ pub fn run() {
             commands::bridge_health,
             commands::bridge_exe_legacy,
             commands::bridge_versions,
+            commands::autostart_get,
+            commands::autostart_set,
             commands::bridge_set_route_mode,
             commands::bridge_update,
             commands::wizard_install,
@@ -142,6 +154,9 @@ pub fn run() {
             // «Объектах входа» как безымянный «sh») → `clod-helper --apply-env`.
             #[cfg(not(target_os = "windows"))]
             std::thread::spawn(env_proxy::migrate_legacy_agent);
+
+            // Автозапуск плагина («Clod Helper.plist») → SMAppService.
+            std::thread::spawn(autostart::migrate_legacy);
 
             // Если запущены с флагом --tray (после автозапуска Windows) —
             // прячем главное окно при старте, видна только иконка в трее.
@@ -194,8 +209,16 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<monitor::TrayHandles> {
     // выглядело «как у старых приложух». Любой клик (левый и правый) открывает
     // фирменный попап — паттерн Cloudflare WARP. Вся функциональность меню
     // (статус, тест, тумблеры, рестарт/стоп, выход) живёт в попапе.
-    let tray = TrayIconBuilder::with_id("main-tray")
-        .icon(app.default_window_icon().unwrap().clone())
+    let builder = TrayIconBuilder::with_id("main-tray");
+    // macOS: сразу монохромная template-иконка (цветная иконка приложения в
+    // строке меню выглядит чужеродно); дальше её ведёт monitor.
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .icon(tauri::image::Image::from_bytes(monitor::MAC_TEMPLATE)?)
+        .icon_as_template(true);
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.icon(app.default_window_icon().unwrap().clone());
+    let tray = builder
         .tooltip("Clod Helper")
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {

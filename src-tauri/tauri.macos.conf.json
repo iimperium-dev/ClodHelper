@@ -41,7 +41,10 @@
     "resources": ["resources/clod-bridge"],
     "macOS": {
       "minimumSystemVersion": "11.0",
-      "signingIdentity": "-"
+      "signingIdentity": "-",
+      "files": {
+        "Library/LaunchAgents/ru.iimperium.clodhelper.autostart.plist": "./macos/ru.iimperium.clodhelper.autostart.plist"
+      }
     }
   }
 }

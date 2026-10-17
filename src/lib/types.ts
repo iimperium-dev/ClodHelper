@@ -170,6 +170,13 @@ export interface BridgeUpstreamHealth {
   fail_streak?: number;
 }
 
+/** Автозапуск приложения при входе в систему. */
+export interface AutostartState {
+  enabled: boolean;
+  /** macOS: объект входа ждёт разрешения в Системных настройках. */
+  needs_approval: boolean;
+}
+
 /** Версии моста: установленного и встроенного в приложение. */
 export interface BridgeVersions {
   installed: string | null;

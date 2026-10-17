@@ -17,10 +17,6 @@
     "opener:default",
     "opener:allow-open-url",
     "shell:default",
-    "autostart:default",
-    "autostart:allow-enable",
-    "autostart:allow-disable",
-    "autostart:allow-is-enabled",
     "dialog:default",
     "dialog:allow-open",
     "notification:default"

@@ -5,6 +5,7 @@ import type {
   AppSettings,
   BridgeHealth,
   BridgeVersions,
+  AutostartState,
   BridgeTaskStatus,
   ClaudeProxyStatus,
   CursorInfo,
@@ -196,6 +197,15 @@ export async function bridgeHealth(): Promise<BridgeHealth> {
 /** Установленный exe моста — легаси-python (без /healthz)? Кэшируется по mtime. */
 export async function bridgeExeLegacy(): Promise<boolean> {
   return invoke<boolean>("bridge_exe_legacy");
+}
+
+/** Автозапуск приложения при входе (Windows — реестр, macOS — SMAppService). */
+export async function autostartGet(): Promise<AutostartState> {
+  return invoke<AutostartState>("autostart_get");
+}
+
+export async function autostartSet(enabled: boolean): Promise<AutostartState> {
+  return invoke<AutostartState>("autostart_set", { enabled });
 }
 
 /** Версии установленного и встроенного моста. */

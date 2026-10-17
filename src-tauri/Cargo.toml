@@ -36,6 +36,13 @@ sysinfo = "0.32"
 dirs = "5"
 tauri-plugin-dialog = "2.7.1"
 
+# Автозапуск на macOS: SMAppService (13+) — штатные «Объекты входа» с
+# иконкой и именем приложения вместо LaunchAgent «Clod Helper.plist».
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSError", "NSUserDefaults"] }
+objc2-service-management = { version = "0.3", default-features = false, features = ["std", "SMAppService"] }
+
 [profile.release]
 panic = "abort"
 codegen-units = 1

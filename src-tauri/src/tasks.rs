@@ -514,7 +514,8 @@ mod launchd {
             format!("127.0.0.1:{LISTEN_PORT}"),
         ];
         let pool = upstream_pool(proxy_url);
-        if bridge_supports_upstream_file(&exe) {
+        let modern = bridge_supports_upstream_file(&exe);
+        if modern {
             // Пул — файлом 0600: argv процесса видит любой пользователь Mac
             // через ps, а в URL лежит пароль прокси.
             let file = write_upstream_file(&pool)?;
@@ -532,8 +533,13 @@ mod launchd {
 
         let plist = plist_path().ok_or_else(|| "Не нашёл домашнюю папку".to_string())?;
         // stderr моста (в --quiet — только ошибки) — для диагностики. launchd
-        // дописывает бесконечно; обрезаем при каждой перерегистрации.
+        // дописывает бесконечно: мост ≥1.5 сам ротирует файл (`--log`, 1 МБ →
+        // .1); для старого моста обрезаем при каждой перерегистрации.
         let log = shim::install_dir().map(|d| d.join("bridge.log"));
+        if let (true, Some(path)) = (modern, log.as_ref()) {
+            args.push("--log".into());
+            args.push(path.to_string_lossy().to_string());
+        }
         if let Some(path) = log.as_ref() {
             if std::fs::metadata(path).is_ok_and(|m| m.len() > 1024 * 1024) {
                 let _ = std::fs::remove_file(path);

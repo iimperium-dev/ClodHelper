@@ -1109,6 +1109,25 @@ pub async fn bridge_versions(app: AppHandle) -> Result<BridgeVersions, String> {
     .map_err(|e| format!("Внутренняя ошибка: {e}"))
 }
 
+// ─── Автозапуск приложения ──────────────────────────────────────
+
+#[tauri::command]
+pub async fn autostart_get(app: AppHandle) -> Result<crate::autostart::AutostartState, String> {
+    tokio::task::spawn_blocking(move || crate::autostart::get(&app))
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))?
+}
+
+#[tauri::command]
+pub async fn autostart_set(
+    app: AppHandle,
+    enabled: bool,
+) -> Result<crate::autostart::AutostartState, String> {
+    tokio::task::spawn_blocking(move || crate::autostart::set(&app, enabled))
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))?
+}
+
 /// Живые счётчики моста. Ошибка = мост не отвечает ИЛИ это старый python-мост
 /// без /healthz (UI предложит «Обновить мост»).
 #[tauri::command]

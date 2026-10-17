@@ -1,15 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Loader2, Power } from "lucide-react";
-import {
-  disable as autostartDisable,
-  enable as autostartEnable,
-  isEnabled as autostartIsEnabled,
-} from "@tauri-apps/plugin-autostart";
 import { getVersion } from "@tauri-apps/api/app";
 import { Toggle } from "../components/Toggle";
 import { InfoTip } from "../components/InfoTip";
 import { useStatus } from "../lib/status";
+import { autostartGet, autostartSet } from "../lib/api";
 import { fadeInUp, staggerContainer } from "../lib/motion";
 import { isMac, osName } from "../lib/platform";
 
@@ -21,12 +17,16 @@ export function Settings() {
   const { health, task } = useStatus();
 
   const [autostart, setAutostart] = useState<boolean | null>(null);
+  /** macOS: объект входа добавлен, но ждёт разрешения в Системных настройках. */
+  const [needsApproval, setNeedsApproval] = useState(false);
   const [autostartBusy, setAutostartBusy] = useState(false);
   const [autostartError, setAutostartError] = useState<string | null>(null);
   const [appVersion, setAppVersion] = useState<string>("");
 
   const load = useCallback(async () => {
-    setAutostart(await autostartIsEnabled().catch(() => false));
+    const st = await autostartGet().catch(() => null);
+    setAutostart(st?.enabled ?? false);
+    setNeedsApproval(st?.needs_approval ?? false);
     setAppVersion(await getVersion().catch(() => ""));
   }, []);
 
@@ -38,13 +38,9 @@ export function Settings() {
     setAutostartBusy(true);
     setAutostartError(null);
     try {
-      if (autostart) {
-        await autostartDisable();
-        setAutostart(false);
-      } else {
-        await autostartEnable();
-        setAutostart(true);
-      }
+      const st = await autostartSet(!autostart);
+      setAutostart(st.enabled);
+      setNeedsApproval(st.needs_approval);
     } catch {
       setAutostartError(
         isMac
@@ -103,6 +99,12 @@ export function Settings() {
         </div>
         {autostartError && (
           <p className="mt-3 pl-11 text-[12px] text-vb-warn">{autostartError}</p>
+        )}
+        {!autostartError && needsApproval && (
+          <p className="mt-3 pl-11 text-[12px] leading-snug text-vb-warn">
+            macOS ждёт разрешения: Системные настройки → Основные → Объекты входа →
+            включите Clod Helper.
+          </p>
         )}
       </motion.section>
 

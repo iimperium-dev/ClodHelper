@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Автозапуск Clod Helper при входе (SMAppService, macOS 13+). Лежит в бандле:
+  Contents/Library/LaunchAgents. Запускает `clod-helper --login-item`, который
+  открывает приложение в трее через LaunchServices и сразу выходит (см.
+  src/autostart.rs) — поэтому без KeepAlive.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>ru.iimperium.clodhelper.autostart</string>
+	<key>BundleProgram</key>
+	<string>Contents/MacOS/clod-helper</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>Contents/MacOS/clod-helper</string>
+		<string>--login-item</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>LimitLoadToSessionType</key>
+	<string>Aqua</string>
+</dict>
+</plist>

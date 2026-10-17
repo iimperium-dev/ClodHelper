@@ -25,9 +25,59 @@ use tauri_plugin_notification::NotificationExt;
 
 use crate::shim::{self, LISTEN_PORT};
 
+#[cfg(not(target_os = "macos"))]
 const TRAY_OK: &[u8] = include_bytes!("../icons/tray-ok.png");
+#[cfg(not(target_os = "macos"))]
 const TRAY_WARN: &[u8] = include_bytes!("../icons/tray-warn.png");
+#[cfg(not(target_os = "macos"))]
 const TRAY_DOWN: &[u8] = include_bytes!("../icons/tray-down.png");
+
+/// macOS: норма — template (macOS сама красит под светлую/тёмную строку
+/// меню); тревога — «C» в цвет строки меню + цветная точка. Template-картинку
+/// с цветной точкой сделать нельзя: macOS перекрашивает её целиком.
+/// Генератор: scripts/gen-tray-icons-mac.py.
+#[cfg(target_os = "macos")]
+pub const MAC_TEMPLATE: &[u8] = include_bytes!("../icons/tray-mac-template.png");
+#[cfg(target_os = "macos")]
+const MAC_WARN: [&[u8]; 2] = [
+    include_bytes!("../icons/tray-mac-warn-light.png"),
+    include_bytes!("../icons/tray-mac-warn-dark.png"),
+];
+#[cfg(target_os = "macos")]
+const MAC_DOWN: [&[u8]; 2] = [
+    include_bytes!("../icons/tray-mac-down-light.png"),
+    include_bytes!("../icons/tray-mac-down-dark.png"),
+];
+
+/// Тёмная ли строка меню (системная тема). Дёшево: чтение NSUserDefaults.
+#[cfg(target_os = "macos")]
+fn menu_bar_dark() -> bool {
+    use objc2_foundation::{NSString, NSUserDefaults};
+    let defaults = NSUserDefaults::standardUserDefaults();
+    defaults
+        .stringForKey(&NSString::from_str("AppleInterfaceStyle"))
+        .is_some_and(|s| s.to_string().eq_ignore_ascii_case("dark"))
+}
+
+/// Картинка трея для состояния: (байты PNG, template?) + «вариант» для
+/// сравнения (на macOS тревожная иконка зависит ещё и от темы).
+fn tray_icon_for(state: BridgeState) -> (&'static [u8], bool, u8) {
+    #[cfg(target_os = "macos")]
+    {
+        let dark = usize::from(menu_bar_dark());
+        match state {
+            BridgeState::Ok => (MAC_TEMPLATE, true, 0),
+            BridgeState::Warn => (MAC_WARN[dark], false, 1 + dark as u8),
+            BridgeState::Down => (MAC_DOWN[dark], false, 3 + dark as u8),
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    match state {
+        BridgeState::Ok => (TRAY_OK, false, 0),
+        BridgeState::Warn => (TRAY_WARN, false, 1),
+        BridgeState::Down => (TRAY_DOWN, false, 3),
+    }
+}
 
 const TICK: Duration = Duration::from_secs(5);
 /// Пинг до upstream: раз в 12 тиков (~60с); «высоким» считаем > 1500 мс.
@@ -100,6 +150,7 @@ fn run(app: AppHandle, h: TrayHandles) {
     let mut nf_upstream_back = Debounce::new(Duration::from_secs(300));
     let mut upstream_alerted = false;
     let mut prev_tooltip = String::new();
+    let mut prev_icon: Option<u8> = None;
     let mut nf_ping = Debounce::new(Duration::from_secs(600));
 
     loop {
@@ -157,15 +208,14 @@ fn run(app: AppHandle, h: TrayHandles) {
         };
 
         // ── Иконка: меняем только на переходе (без мерцания) ──
-        if prev_state != Some(state) {
-            let bytes = match state {
-                BridgeState::Ok => TRAY_OK,
-                BridgeState::Warn => TRAY_WARN,
-                BridgeState::Down => TRAY_DOWN,
-            };
+        // (на macOS ещё и при смене темы, пока иконка тревожная)
+        let (bytes, template, variant) = tray_icon_for(state);
+        if prev_icon != Some(variant) {
+            let _ = h.tray.set_icon_as_template(template);
             if let Ok(img) = tauri::image::Image::from_bytes(bytes) {
                 let _ = h.tray.set_icon(Some(img));
             }
+            prev_icon = Some(variant);
         }
 
         // ── Tooltip ──
