@@ -80,9 +80,8 @@ export function Settings() {
                 Запускать с {osName}
               </div>
               <InfoTip>
-                Clod Helper стартует свёрнутым в {isMac ? "строку меню" : "трей"} при входе в {osName}.
-                Сам мост от этого не зависит — он автостартует отдельной
-                {isMac ? "агентом launchd" : "задачей Планировщика"} и работает даже без открытого приложения.
+                Clod Helper откроется в {isMac ? "строке меню" : "трее"} при входе в {osName}.
+                <span className="mt-1.5 block text-vb-silver-faint">Мост работает и без этого</span>
               </InfoTip>
             </div>
           </div>

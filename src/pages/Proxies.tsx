@@ -387,9 +387,7 @@ export function Proxies() {
           <h1 className="flex items-center gap-2 text-[24px] font-bold leading-tight tracking-[-0.02em] text-vb-fg">
             Прокси
             <InfoTip>
-              Пул до {MAX_POOL} прокси-серверов. <b>Основной</b> используется по
-              умолчанию; если он не отвечает — мост автоматически переключается
-              на запасные. Ниже можно закрепить сервисы за конкретными прокси.
+              До {MAX_POOL} прокси. <b>Основной</b> — по умолчанию, запасные — если он упал.
             </InfoTip>
           </h1>
           <p className="mt-0.5 text-[13px] text-vb-silver-dim">
@@ -706,12 +704,8 @@ export function Proxies() {
         <div className="mb-2 flex items-center gap-2 px-1">
           <h2 className="text-[15px] font-semibold text-vb-fg">Назначения</h2>
           <InfoTip>
-            Каждый AI-сервис можно закрепить за конкретным прокси из пула.
-            Закрепление <b>строгое</b>: сервис ходит только через выбранный
-            прокси — если тот лёг, сервис ждёт его восстановления, а НЕ
-            прыгает на другой IP (AI-сервисы, особенно Claude, флагают
-            аккаунты за смену IP). «Авто» — основной прокси, при его падении
-            разрешён переход на резервные.
+            Сервис ходит только через выбранный прокси — IP не меняется.
+            <span className="mt-1.5 block text-vb-silver-faint">«Авто» — основной прокси</span>
           </InfoTip>
         </div>
 

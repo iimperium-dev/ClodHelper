@@ -280,12 +280,8 @@ export function Apps() {
           <h1 className="flex items-center gap-2 text-[24px] font-bold leading-tight tracking-[-0.02em] text-vb-fg">
             Приложения
             <InfoTip>
-              Статус — по реальным соединениям: «Через мост» значит, что трафик
-              приложения сейчас идёт через ваш прокси. «Открыть» и ярлыки
-              запускают приложение сразу через мост. Claude Desktop получает
-              прокси штатной настройкой (вместе с агентами и Cowork), Telegram —
-              через отдельный SOCKS-вход моста; звонки Telegram через прокси не
-              идут. Программы, игнорирующие прокси, могут выйти напрямую.
+              «Через мост» — приложение сейчас идёт через ваш прокси.
+              <span className="mt-1.5 block text-vb-silver-faint">Звонки Telegram через прокси не работают</span>
             </InfoTip>
           </h1>
           <p className="mt-0.5 text-[13px] text-vb-silver-dim">

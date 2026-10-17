@@ -343,13 +343,11 @@ export function Overview({ onOpenProxies }: Props) {
             Соединения моста
           </h2>
           <InfoTip>
-            Счётчики с момента запуска моста. <b>Через прокси</b> — соединения
-            к AI-сервисам, ушедшие через платный прокси. <b>Напрямую</b> —
-            обычный трафик в обход прокси (умная маршрутизация). <b>Сейчас</b> —
-            открытые соединения в эту секунду. <b>Сбои</b> — соединения,
-            которые не удалось установить: кликните на цифру «Сбои», чтобы
-            посмотреть подробности. Единичные сбои — это нормально, мост
-            повторяет сам. При перезапуске моста счётчики обнуляются.
+            <span className="block"><b>Через прокси</b> — AI-сервисы</span>
+            <span className="block"><b>Напрямую</b> — остальной трафик</span>
+            <span className="block"><b>Сейчас</b> — открытые соединения</span>
+            <span className="block"><b>Сбои</b> — нажмите на цифру, чтобы увидеть</span>
+            <span className="mt-1.5 block text-vb-silver-faint">Считается с запуска моста</span>
           </InfoTip>
         </div>
         <div className="flex items-end justify-between gap-6">
@@ -468,11 +466,8 @@ export function Overview({ onOpenProxies }: Props) {
                   Системное проксирование
                 </div>
                 <InfoTip>
-                  Прописывает переменные HTTP_PROXY/HTTPS_PROXY, и вся система
-                  (VS Code, терминал, Claude Code, git, node) автоматически идёт
-                  через мост — без ярлыков и запусков «через хелпер». Действует
-                  на процессы, запущенные после включения: уже открытые
-                  терминалы нужно перезапустить.
+                  Терминал, VS Code и Claude Code идут через мост сами.
+                  <span className="mt-1.5 block text-vb-silver-faint">Уже открытые — перезапустите</span>
                 </InfoTip>
               </div>
             </div>
@@ -518,9 +513,8 @@ export function Overview({ onOpenProxies }: Props) {
                   Умная маршрутизация
                 </div>
                 <InfoTip>
-                  Через платный прокси идут только AI-домены (Anthropic, OpenAI,
-                  Copilot…), остальной трафик — напрямую: быстрее и не тратит
-                  трафик прокси. Выключено — весь трафик через прокси.
+                  Через прокси — только AI-сервисы, остальное напрямую.
+                  <span className="mt-1.5 block text-vb-silver-faint">Быстрее и экономит трафик прокси</span>
                 </InfoTip>
               </div>
             </div>
