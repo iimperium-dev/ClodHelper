@@ -78,6 +78,34 @@ fn is_bridge(remote: &str) -> bool {
         .any(|p| remote == format!("127.0.0.1:{p}") || remote == format!("[::1]:{p}"))
 }
 
+/// Дата-центры Telegram (официальные диапазоны MTProto). Для Telegram
+/// «мимо моста» считаем ТОЛЬКО их: сам клиент напрямую проверяет
+/// доступность сохранённых в нём прокси и ходит к служебным адресам —
+/// это не переписка, и тревога «мимо моста» из-за них была ложной.
+fn is_telegram_dc(remote: &str) -> bool {
+    if let Some(v6) = remote.strip_prefix('[') {
+        return ["2001:b28:f23d:", "2001:b28:f23f:", "2001:67c:4e8:", "2a0a:f280:"]
+            .iter()
+            .any(|p| v6.starts_with(p));
+    }
+    let Some(ip) = remote
+        .rsplit_once(':')
+        .and_then(|(h, _)| h.parse::<std::net::Ipv4Addr>().ok())
+    else {
+        return false;
+    };
+    let ip = u32::from(ip);
+    let in_net = |net: [u8; 4], bits: u32| {
+        let mask = if bits == 0 { 0 } else { u32::MAX << (32 - bits) };
+        ip & mask == u32::from(std::net::Ipv4Addr::from(net)) & mask
+    };
+    in_net([149, 154, 160, 0], 20)
+        || in_net([91, 108, 0, 0], 16)
+        || in_net([91, 105, 192, 0], 23)
+        || in_net([95, 161, 64, 0], 20)
+        || in_net([185, 76, 151, 0], 24)
+}
+
 fn is_loopback(remote: &str) -> bool {
     remote.starts_with("127.") || remote.starts_with("[::1]")
 }
@@ -97,13 +125,14 @@ fn summarize(
                 running: !names.is_empty() && running_cmds.iter().any(|c| matches(c, &names)),
                 ..Default::default()
             };
+            let telegram = p.id == "telegram";
             for (cmd, remote) in conns {
                 if !matches(cmd, &names) {
                     continue;
                 }
                 if is_bridge(remote) {
                     t.via_bridge += 1;
-                } else if !is_loopback(remote) {
+                } else if !is_loopback(remote) && (!telegram || is_telegram_dc(remote)) {
                     t.direct += 1;
                 }
             }
@@ -160,10 +189,20 @@ mod tests {
     }
 
     #[test]
+    fn telegram_dc_ranges() {
+        assert!(is_telegram_dc("149.154.167.51:443"));
+        assert!(is_telegram_dc("91.108.56.130:443"));
+        assert!(is_telegram_dc("[2001:b28:f23d:f001::a]:443"));
+        assert!(!is_telegram_dc("194.221.250.50:443"));
+        assert!(!is_telegram_dc("17.57.146.20:5223"));
+    }
+
+    #[test]
     fn splits_bridge_and_direct_per_app() {
         let lsof = "p1\ncClaude Helper\nf20\nn127.0.0.1:5000->127.0.0.1:8890\n\
                     f21\nn192.168.1.5:5001->160.79.104.10:443\n\
                     p2\ncTelegram\nf9\nn127.0.0.1:5002->127.0.0.1:8891\n\
+                    f10\nn198.18.0.1:5006->194.221.250.50:443\n\
                     p3\ncClaudeBar\nf3\nn10.0.0.2:5003->1.1.1.1:443\n\
                     p4\ncCode Helper (Plugin)\nf4\nn127.0.0.1:5004->127.0.0.1:8889\n\
                     f5\nn127.0.0.1:5005->127.0.0.1:3000\n";
