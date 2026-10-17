@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde::Serialize;
-use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
+use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
 /// Пользователь явно остановил мост (кнопка «Остановить»/меню трея). Пока флаг
 /// взведён, watchdog НЕ поднимает мост — иначе ручная остановка жила бы 5 сек
@@ -88,10 +88,10 @@ pub struct ShimTestResult {
 
 /// Найти python-процесс который запущен с `local-proxy.py` и собрать статус.
 pub fn status() -> ShimStatus {
-    let mut sys = System::new_with_specifics(
-        RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
-    );
-    sys.refresh_processes(ProcessesToUpdate::All, true);
+    let Ok(mut sys) = process_table().lock() else {
+        return ShimStatus::down();
+    };
+    refresh_process_table(&mut sys);
 
     for (pid, proc) in sys.processes() {
         let name = proc.name().to_string_lossy().to_lowercase();
@@ -140,6 +140,30 @@ pub fn status() -> ShimStatus {
     ShimStatus::down()
 }
 
+/// Одна таблица процессов на всё приложение. Раньше каждый вызов status()
+/// (UI каждые 5с + watchdog каждые 5с) собирал с нуля ВСЁ о каждом процессе
+/// системы — CPU, память, диск, окружение, cwd: ~6% CPU в простое на Mac.
+fn process_table() -> &'static std::sync::Mutex<System> {
+    static TABLE: std::sync::OnceLock<std::sync::Mutex<System>> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| std::sync::Mutex::new(System::new()))
+}
+
+/// Обновить только список процессов + argv (argv читается один раз на PID).
+fn refresh_process_table(sys: &mut System) {
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::new().with_cmd(UpdateKind::OnlyIfNotSet),
+    );
+}
+
+/// Мост слушает свой порт? Дешёвый TCP-connect вместо скана процессов —
+/// основной сигнал для watchdog'а.
+fn port_alive() -> bool {
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], LISTEN_PORT));
+    std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok()
+}
+
 fn parse_argv(argv: &[String]) -> (Option<String>, Option<String>) {
     let mut upstream = None;
     let mut listen = None;
@@ -147,7 +171,21 @@ fn parse_argv(argv: &[String]) -> (Option<String>, Option<String>) {
     while i < argv.len() {
         match argv[i].as_str() {
             "--upstream" if i + 1 < argv.len() => {
-                upstream = Some(argv[i + 1].clone());
+                if upstream.is_none() {
+                    upstream = Some(argv[i + 1].clone());
+                }
+                i += 2;
+            }
+            // Мост ≥1.5 получает пул файлом (пароль не светится в ps).
+            "--upstream-file" if i + 1 < argv.len() => {
+                if upstream.is_none() {
+                    upstream = std::fs::read_to_string(&argv[i + 1]).ok().and_then(|t| {
+                        t.lines()
+                            .map(str::trim)
+                            .find(|l| !l.is_empty() && !l.starts_with('#'))
+                            .map(String::from)
+                    });
+                }
                 i += 2;
             }
             "--listen" if i + 1 < argv.len() => {
@@ -199,10 +237,10 @@ pub fn stop() -> Result<usize, String> {
     // супервизор иначе перезапустит убитый мост через 5 секунд.
     crate::tasks::stop_ignore_errors();
 
-    let mut sys = System::new_with_specifics(
-        RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
-    );
-    sys.refresh_processes(ProcessesToUpdate::All, true);
+    let mut sys = process_table()
+        .lock()
+        .map_err(|_| "Внутренняя ошибка: таблица процессов".to_string())?;
+    refresh_process_table(&mut sys);
 
     let mut killed = 0usize;
     for (_pid, proc) in sys.processes() {
@@ -388,7 +426,8 @@ pub fn spawn_watchdog() {
                 std::thread::sleep(Duration::from_secs(WATCHDOG_INTERVAL_SEC));
                 continue;
             }
-            if status().running {
+            // Порт отвечает — мост жив, скан процессов не нужен.
+            if port_alive() || status().running {
                 consecutive_revivals = 0;
             } else {
                 // шим мёртв — пытаемся поднять. start() идемпотентен (через .vbs).

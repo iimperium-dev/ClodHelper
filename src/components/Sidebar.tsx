@@ -27,27 +27,20 @@ interface Props {
     статус никогда не прячется за навигацией), клик ведёт в Обзор.
 */
 export function Sidebar({ view, onNavigate }: Props) {
-  const { status, health, healthErr, exeLegacy } = useStatus();
+  const { status, health, healthErr, exeLegacy, orb, quality } = useStatus();
 
   const loading = status === null;
   const running = status?.running ?? false;
-  const upstreamDown =
-    health !== null && health.upstreams.some((u) => !u.healthy);
-  const orb = loading
-    ? ("loading" as const)
-    : !running
-      ? ("down" as const)
-      : upstreamDown
-        ? ("warn" as const)
-        : ("ok" as const);
 
   const statusLabel = loading
     ? "Проверяю…"
     : !running
       ? "Мост остановлен"
-      : upstreamDown
-        ? "Upstream лежит"
-        : "Мост активен";
+      : quality.some((q) => q.state === "down")
+        ? "Прокси не отвечает"
+        : orb === "warn"
+          ? "Прокси нестабилен"
+          : "Мост активен";
 
   const statusSub = !loading && running
     ? health

@@ -179,6 +179,38 @@ fn bridge_supports_rules(exe: &std::path::Path) -> bool {
     cmd.output().map(|o| o.status.success()).unwrap_or(false)
 }
 
+/// Версия моста по `--version` ("clod-bridge 1.5.0" → "1.5.0"). None —
+/// легаси-python или exe не запускается.
+pub fn exe_version(exe: &std::path::Path) -> Option<String> {
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg("--version");
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let out = cmd.output().ok().filter(|o| o.status.success())?;
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .nth(1)
+        .map(String::from)
+}
+
+/// "1.5.0" → (1, 5, 0) для сравнения версий.
+pub fn parse_version(v: &str) -> Option<(u32, u32, u32)> {
+    let mut it = v.trim().split('.').map(|p| p.parse::<u32>().ok());
+    Some((it.next()??, it.next()??, it.next().flatten().unwrap_or(0)))
+}
+
+/// Мост ≥1.5 принимает пул прокси файлом (`--upstream-file`).
+#[cfg(not(target_os = "windows"))]
+fn bridge_supports_upstream_file(exe: &std::path::Path) -> bool {
+    exe_version(exe)
+        .and_then(|v| parse_version(&v))
+        .is_some_and(|v| v >= (1, 5, 0))
+}
+
 /// Кэш пробы установленного exe. Ключ — mtime файла: после «Обновить мост»
 /// mtime меняется и кэш сбрасывается сам. Проба PyInstaller-exe стоит
 /// секунды (распаковка onefile) — без кэша UI-поллинг был бы болью.
@@ -435,7 +467,10 @@ pub use launchd::{migrate_from_startup_vbs, register, start, status, stop_ignore
 mod launchd {
     use std::path::PathBuf;
 
-    use super::{bridge_supports_rules, upstream_pool, write_rules_file, BridgeTaskStatus};
+    use super::{
+        bridge_supports_rules, bridge_supports_upstream_file, upstream_pool, write_rules_file,
+        BridgeTaskStatus,
+    };
     use crate::macos;
     use crate::shim::{self, LISTEN_PORT};
 
@@ -478,9 +513,18 @@ mod launchd {
             "--listen".into(),
             format!("127.0.0.1:{LISTEN_PORT}"),
         ];
-        for u in upstream_pool(proxy_url) {
-            args.push("--upstream".into());
-            args.push(u);
+        let pool = upstream_pool(proxy_url);
+        if bridge_supports_upstream_file(&exe) {
+            // Пул — файлом 0600: argv процесса видит любой пользователь Mac
+            // через ps, а в URL лежит пароль прокси.
+            let file = write_upstream_file(&pool)?;
+            args.push("--upstream-file".into());
+            args.push(file.to_string_lossy().to_string());
+        } else {
+            for u in pool {
+                args.push("--upstream".into());
+                args.push(u);
+            }
         }
         args.push("--rules".into());
         args.push(rules_path.to_string_lossy().to_string());
@@ -508,6 +552,40 @@ mod launchd {
         Ok(())
     }
 
+    /// `bridge-upstreams.txt` (0600, атомарно): по URL в строке, порядок пула
+    /// сохраняется — индексы assignments считаются по нему.
+    fn write_upstream_file(pool: &[String]) -> Result<PathBuf, String> {
+        let path = shim::install_dir()
+            .map(|d| d.join("bridge-upstreams.txt"))
+            .ok_or_else(|| "Не нашёл папку ClaudeDesktopProxy".to_string())?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("create dir {}: {e}", parent.display()))?;
+        }
+        let mut text = String::from("# Пул прокси Clod Helper (порядок важен). Файл перезаписывается.\n");
+        for u in pool {
+            text.push_str(u);
+            text.push('\n');
+        }
+        let tmp = path.with_extension("txt.tmp");
+        {
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp)
+                .map_err(|e| format!("write {}: {e}", tmp.display()))?;
+            f.write_all(text.as_bytes())
+                .map_err(|e| format!("write {}: {e}", tmp.display()))?;
+        }
+        macos::set_mode(&tmp, 0o600);
+        std::fs::rename(&tmp, &path).map_err(|e| format!("replace {}: {e}", path.display()))?;
+        Ok(path)
+    }
+
     pub fn start() -> Result<(), String> {
         let plist = plist_path().ok_or_else(|| "Не нашёл домашнюю папку".to_string())?;
         if !plist.exists() {
@@ -532,4 +610,18 @@ mod launchd {
 
     /// На macOS легаси-автозапуска (.vbs) не было — мигрировать нечего.
     pub fn migrate_from_startup_vbs() {}
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::parse_version;
+
+    #[test]
+    fn versions_compare_numerically() {
+        assert_eq!(parse_version("1.5.0"), Some((1, 5, 0)));
+        assert_eq!(parse_version("1.10"), Some((1, 10, 0)));
+        assert!(parse_version("1.10.0") > parse_version("1.9.9"));
+        assert_eq!(parse_version("abc"), None);
+        assert_eq!(parse_version(""), None);
+    }
 }

@@ -166,6 +166,16 @@ export interface BridgeUpstreamHealth {
   healthy: boolean;
   ok: number;
   fail: number;
+  /** Отказов подряд (мост 1.5.0+). */
+  fail_streak?: number;
+}
+
+/** Версии моста: установленного и встроенного в приложение. */
+export interface BridgeVersions {
+  installed: string | null;
+  bundled: string | null;
+  /** Встроенный новее установленного — пора «Обновить мост». */
+  outdated: boolean;
 }
 
 /** Ошибка из кольцевого буфера моста: секунды-от-старта + текст. */

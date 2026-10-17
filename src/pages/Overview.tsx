@@ -66,6 +66,9 @@ export function Overview({ onOpenProxies }: Props) {
     task,
     env,
     exeLegacy,
+    versions,
+    quality,
+    orb,
     history,
     poolPing,
     refresh,
@@ -83,14 +86,11 @@ export function Overview({ onOpenProxies }: Props) {
 
   const loading = status === null;
   const running = status?.running ?? false;
-  const upstreamDown = health !== null && health.upstreams.some((u) => !u.healthy);
-  const orb = loading
-    ? ("loading" as const)
-    : !running
-      ? ("down" as const)
-      : upstreamDown
-        ? ("warn" as const)
-        : ("ok" as const);
+  // Прокси, у которых за последнюю минуту часть подключений не прошла.
+  const shaky = quality.filter((q) => q.state !== "ok");
+  const shakyFails = shaky.reduce((a, q) => a + q.recentFail, 0);
+  const shakyTotal = shaky.reduce((a, q) => a + q.recentOk + q.recentFail, 0);
+  const bridgeOutdated = running && (versions?.outdated ?? false);
 
   const envOn = (env?.present ?? false) && (env?.points_to_bridge ?? false);
   const envForeign = (env?.present ?? false) && !(env?.points_to_bridge ?? false);
@@ -576,25 +576,37 @@ export function Overview({ onOpenProxies }: Props) {
             </div>
             <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-1.5">
               {(poolPing.length > 0
-                ? poolPing.map((p) => ({
+                ? poolPing.map((p, i) => ({
                     label: `${p.host}:${p.port}`,
-                    ok: p.ms !== null,
+                    // Живое качество из /healthz важнее 5-минутного пинга.
+                    state: quality[i]?.state ?? (p.ms !== null ? "ok" : "down"),
                     ms: p.ms,
+                    q: quality[i],
                   }))
-                : (health?.upstreams ?? []).map((u) => ({
+                : (health?.upstreams ?? []).map((u, i) => ({
                     label: chipLabel(u.url),
-                    ok: u.healthy,
+                    state: quality[i]?.state ?? (u.healthy ? "ok" : "down"),
                     ms: null as number | null,
+                    q: quality[i],
                   }))
               ).map((c, ci) => (
                 <span
                   key={`${ci}:${c.label}`}
+                  title={
+                    c.q
+                      ? `За минуту: ${c.q.recentOk} успешных, ${c.q.recentFail} неудачных подключений`
+                      : undefined
+                  }
                   className="flex items-center gap-1.5 rounded-md border border-vb-border bg-vb-surface-2 px-2 py-0.5 font-mono text-[11px] text-vb-silver"
                 >
                   <span
                     className={cn(
                       "h-1.5 w-1.5 rounded-full",
-                      c.ok ? "bg-vb-emerald" : "bg-vb-loss",
+                      c.state === "ok"
+                        ? "bg-vb-emerald"
+                        : c.state === "unstable"
+                          ? "bg-vb-warn"
+                          : "bg-vb-loss",
                     )}
                   />
                   {c.label}
@@ -609,6 +621,48 @@ export function Overview({ onOpenProxies }: Props) {
             </div>
             <ChevronRight className="h-4 w-4 shrink-0 text-vb-silver-faint transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-vb-silver" />
           </button>
+          {/* Нестабильный прокси: объясняем, что происходит и что это не опасно */}
+          {running && shaky.length > 0 && (
+            <div className="px-4 pb-4">
+              <div className="rounded-lg border border-vb-warn/30 bg-vb-warn/[0.05] p-3">
+                <p className="text-[12px] leading-snug text-vb-warn">
+                  {shaky.some((q) => q.state === "down")
+                    ? "Прокси не отвечает."
+                    : `Прокси нестабилен: за минуту не прошло ${shakyFails} из ${shakyTotal} подключений.`}{" "}
+                  Мост повторяет попытки к тому же прокси — IP не меняется, трафик в
+                  обход прокси не идёт. Если так постоянно — попросите у продавца другой
+                  сервер.
+                </p>
+              </div>
+            </div>
+          )}
+          {/* Встроенный в приложение мост новее установленного */}
+          {bridgeOutdated && (
+            <div className="px-4 pb-4">
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-vb-border bg-vb-surface-2/60 p-3">
+                <p className="text-[12px] leading-snug text-vb-silver">
+                  Доступно обновление моста {versions?.installed} → {versions?.bundled}:
+                  повторы при сбоях прокси, пароль прокси скрыт из списка процессов.
+                </p>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleBridgeUpdate}
+                  disabled={updatingBridge}
+                >
+                  {updatingBridge ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RotateCw className="h-3.5 w-3.5" />
+                  )}
+                  Обновить
+                </Button>
+              </div>
+              {updateError && (
+                <p className="mt-2 text-[12px] text-vb-loss">{updateError}</p>
+              )}
+            </div>
+          )}
           {/* Автозапуск: показываем только проблему (прогрессивное раскрытие) */}
           {task !== null && !task.registered && (
             <div className="px-4 pb-4">

@@ -240,11 +240,49 @@ mod backend {
     const ZSH_BEGIN: &str = "# >>> clod-helper proxy >>>";
     const ZSH_END: &str = "# <<< clod-helper proxy <<<";
     const KEYS: [&str; 3] = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"];
+    pub const APPLY_ENV_FLAG: &str = "--apply-env";
+
+    /// `clod-helper --apply-env K=V …` (из LaunchAgent при входе в систему):
+    /// выставить переменные через launchctl и выйти, не поднимая GUI.
+    /// Принимаем только наши ключи — агент не превращается в «setenv чего угодно».
+    pub fn apply_env_cli(args: &[String]) -> Option<i32> {
+        if args.get(1).map(String::as_str) != Some(APPLY_ENV_FLAG) {
+            return None;
+        }
+        let mut code = 0;
+        for pair in &args[2..] {
+            let Some((k, v)) = pair.split_once('=') else { continue };
+            if !KEYS.iter().any(|key| key.eq_ignore_ascii_case(k)) {
+                continue;
+            }
+            if !macos::launchctl(&["setenv", k, v]).0 {
+                code = 1;
+            }
+        }
+        Some(code)
+    }
 
     pub fn read_values(keys: &[&str]) -> Vec<(String, String)> {
         keys.iter()
             .filter_map(|k| read_user_env(k).map(|v| (k.to_string(), v)))
             .collect()
+    }
+
+    /// Переписать агент старого формата (`/bin/sh -c "launchctl setenv …"`)
+    /// на `clod-helper --apply-env` с теми же значениями. Разово при старте.
+    pub fn migrate_legacy_agent() {
+        let Some(plist) = agent_plist().filter(|p| p.exists()) else { return };
+        let Ok(text) = std::fs::read_to_string(&plist) else { return };
+        if !text.contains("<string>/bin/sh</string>") {
+            return;
+        }
+        let (Some(url), Some(no_proxy)) = (read_user_env("HTTPS_PROXY"), read_user_env("NO_PROXY"))
+        else {
+            return;
+        };
+        if let Err(e) = enable(&url, &no_proxy) {
+            tracing::warn!("миграция агента переменных не удалась: {e}");
+        }
     }
 
     pub fn read_user_env(name: &str) -> Option<String> {
@@ -271,17 +309,22 @@ mod backend {
         }
 
         // Ребут стирает launchctl setenv — повторяем его при входе в систему.
-        let script: String = pairs
-            .iter()
-            .flat_map(|(k, v)| [(k.to_string(), *v), (k.to_lowercase(), *v)])
-            .map(|(k, v)| format!("/bin/launchctl setenv {k} {}; ", macos::sh_quote(v)))
-            .collect();
+        // Запускаем сам clod-helper (`--apply-env`), а не `/bin/sh -c`: в
+        // «Объектах входа» безымянный «sh» выглядел как подозрительный объект.
+        let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
+        let mut program_arguments = vec![exe.to_string_lossy().to_string(), APPLY_ENV_FLAG.into()];
+        program_arguments.extend(
+            pairs
+                .iter()
+                .flat_map(|(k, v)| [(k.to_string(), *v), (k.to_lowercase(), *v)])
+                .map(|(k, v)| format!("{k}={v}")),
+        );
         let plist = agent_plist().ok_or_else(|| "Не нашёл домашнюю папку".to_string())?;
         macos::write_agent_plist(
             &plist,
             &macos::Agent {
                 label: ENV_AGENT,
-                program_arguments: &["/bin/sh".into(), "-c".into(), script],
+                program_arguments: &program_arguments,
                 keep_alive: false,
                 stderr_log: None,
             },
@@ -343,5 +386,30 @@ mod backend {
             return Ok(());
         }
         std::fs::write(&path, out).map_err(|e| format!("Не удалось записать {}: {e}", path.display()))
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub use backend::{apply_env_cli, migrate_legacy_agent};
+
+#[cfg(all(test, not(target_os = "windows")))]
+mod apply_env_tests {
+    use super::apply_env_cli;
+
+    #[test]
+    fn not_our_flag_means_normal_launch() {
+        let args = vec!["clod-helper".to_string(), "--tray".to_string()];
+        assert_eq!(apply_env_cli(&args), None);
+        assert_eq!(apply_env_cli(&["clod-helper".to_string()]), None);
+    }
+
+    #[test]
+    fn foreign_keys_are_ignored() {
+        // Только чужие/битые пары — launchctl не вызывается, выход 0.
+        let args: Vec<String> = ["clod-helper", "--apply-env", "PATH=/evil", "garbage", "DYLD_INSERT_LIBRARIES=x"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(apply_env_cli(&args), Some(0));
     }
 }

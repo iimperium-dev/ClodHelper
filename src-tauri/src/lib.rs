@@ -23,6 +23,19 @@ use tauri::{
     Manager, WindowEvent,
 };
 
+/// Служебные CLI-режимы, которые отрабатывают и выходят без GUI
+/// (LaunchAgent переменных прокси). None — обычный запуск приложения.
+pub fn cli_mode() -> Option<i32> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        let args: Vec<String> = std::env::args().collect();
+        if let Some(code) = env_proxy::apply_env_cli(&args) {
+            return Some(code);
+        }
+    }
+    None
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tracing_subscriber::fmt()
@@ -91,6 +104,7 @@ pub fn run() {
             // Мост: здоровье и маршрутизация
             commands::bridge_health,
             commands::bridge_exe_legacy,
+            commands::bridge_versions,
             commands::bridge_set_route_mode,
             commands::bridge_update,
             commands::wizard_install,
@@ -123,6 +137,11 @@ pub fn run() {
             // Миграция старых установок: .vbs в Startup → задача Планировщика
             // с автоперезапуском. Фоново — PS-вызовы медленные, UI не ждёт.
             std::thread::spawn(tasks::migrate_from_startup_vbs);
+
+            // macOS: агент переменных старого формата (`/bin/sh -c`, виден в
+            // «Объектах входа» как безымянный «sh») → `clod-helper --apply-env`.
+            #[cfg(not(target_os = "windows"))]
+            std::thread::spawn(env_proxy::migrate_legacy_agent);
 
             // Если запущены с флагом --tray (после автозапуска Windows) —
             // прячем главное окно при старте, видна только иконка в трее.

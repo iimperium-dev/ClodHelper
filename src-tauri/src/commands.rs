@@ -1033,6 +1033,9 @@ pub struct BridgeUpstreamHealth {
     pub healthy: bool,
     pub ok: u64,
     pub fail: u64,
+    /// Отказов подряд (мост 1.5.0+; у старых — 0).
+    #[serde(default)]
+    pub fail_streak: u64,
 }
 
 /// Одна ошибка из кольцевого буфера моста: секунды-от-старта + текст.
@@ -1072,15 +1075,58 @@ pub async fn bridge_exe_legacy() -> Result<bool, String> {
         .map_err(|e| format!("Внутренняя ошибка: {e}"))
 }
 
+/// Версии моста: установленного и встроенного в приложение. Если встроенный
+/// новее — UI предлагает «Обновить мост» (иначе после апдейта Clod Helper
+/// пользователь навсегда остался бы на старом мосте: exe копируется только
+/// мастером установки).
+#[derive(Debug, Serialize)]
+pub struct BridgeVersions {
+    pub installed: Option<String>,
+    pub bundled: Option<String>,
+    pub outdated: bool,
+}
+
+#[tauri::command]
+pub async fn bridge_versions(app: AppHandle) -> Result<BridgeVersions, String> {
+    let bundled_path = resolve_resource(&app, shim::BRIDGE_EXE).ok();
+    tokio::task::spawn_blocking(move || {
+        let installed = shim::bridge_exe_path()
+            .filter(|p| p.exists())
+            .and_then(|p| crate::tasks::exe_version(&p));
+        let bundled = bundled_path
+            .filter(|p| p.exists())
+            .and_then(|p| crate::tasks::exe_version(&p));
+        let outdated = match (
+            installed.as_deref().and_then(crate::tasks::parse_version),
+            bundled.as_deref().and_then(crate::tasks::parse_version),
+        ) {
+            (Some(i), Some(b)) => b > i,
+            _ => false,
+        };
+        BridgeVersions { installed, bundled, outdated }
+    })
+    .await
+    .map_err(|e| format!("Внутренняя ошибка: {e}"))
+}
+
 /// Живые счётчики моста. Ошибка = мост не отвечает ИЛИ это старый python-мост
 /// без /healthz (UI предложит «Обновить мост»).
 #[tauri::command]
 pub async fn bridge_health() -> Result<BridgeHealth, String> {
-    let client = reqwest::Client::builder()
-        .no_proxy() // сами к себе — не через системный прокси
-        .timeout(std::time::Duration::from_secs(3))
-        .build()
-        .map_err(|e| format!("client: {e}"))?;
+    // Один клиент на всё время жизни: UI спрашивает здоровье каждые 5с, а
+    // сборка reqwest-клиента (TLS-конфиг, пул) — не бесплатная.
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    let client = match CLIENT.get() {
+        Some(c) => c,
+        None => {
+            let c = reqwest::Client::builder()
+                .no_proxy() // сами к себе — не через системный прокси
+                .timeout(std::time::Duration::from_secs(3))
+                .build()
+                .map_err(|e| format!("client: {e}"))?;
+            CLIENT.get_or_init(|| c)
+        }
+    };
     let resp = client
         .get(format!("http://127.0.0.1:{}/healthz", shim::LISTEN_PORT))
         .send()

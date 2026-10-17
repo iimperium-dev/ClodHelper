@@ -4,6 +4,7 @@ import type {
   AppProfileStatus,
   AppSettings,
   BridgeHealth,
+  BridgeVersions,
   BridgeTaskStatus,
   ClaudeProxyStatus,
   CursorInfo,
@@ -195,6 +196,11 @@ export async function bridgeHealth(): Promise<BridgeHealth> {
 /** Установленный exe моста — легаси-python (без /healthz)? Кэшируется по mtime. */
 export async function bridgeExeLegacy(): Promise<boolean> {
   return invoke<boolean>("bridge_exe_legacy");
+}
+
+/** Версии установленного и встроенного моста. */
+export async function bridgeVersions(): Promise<BridgeVersions> {
+  return invoke<BridgeVersions>("bridge_versions");
 }
 
 export async function bridgeSetRouteMode(mode: "smart" | "all"): Promise<void> {

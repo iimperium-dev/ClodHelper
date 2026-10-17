@@ -58,6 +58,8 @@ struct Health {
 #[derive(Deserialize)]
 struct UpHealth {
     url: String,
+    /// Мост ≥1.5: false только после серии отказов подряд, а не после
+    /// единичного сбоя — уведомление больше не дёргается от каждого флапа.
     healthy: bool,
 }
 
@@ -95,6 +97,9 @@ fn run(app: AppHandle, h: TrayHandles) {
     let mut nf_down = Debounce::new(Duration::from_secs(60));
     let mut nf_up = Debounce::new(Duration::from_secs(60));
     let mut nf_upstream = Debounce::new(Duration::from_secs(300));
+    let mut nf_upstream_back = Debounce::new(Duration::from_secs(300));
+    let mut upstream_alerted = false;
+    let mut prev_tooltip = String::new();
     let mut nf_ping = Debounce::new(Duration::from_secs(600));
 
     loop {
@@ -164,14 +169,18 @@ fn run(app: AppHandle, h: TrayHandles) {
         }
 
         // ── Tooltip ──
+        // set_tooltip — вызов в UI-поток; дёргаем только когда текст поменялся.
         let tooltip = describe(state, &health, last_latency_ms);
-        let _ = h.tray.set_tooltip(Some(&tooltip));
+        if tooltip != prev_tooltip {
+            let _ = h.tray.set_tooltip(Some(&tooltip));
+            prev_tooltip = tooltip;
+        }
 
         // ── Уведомления на переходах ──
         match (prev_state, state) {
             (Some(BridgeState::Ok | BridgeState::Warn), BridgeState::Down) => {
                 if !shim::manually_stopped() && nf_down.ready() {
-                    notify(&app, "Мост упал — супервизор поднимет его в течение ~5 секунд");
+                    notify(&app, "Мост остановился — он перезапустится автоматически в течение ~5 секунд");
                 }
             }
             (Some(BridgeState::Down), BridgeState::Ok | BridgeState::Warn) => {
@@ -182,13 +191,35 @@ fn run(app: AppHandle, h: TrayHandles) {
             _ => {}
         }
         if prev_upstream_ok && !upstream_ok && nf_upstream.ready() {
-            notify(&app, "Upstream-прокси не отвечает — включён failover/повторы");
+            let pool = health.as_ref().map(|hh| hh.upstreams.len()).unwrap_or(1);
+            notify(&app, &upstream_down_text(pool));
+            upstream_alerted = true;
+        }
+        // Парное «отбой тревоги» — иначе пользователь не знает, кончилось ли.
+        if upstream_alerted && !prev_upstream_ok && upstream_ok && nf_upstream_back.ready() {
+            notify(&app, "Прокси снова отвечает — соединения идут как обычно");
+            upstream_alerted = false;
         }
 
         prev_state = Some(state);
         prev_upstream_ok = upstream_ok;
         tick = tick.wrapping_add(1);
         std::thread::sleep(TICK);
+    }
+}
+
+/// Текст тревоги по прокси. Закреплённый сервис (Claude) НИКОГДА не уходит
+/// на другой прокси — обещать «failover» нельзя: мост повторяет попытку к
+/// тому же прокси и ждёт его, выходной IP не меняется.
+fn upstream_down_text(pool: usize) -> String {
+    if pool > 1 {
+        "Прокси перестал отвечать. Claude ждёт свой прокси (IP не меняется), \
+         остальные сервисы переходят на резервный"
+            .into()
+    } else {
+        "Прокси перестал отвечать. Мост повторяет подключение к нему же — \
+         IP не меняется, трафик в обход прокси не идёт"
+            .into()
     }
 }
 

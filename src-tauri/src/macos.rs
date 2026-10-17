@@ -52,6 +52,9 @@ pub fn xml_escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
+/// Bundle id приложения (tauri.conf.json → identifier).
+pub const BUNDLE_ID: &str = "ru.iimperium.clodhelper";
+
 /// Описание LaunchAgent'а.
 pub struct Agent<'a> {
     pub label: &'a str,
@@ -75,6 +78,14 @@ pub fn write_agent_plist(path: &Path, agent: &Agent) -> Result<(), String> {
     } else {
         ""
     };
+    // AssociatedBundleIdentifiers: «Объекты входа» (macOS 13+) показывают
+    // агент как часть Clod Helper, а не безымянный процесс. Мосту ещё и лимит
+    // дескрипторов: дефолтные 256 у launchd — это ~120 туннелей.
+    let extra = if agent.keep_alive {
+        "\t<key>SoftResourceLimits</key>\n\t<dict>\n\t\t<key>NumberOfFiles</key>\n\t\t<integer>4096</integer>\n\t</dict>\n"
+    } else {
+        ""
+    };
     let log = agent
         .stderr_log
         .map(|p| {
@@ -89,9 +100,10 @@ pub fn write_agent_plist(path: &Path, agent: &Agent) -> Result<(), String> {
          <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
          <plist version=\"1.0\">\n<dict>\n\
          \t<key>Label</key>\n\t<string>{label}</string>\n\
+         \t<key>AssociatedBundleIdentifiers</key>\n\t<array>\n\t\t<string>{BUNDLE_ID}</string>\n\t</array>\n\
          \t<key>ProgramArguments</key>\n\t<array>\n{args}\t</array>\n\
          \t<key>RunAtLoad</key>\n\t<true/>\n\
-         {keep_alive}{log}</dict>\n</plist>\n",
+         {keep_alive}{extra}{log}</dict>\n</plist>\n",
         label = xml_escape(agent.label),
     );
     if let Some(parent) = path.parent() {
@@ -460,14 +472,26 @@ mod tests {
         assert!(text.contains("<string>http://u:p&amp;q@h:1</string>"));
         assert!(text.contains("<key>KeepAlive</key>\n\t<true/>"));
         assert!(text.contains("<key>RunAtLoad</key>"));
+        assert!(text.contains(&format!("<string>{BUNDLE_ID}</string>")));
+        assert!(text.contains("<key>NumberOfFiles</key>\n\t\t<integer>4096</integer>"));
         assert!(!path.with_extension("plist.tmp").exists());
+        // Валидный plist: plutil — тот же парсер, что у launchd.
+        #[cfg(target_os = "macos")]
+        assert!(std::process::Command::new("/usr/bin/plutil")
+            .args(["-lint", "-s"])
+            .arg(&path)
+            .status()
+            .unwrap()
+            .success());
 
         write_agent_plist(
             &path,
             &Agent { label: "ru.test", program_arguments: &args, keep_alive: false, stderr_log: None },
         )
         .unwrap();
-        assert!(!std::fs::read_to_string(&path).unwrap().contains("KeepAlive"));
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("KeepAlive"));
+        assert!(!text.contains("SoftResourceLimits"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
