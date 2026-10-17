@@ -520,7 +520,7 @@ pub fn install_bridge_binary(src: &std::path::Path, dst: &std::path::Path) -> st
 /// `http://127.0.0.1:8889` → если получили IP — всё работает.
 pub async fn test() -> ShimTestResult {
     let started = std::time::Instant::now();
-    let proxy = match reqwest::Proxy::http(format!("http://127.0.0.1:{LISTEN_PORT}")) {
+    let proxy = match reqwest::Proxy::http(crate::claude_policy::PROXY_URL) {
         Ok(p) => p,
         Err(e) => {
             return ShimTestResult {
@@ -531,9 +531,7 @@ pub async fn test() -> ShimTestResult {
             };
         }
     };
-    let proxy_https = match reqwest::Proxy::https(format!(
-        "http://127.0.0.1:{LISTEN_PORT}"
-    )) {
+    let proxy_https = match reqwest::Proxy::https(crate::claude_policy::PROXY_URL) {
         Ok(p) => p,
         Err(e) => {
             return ShimTestResult {
@@ -560,6 +558,9 @@ pub async fn test() -> ShimTestResult {
             };
         }
     };
+    // Через строгий вход 8890 (только upstream): в умном режиме общий вход
+    // пустил бы ipify напрямую, и тест показывал бы IP пользователя, а не
+    // прокси. Проверяем ровно то, что видят AI-сервисы.
     // api.ipify.org возвращает чистый IP, малый, без auth, без CORS-капризов.
     match client.get("https://api.ipify.org").send().await {
         Ok(resp) => {

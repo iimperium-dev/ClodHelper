@@ -380,7 +380,7 @@ export function Proxies() {
       variants={staggerContainer}
       initial="hidden"
       animate="show"
-      className="mx-auto flex w-full max-w-[620px] flex-col px-8 py-7"
+      className="mx-auto flex w-full max-w-[520px] flex-col px-6 py-6"
     >
       <motion.header variants={fadeInUp} className="flex items-end justify-between">
         <div>
