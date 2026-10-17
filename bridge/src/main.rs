@@ -21,6 +21,10 @@
 //! Дополнительно слушает 127.0.0.1:8890 (--strict-listen): этот вход всегда
 //! отправляет запросы через upstream, независимо от rules, без DIRECT.
 //!
+//! Ещё один вход — SOCKS5 на 127.0.0.1:8891 (--socks-listen, "off" — выкл):
+//! для приложений, которые умеют только SOCKS (Telegram для macOS). Всё,
+//! что пришло туда, идёт ТОЛЬКО через upstream (как строгий вход), без DIRECT.
+//!
 //! --supervise: режим самосупервизии — процесс перезапускает сам себя как
 //! воркер и поднимает упавшего через 5с. Задача Планировщика вешается прямо
 //! на exe: VBS/wscript-цикл (малварь-паттерн для антивирусов + депрекация
@@ -120,6 +124,9 @@ impl Mode {
 enum RoutingPolicy {
     Rules,
     UpstreamOnly,
+    /// SOCKS5-вход (Telegram): только upstream; прокси — назначенный группе
+    /// «telegram.org», иначе основной (№0).
+    Socks,
 }
 
 impl RoutingPolicy {
@@ -127,6 +134,7 @@ impl RoutingPolicy {
         match self {
             Self::Rules => "rules",
             Self::UpstreamOnly => "upstream_only",
+            Self::Socks => "socks_upstream_only",
         }
     }
 }
@@ -494,7 +502,7 @@ fn host_matches(host: &str, domain: &str) -> bool {
 }
 
 fn decide(state: &State, host: &str) -> Route {
-    if state.routing_policy == RoutingPolicy::UpstreamOnly {
+    if state.routing_policy != RoutingPolicy::Rules {
         return Route::Upstream;
     }
     if state.direct_domains.iter().any(|d| host_matches(host, d)) {
@@ -697,10 +705,21 @@ fn strict_upstream(state: &State) -> Pin {
 }
 
 fn request_upstream(state: &State, host: &str) -> Pin {
-    if state.routing_policy == RoutingPolicy::UpstreamOnly {
-        strict_upstream(state)
-    } else {
-        preferred_upstream(state, host)
+    match state.routing_policy {
+        RoutingPolicy::UpstreamOnly => strict_upstream(state),
+        RoutingPolicy::Socks => socks_upstream(state),
+        RoutingPolicy::Rules => preferred_upstream(state, host),
+    }
+}
+
+/// Telegram ходит по IP дата-центров, а не по доменам — назначение берём для
+/// группы целиком (по «telegram.org»), иначе основной прокси. Один прокси на
+/// все соединения: Telegram, как и Claude, не любит скачков IP.
+fn socks_upstream(state: &State) -> Pin {
+    match preferred_upstream(state, "telegram.org") {
+        Pin::None if !state.upstreams.is_empty() => Pin::Pinned(0),
+        Pin::None => Pin::Broken,
+        pin => pin,
     }
 }
 
@@ -885,7 +904,7 @@ fn healthz_json(state: &State) -> String {
         "port": state.listen.parse::<SocketAddr>().ok().map(|addr| addr.port()),
         "mode": if state.routing_policy == RoutingPolicy::UpstreamOnly { "all" } else { state.mode.as_str() },
         "routing_policy": state.routing_policy.as_str(),
-        "direct_allowed": state.routing_policy != RoutingPolicy::UpstreamOnly,
+        "direct_allowed": state.routing_policy == RoutingPolicy::Rules,
         "strict_ready": state.strict_ready(),
         "strict_upstream_index": if state.routing_policy == RoutingPolicy::UpstreamOnly {
             match strict_upstream(state) { Pin::Pinned(i) => Some(i), _ => None }
@@ -1159,12 +1178,161 @@ async fn handle(mut client: TcpStream, state: Arc<State>, sem: Arc<Semaphore>) {
     let _ = tokio::io::copy_bidirectional(&mut client, &mut server).await;
 }
 
+// ─── SOCKS5 (Telegram) ───────────────────────────────────────────
+
+/// Код ответа SOCKS5 (RFC 1928 §6).
+const SOCKS_OK: u8 = 0x00;
+const SOCKS_GENERAL_FAILURE: u8 = 0x01;
+const SOCKS_HOST_UNREACHABLE: u8 = 0x04;
+const SOCKS_CONNECTION_REFUSED: u8 = 0x05;
+const SOCKS_COMMAND_NOT_SUPPORTED: u8 = 0x07;
+const SOCKS_ADDRESS_NOT_SUPPORTED: u8 = 0x08;
+
+async fn socks_reply(client: &mut TcpStream, code: u8) -> std::io::Result<()> {
+    // BND.ADDR/PORT клиентам не нужны (Telegram их не читает) — нули.
+    client.write_all(&[5, code, 0, 1, 0, 0, 0, 0, 0, 0]).await
+}
+
+/// Рукопожатие SOCKS5 без аутентификации (вход только на loopback) и запрос
+/// CONNECT → (хост, порт). UDP ASSOCIATE/BIND не поддерживаются: звонки
+/// Telegram через прокси не пойдут (это же ограничение у HTTP-прокси).
+async fn socks_handshake(client: &mut TcpStream) -> Result<(String, u16), String> {
+    let mut hdr = [0u8; 2];
+    client.read_exact(&mut hdr).await.map_err(|e| format!("greeting: {e}"))?;
+    if hdr[0] != 5 {
+        return Err(format!("не SOCKS5 (версия {})", hdr[0]));
+    }
+    let mut methods = vec![0u8; hdr[1] as usize];
+    client.read_exact(&mut methods).await.map_err(|e| format!("methods: {e}"))?;
+    if !methods.contains(&0) {
+        let _ = client.write_all(&[5, 0xFF]).await;
+        return Err("клиент требует аутентификацию — вход без пароля".into());
+    }
+    client.write_all(&[5, 0]).await.map_err(|e| format!("greeting reply: {e}"))?;
+
+    let mut req = [0u8; 4];
+    client.read_exact(&mut req).await.map_err(|e| format!("request: {e}"))?;
+    if req[0] != 5 {
+        return Err("битый запрос SOCKS5".into());
+    }
+    let host = match req[3] {
+        1 => {
+            let mut a = [0u8; 4];
+            client.read_exact(&mut a).await.map_err(|e| e.to_string())?;
+            std::net::Ipv4Addr::from(a).to_string()
+        }
+        3 => {
+            let mut len = [0u8; 1];
+            client.read_exact(&mut len).await.map_err(|e| e.to_string())?;
+            let mut name = vec![0u8; len[0] as usize];
+            client.read_exact(&mut name).await.map_err(|e| e.to_string())?;
+            String::from_utf8(name).map_err(|_| "домен не UTF-8".to_string())?
+        }
+        4 => {
+            let mut a = [0u8; 16];
+            client.read_exact(&mut a).await.map_err(|e| e.to_string())?;
+            std::net::Ipv6Addr::from(a).to_string()
+        }
+        other => {
+            let _ = socks_reply(client, SOCKS_ADDRESS_NOT_SUPPORTED).await;
+            return Err(format!("тип адреса {other} не поддерживается"));
+        }
+    };
+    let mut port = [0u8; 2];
+    client.read_exact(&mut port).await.map_err(|e| e.to_string())?;
+    if req[1] != 1 {
+        let _ = socks_reply(client, SOCKS_COMMAND_NOT_SUPPORTED).await;
+        return Err(format!("команда SOCKS {} не поддерживается (только CONNECT)", req[1]));
+    }
+    Ok((host, u16::from_be_bytes(port)))
+}
+
+async fn handle_socks(mut client: TcpStream, state: Arc<State>, sem: Arc<Semaphore>) {
+    let (host, port) = match timeout(HEAD_TIMEOUT, socks_handshake(&mut client)).await {
+        Ok(Ok(t)) => t,
+        Ok(Err(e)) => {
+            state.log(&format!("socks: {e}"));
+            return;
+        }
+        Err(_) => return,
+    };
+    let Ok(_permit) = sem.try_acquire_owned() else {
+        state.log_err(&format!("лимит {MAX_CONNECTIONS} соединений SOCKS — отбиваю запрос"));
+        let _ = socks_reply(&mut client, SOCKS_GENERAL_FAILURE).await;
+        return;
+    };
+    state.total.fetch_add(1, Ordering::Relaxed);
+    state.active.fetch_add(1, Ordering::Relaxed);
+    let _guard = ActiveGuard(&state);
+
+    let host = normalize_host(&host);
+    let Pin::Pinned(i) = request_upstream(&state, &host) else {
+        state.errors.fetch_add(1, Ordering::Relaxed);
+        state.log_err("SOCKS: назначенный Telegram прокси вне пула — отказываю (IP менять нельзя)");
+        let _ = socks_reply(&mut client, SOCKS_GENERAL_FAILURE).await;
+        return;
+    };
+    if state.upstreams[i].scheme != "http" {
+        state.errors.fetch_add(1, Ordering::Relaxed);
+        state.log_err("SOCKS: HTTPS upstream пока не поддерживается");
+        let _ = socks_reply(&mut client, SOCKS_GENERAL_FAILURE).await;
+        return;
+    }
+    let authority = if host.contains(':') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    };
+    let head = format!("CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n\r\n");
+    let Some((conn, _)) = connect_upstream(&state, Some(i), head.as_bytes(), true).await else {
+        state.errors.fetch_add(1, Ordering::Relaxed);
+        let _ = socks_reply(&mut client, SOCKS_HOST_UNREACHABLE).await;
+        return;
+    };
+    let reply = conn.reply.unwrap_or_default();
+    if !matches!(status_code(&reply), Some(200..=299)) {
+        state.errors.fetch_add(1, Ordering::Relaxed);
+        let _ = socks_reply(&mut client, SOCKS_CONNECTION_REFUSED).await;
+        return;
+    }
+    state.via_upstream.fetch_add(1, Ordering::Relaxed);
+    let mut server = conn.stream;
+    if socks_reply(&mut client, SOCKS_OK).await.is_err() {
+        return;
+    }
+    // Байты, пришедшие от сервера вместе с «200» от прокси, — клиенту.
+    if let Some(end) = find_head_end(&reply) {
+        let tail = &reply[end + 4..];
+        if !tail.is_empty() && client.write_all(tail).await.is_err() {
+            return;
+        }
+    }
+    enable_keepalive(&client);
+    let _ = tokio::io::copy_bidirectional(&mut client, &mut server).await;
+}
+
+async fn serve_socks_listener(listener: TcpListener, state: Arc<State>, sem: Arc<Semaphore>) {
+    loop {
+        match listener.accept().await {
+            Ok((client, _)) => {
+                tokio::spawn(handle_socks(client, state.clone(), sem.clone()));
+            }
+            Err(e) => {
+                state.log_err(&format!("socks accept: {e} — продолжаю слушать"));
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+    }
+}
+
 // ─── main ────────────────────────────────────────────────────────
 
 struct Args {
     upstreams: Vec<String>,
     listen: String,
     strict_listen: String,
+    /// SOCKS5-вход для Telegram; None — выключен (`--socks-listen off`).
+    socks_listen: Option<String>,
     quiet: bool,
     rules: Option<String>,
     /// Собственный файл журнала с ротацией (см. mod logfile).
@@ -1182,6 +1350,7 @@ fn parse_args_from(argv: Vec<String>) -> Result<Args, String> {
         upstreams: Vec::new(),
         listen: "127.0.0.1:8888".into(),
         strict_listen: "127.0.0.1:8890".into(),
+        socks_listen: Some("127.0.0.1:8891".into()),
         quiet: false,
         rules: None,
         log: None,
@@ -1205,6 +1374,11 @@ fn parse_args_from(argv: Vec<String>) -> Result<Args, String> {
             "--listen" => {
                 i += 1;
                 a.listen = argv.get(i).ok_or("--listen requires HOST:PORT")?.clone();
+            }
+            "--socks-listen" => {
+                i += 1;
+                let v = argv.get(i).ok_or("--socks-listen requires IP:PORT or off")?;
+                a.socks_listen = (v != "off").then(|| v.clone());
             }
             "--strict-listen" => {
                 i += 1;
@@ -1240,6 +1414,15 @@ fn parse_args_from(argv: Vec<String>) -> Result<Args, String> {
         .map_err(|_| "--strict-listen requires a literal loopback IP and port")?;
     if !strict_addr.ip().is_loopback() || strict_addr.port() == 0 {
         return Err("--strict-listen must use a loopback IP and a non-zero port".into());
+    }
+    // SOCKS без пароля — только на loopback, иначе это открытый прокси в сеть.
+    if let Some(socks) = &a.socks_listen {
+        let addr = socks
+            .parse::<SocketAddr>()
+            .map_err(|_| "--socks-listen requires a literal loopback IP and port")?;
+        if !addr.ip().is_loopback() || addr.port() == 0 {
+            return Err("--socks-listen must use a loopback IP and a non-zero port".into());
+        }
     }
     Ok(a)
 }
@@ -1391,6 +1574,25 @@ async fn main() {
         last_logged: Mutex::new((String::new(), 0)),
     });
 
+    let socks_state = Arc::new(State {
+        started: state.started,
+        listen: args.socks_listen.clone().unwrap_or_default(),
+        quiet: args.quiet,
+        mode,
+        routing_policy: RoutingPolicy::Socks,
+        proxy_domains: Vec::new(),
+        direct_domains: Vec::new(),
+        assignments: state.assignments.clone(),
+        upstreams: state.upstreams.clone(),
+        total: AtomicU64::new(0),
+        active: AtomicU64::new(0),
+        via_upstream: AtomicU64::new(0),
+        via_direct: AtomicU64::new(0),
+        errors: AtomicU64::new(0),
+        last_errors: Mutex::new(std::collections::VecDeque::new()),
+        last_logged: Mutex::new((String::new(), 0)),
+    });
+
     // Коллизия строгого порта запрещает запуск Claude, но не должна
     // останавливать сеть остальных приложений на обычном входе.
     // Проверка Claude требует health именно строгого порта.
@@ -1420,6 +1622,22 @@ async fn main() {
     // выедать слоты Claude Desktop на строгом. Accept-цикл НИКОГДА не падает.
     let sem = Arc::new(Semaphore::new(MAX_CONNECTIONS));
     let strict_sem = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+    // SOCKS-вход независим от остальных: занятый порт 8891 не мешает Claude.
+    if let Some(addr) = args.socks_listen.as_deref() {
+        match TcpListener::bind(addr).await {
+            Ok(l) => {
+                socks_state.log(&format!("SOCKS5 (Telegram) upstream-only listener on {addr}"));
+                tokio::spawn(serve_socks_listener(
+                    l,
+                    socks_state,
+                    Arc::new(Semaphore::new(MAX_CONNECTIONS)),
+                ));
+            }
+            Err(e) => state.log_err(&format!(
+                "cannot bind SOCKS listener {addr} — {e}; Telegram через мост недоступен"
+            )),
+        }
+    }
     match strict_listener {
         Ok(strict_listener) => {
             strict_state.log(&format!(
@@ -1988,5 +2206,111 @@ mod tests {
                 .as_deref(),
             Some("/x/b.log")
         );
+    }
+
+    /// Прогнать один SOCKS-диалог: клиент шлёт `script`, ответ читается до EOF.
+    async fn socks_session(state: Arc<State>, script: Vec<u8>) -> Vec<u8> {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (client, _) = listener.accept().await.unwrap();
+            handle_socks(client, state, Arc::new(Semaphore::new(MAX_CONNECTIONS))).await;
+        });
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        client.write_all(&script).await.unwrap();
+        let mut out = Vec::new();
+        timeout(Duration::from_secs(3), client.read_to_end(&mut out)).await.unwrap().unwrap();
+        // Туннель живёт, пока открыты обе стороны — закрываем клиентскую.
+        drop(client);
+        timeout(Duration::from_secs(3), server).await.unwrap().unwrap();
+        out
+    }
+
+    fn socks_state(upstreams: Vec<Upstream>) -> State {
+        let mut st = test_state(RoutingPolicy::Socks, upstreams);
+        st.direct_domains = vec!["149.154.167.51".into()]; // правила SOCKS не касаются
+        st
+    }
+
+    #[tokio::test]
+    async fn socks_connect_goes_through_upstream_only() {
+        let (addr, accepted) = scripted_proxy(vec![Some(
+            b"HTTP/1.0 200 Connection established\r\n\r\nmtproto",
+        )])
+        .await;
+        let state = Arc::new(socks_state(vec![parse_upstream(&format!("http://u:p@{addr}")).unwrap()]));
+        // greeting(no-auth) + CONNECT 149.154.167.51:443 (IPv4)
+        let mut script = vec![5, 1, 0, 5, 1, 0, 1, 149, 154, 167, 51];
+        script.extend(443u16.to_be_bytes());
+        let out = socks_session(state.clone(), script).await;
+        assert_eq!(&out[..2], &[5, 0], "выбран метод без пароля");
+        assert_eq!(&out[2..4], &[5, SOCKS_OK]);
+        assert!(out.ends_with(b"mtproto"), "данные после «200» потеряны");
+        assert_eq!(accepted.load(Ordering::Relaxed), 1);
+        assert_eq!(state.via_upstream.load(Ordering::Relaxed), 1);
+        assert_eq!(state.via_direct.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn socks_domain_target_uses_assigned_telegram_proxy() {
+        let (addr, accepted) = scripted_proxy(vec![Some(b"HTTP/1.1 200 OK\r\n\r\n")]).await;
+        let other = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut st = socks_state(vec![
+            parse_upstream(&format!("http://{}", other.local_addr().unwrap())).unwrap(),
+            parse_upstream(&format!("http://{addr}")).unwrap(),
+        ]);
+        st.assignments = vec![("telegram.org".into(), 1)];
+        let state = Arc::new(st);
+        let mut script = vec![5, 1, 0, 5, 1, 0, 3, 12];
+        script.extend(b"web.telegram");
+        script.extend(443u16.to_be_bytes());
+        let out = socks_session(state, script).await;
+        assert_eq!(&out[2..4], &[5, SOCKS_OK]);
+        assert_eq!(accepted.load(Ordering::Relaxed), 1);
+        assert_no_connection(&other).await;
+    }
+
+    #[tokio::test]
+    async fn socks_rejects_udp_auth_and_dead_upstream() {
+        let (addr, _) = scripted_proxy(vec![]).await;
+        let state = Arc::new(socks_state(vec![parse_upstream(&format!("http://{addr}")).unwrap()]));
+        // UDP ASSOCIATE (cmd 3) — не поддерживаем.
+        let out = socks_session(state.clone(), vec![5, 1, 0, 5, 3, 0, 1, 0, 0, 0, 0, 0, 0]).await;
+        assert_eq!(&out[2..4], &[5, SOCKS_COMMAND_NOT_SUPPORTED]);
+        // Только логин/пароль (метод 2) — отказ 0xFF.
+        let out = socks_session(state, vec![5, 1, 2]).await;
+        assert_eq!(out, vec![5, 0xFF]);
+        // Мёртвый upstream — host unreachable, никаких прямых соединений.
+        let dead = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let dead_addr = dead.local_addr().unwrap();
+        drop(dead);
+        let state = Arc::new(socks_state(vec![parse_upstream(&format!("http://{dead_addr}")).unwrap()]));
+        let mut script = vec![5, 1, 0, 5, 1, 0, 1, 127, 0, 0, 1];
+        script.extend(443u16.to_be_bytes());
+        let out = socks_session(state.clone(), script).await;
+        assert_eq!(&out[2..4], &[5, SOCKS_HOST_UNREACHABLE]);
+        assert_eq!(state.via_direct.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn socks_listen_is_loopback_only_and_can_be_disabled() {
+        let parse = |v: &str| {
+            parse_args_from(vec![
+                "--upstream".into(),
+                "http://127.0.0.1:1".into(),
+                "--socks-listen".into(),
+                v.into(),
+            ])
+        };
+        assert_eq!(
+            parse_args_from(vec!["--upstream".into(), "http://127.0.0.1:1".into()])
+                .unwrap()
+                .socks_listen
+                .as_deref(),
+            Some("127.0.0.1:8891")
+        );
+        assert!(parse("off").unwrap().socks_listen.is_none());
+        assert!(parse("0.0.0.0:8891").is_err());
+        assert!(parse("[::1]:8891").is_ok());
     }
 }

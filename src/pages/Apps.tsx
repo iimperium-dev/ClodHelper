@@ -6,6 +6,7 @@ import { Button } from "../components/Button";
 import { AppRow } from "../components/AppRow";
 import { InfoTip } from "../components/InfoTip";
 import { ClaudeProxyControl } from "../components/ClaudeProxyControl";
+import { TelegramProxyControl } from "../components/TelegramProxyControl";
 import {
   appsAddCustom,
   appsCreateShortcut,
@@ -226,6 +227,7 @@ export function Apps() {
         )}
       </motion.section>
       <ClaudeProxyControl />
+      {isMac && <TelegramProxyControl />}
     </motion.div>
   );
 }

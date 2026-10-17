@@ -5,6 +5,7 @@ import type {
   AppSettings,
   BridgeHealth,
   BridgeVersions,
+  TelegramStatus,
   AutostartState,
   BridgeTaskStatus,
   ClaudeProxyStatus,
@@ -106,6 +107,15 @@ export async function settingsSetProxy(url: string): Promise<AppSettings> {
 
 export async function appsList(): Promise<AppProfileStatus[]> {
   return invoke<AppProfileStatus[]>("apps_list");
+}
+
+export function telegramStatus(): Promise<TelegramStatus> {
+  return invoke<TelegramStatus>("telegram_status");
+}
+
+/** Открыть в Telegram окно «Добавить прокси» с SOCKS-входом моста. */
+export function telegramSetup(): Promise<TelegramStatus> {
+  return invoke<TelegramStatus>("telegram_setup");
 }
 
 export function claudeProxyStatus(): Promise<ClaudeProxyStatus> {

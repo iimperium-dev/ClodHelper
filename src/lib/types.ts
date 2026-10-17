@@ -177,6 +177,19 @@ export interface AutostartState {
   needs_approval: boolean;
 }
 
+/** Telegram через SOCKS-вход моста (macOS). */
+export interface TelegramStatus {
+  supported: boolean;
+  app_path: string | null;
+  running: boolean;
+  /** Мост слушает SOCKS 127.0.0.1:8891 (мост ≥1.6). */
+  socks_ready: boolean;
+  /** Соединений Telegram через мост сейчас. */
+  via_bridge: number;
+  /** Соединений Telegram наружу мимо моста. */
+  direct: number;
+}
+
 /** Версии моста: установленного и встроенного в приложение. */
 export interface BridgeVersions {
   installed: string | null;

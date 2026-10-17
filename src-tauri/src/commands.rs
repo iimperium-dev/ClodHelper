@@ -40,6 +40,22 @@ pub async fn launch_claude_desktop() -> Result<(), String> {
         .map_err(|e| format!("Внутренняя ошибка: {e}"))?
 }
 
+/// Telegram через SOCKS-вход моста (macOS): статус по живым соединениям.
+#[tauri::command]
+pub async fn telegram_status() -> Result<crate::telegram::TelegramStatus, String> {
+    tokio::task::spawn_blocking(crate::telegram::status)
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))
+}
+
+/// Открыть в Telegram окно «Добавить прокси» (tg://socks) с входом моста.
+#[tauri::command]
+pub async fn telegram_setup() -> Result<crate::telegram::TelegramStatus, String> {
+    tokio::task::spawn_blocking(crate::telegram::setup)
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))?
+}
+
 /// Claude policy is separate from system proxy/environment settings.
 #[tauri::command]
 pub async fn claude_proxy_status() -> Result<crate::claude_proxy::ClaudeProxyStatus, String> {

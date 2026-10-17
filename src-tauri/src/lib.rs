@@ -17,6 +17,7 @@ mod settings;
 mod shim;
 mod system;
 mod tasks;
+mod telegram;
 mod vscode_config;
 
 use tauri::{
@@ -77,6 +78,8 @@ pub fn run() {
             commands::run_install,
             commands::launch_claude_desktop,
             commands::claude_proxy_status,
+            commands::telegram_status,
+            commands::telegram_setup,
             commands::claude_proxy_enable,
             commands::claude_proxy_disable,
             commands::launch_claude_code,
