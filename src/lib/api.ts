@@ -6,6 +6,7 @@ import type {
   BridgeHealth,
   BridgeVersions,
   TelegramStatus,
+  AppTraffic,
   AutostartState,
   BridgeTaskStatus,
   ClaudeProxyStatus,
@@ -107,6 +108,16 @@ export async function settingsSetProxy(url: string): Promise<AppSettings> {
 
 export async function appsList(): Promise<AppProfileStatus[]> {
   return invoke<AppProfileStatus[]>("apps_list");
+}
+
+/** Через мост ли идёт каждое приложение — по живым соединениям (macOS). */
+export function appsTraffic(): Promise<AppTraffic[]> {
+  return invoke<AppTraffic[]>("apps_traffic");
+}
+
+/** Закрыть приложение, открытое мимо моста, и открыть через мост. */
+export function appsRelaunch(id: string): Promise<void> {
+  return invoke<void>("apps_relaunch", { id });
 }
 
 export function telegramStatus(): Promise<TelegramStatus> {

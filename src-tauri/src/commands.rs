@@ -826,6 +826,17 @@ pub async fn apps_list() -> Result<Vec<AppProfileStatus>, String> {
     .map_err(|e| format!("Внутренняя ошибка: {e}"))
 }
 
+/// Через мост ли идёт каждое приложение — по живым соединениям (macOS).
+#[tauri::command]
+pub async fn apps_traffic() -> Result<Vec<crate::traffic::AppTraffic>, String> {
+    tokio::task::spawn_blocking(|| {
+        let s = settings::load_with_presets();
+        crate::traffic::snapshot(&s.app_profiles)
+    })
+    .await
+    .map_err(|e| format!("Внутренняя ошибка: {e}"))
+}
+
 /// Сохранить новое состояние профилей (enabled-галочки, добавленные свои).
 /// Если killswitch активен — правила файрвола НЕ пересобираются автоматически
 /// здесь (это делает отдельный killswitch_enable), чтобы не плодить UAC-промпты
@@ -899,6 +910,24 @@ pub async fn apps_launch(id: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || apps::launch(&profile))
         .await
         .map_err(|e| format!("Внутренняя ошибка: {e}"))?
+}
+
+/// Закрыть приложение, открытое мимо моста, и запустить через мост (macOS).
+#[tauri::command]
+pub async fn apps_relaunch(id: String) -> Result<(), String> {
+    let profile = settings::load_with_presets()
+        .app_profiles
+        .into_iter()
+        .find(|p| p.id == id)
+        .ok_or_else(|| "Профиль не найден".to_string())?;
+    #[cfg(not(target_os = "windows"))]
+    return tokio::task::spawn_blocking(move || apps::relaunch(&profile))
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))?;
+    #[cfg(target_os = "windows")]
+    return tokio::task::spawn_blocking(move || apps::launch(&profile))
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))?;
 }
 
 /// Создать ярлык «<name> (proxy)» на рабочем столе или в панели задач.
@@ -1351,7 +1380,46 @@ pub async fn wizard_install(
     let _ = tokio::task::spawn_blocking(settings::load_with_presets).await;
     step("presets", "ok");
 
-    // 5) Честная проверка: реальный запрос через мост, не зелёный pill.
+    // 5) Claude Desktop (macOS): штатный прокси Claude — одна системная
+    //    просьба пароля прямо в мастере, а не поиск кнопки потом. Отмена или
+    //    конфликт не фатальны: в «Приложениях» будет «Подключить».
+    #[cfg(not(target_os = "windows"))]
+    {
+        let has_claude = tokio::task::spawn_blocking(|| crate::claude_desktop::detect().is_some())
+            .await
+            .unwrap_or(false);
+        if has_claude {
+            step("claude", "start");
+            let configured = tokio::task::spawn_blocking(crate::claude_policy::status)
+                .await
+                .ok()
+                .and_then(|r| r.ok())
+                .is_some_and(|s| s.configured);
+            let ok = configured || claude_proxy_enable(app.clone()).await.is_ok();
+            step("claude", if ok { "ok" } else { "err" });
+        } else {
+            step("claude", "skip");
+        }
+    }
+
+    // 6) Telegram (macOS): мост уже слушает SOCKS — открываем окно «Добавить
+    //    прокси». Нет Telegram — шаг пропускается. Не фатально.
+    #[cfg(not(target_os = "windows"))]
+    {
+        step("telegram", "start");
+        let installed = tokio::task::spawn_blocking(|| {
+            let st = crate::telegram::status();
+            if st.app_path.is_some() && st.socks_ready && st.via_bridge == 0 {
+                let _ = crate::telegram::setup();
+            }
+            st.app_path.is_some()
+        })
+        .await
+        .unwrap_or(false);
+        step("telegram", if installed { "ok" } else { "skip" });
+    }
+
+    // 7) Честная проверка: реальный запрос через мост, не зелёный pill.
     step("test", "start");
     tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
     let test = shim::test().await;

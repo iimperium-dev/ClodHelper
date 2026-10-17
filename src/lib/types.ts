@@ -127,6 +127,8 @@ export interface ClaudeProxyStatus {
     proxy_url: string | null;
     pac_configured: boolean;
     notice: string | null;
+    /** macOS: служба возвращает настройку, если система её сотрёт. */
+    auto_restore?: boolean;
   };
   bridge_ready: boolean;
   bridge_error: string | null;
@@ -175,6 +177,14 @@ export interface AutostartState {
   enabled: boolean;
   /** macOS: объект входа ждёт разрешения в Системных настройках. */
   needs_approval: boolean;
+}
+
+/** Живые соединения приложения: через мост / мимо моста (macOS). */
+export interface AppTraffic {
+  id: string;
+  running: boolean;
+  via_bridge: number;
+  direct: number;
 }
 
 /** Telegram через SOCKS-вход моста (macOS). */

@@ -193,6 +193,11 @@ fn run(app: AppHandle, h: TrayHandles) {
             }
         }
 
+        // Telegram мимо моста → один раз сами открываем его окно прокси.
+        if tick % LATENCY_EVERY_TICKS == 6 && listening {
+            crate::telegram::auto_prompt_once();
+        }
+
         let upstream_ok = health
             .as_ref()
             .map(|hh| hh.upstreams.iter().all(|u| u.healthy))

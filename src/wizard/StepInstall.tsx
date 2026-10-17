@@ -6,6 +6,7 @@ import { Button } from "../components/Button";
 import { wizardInstall } from "../lib/api";
 import type { WizardInstallResult } from "../lib/types";
 import { cn } from "../lib/cn";
+import { isMac } from "../lib/platform";
 
 interface Props {
   proxyUrl: string;
@@ -18,6 +19,13 @@ const PHASES: { id: string; label: string }[] = [
   { id: "task", label: "Автозапуск и старт моста" },
   { id: "env", label: "Системное проксирование" },
   { id: "presets", label: "Профили приложений" },
+  // macOS: Claude просит пароль Mac один раз, Telegram — нажать «Подключить».
+  ...(isMac
+    ? [
+        { id: "claude", label: "Claude Desktop — macOS спросит пароль" },
+        { id: "telegram", label: "Telegram — нажмите «Подключить» в его окне" },
+      ]
+    : []),
   { id: "test", label: "Проверка соединения" },
 ];
 
@@ -56,7 +64,8 @@ export function StepInstall({ proxyUrl, onBack, onDone }: Props) {
       const state = e.payload.slice(idx + 1);
       setStates((s) => ({
         ...s,
-        [phase]: state === "start" ? "run" : state === "ok" ? "ok" : "err",
+        // skip — приложения нет, шаг не нужен: показываем как выполненный.
+        [phase]: state === "start" ? "run" : state === "ok" || state === "skip" ? "ok" : "err",
       }));
     });
     if (!started.current) {

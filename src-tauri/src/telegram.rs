@@ -74,8 +74,41 @@ pub fn setup() -> Result<TelegramStatus, String> {
     if !ok {
         return Err("Не удалось открыть Telegram по ссылке tg://socks".into());
     }
+    mark_prompted();
     Ok(st)
 }
+
+/// Запомнить, что окно прокси Telegram уже показывали.
+#[cfg(not(target_os = "windows"))]
+fn mark_prompted() {
+    let mut s = crate::settings::load();
+    if !s.telegram_prompted {
+        s.telegram_prompted = true;
+        let _ = crate::settings::save(&s);
+    }
+}
+
+/// Автонастройка: один раз, когда Telegram впервые замечен идущим напрямую
+/// при готовом SOCKS-входе, сами открываем его окно «Добавить прокси». Telegram
+/// не позволяет менять прокси снаружи — нажатие «Подключить» остаётся за
+/// пользователем, но искать настройку ему не нужно. Дальше не навязываемся.
+#[cfg(not(target_os = "windows"))]
+pub fn auto_prompt_once() {
+    if crate::settings::load().telegram_prompted {
+        return;
+    }
+    let st = status();
+    if st.app_path.is_none() || !st.running || !st.socks_ready || st.via_bridge > 0 || st.direct == 0
+    {
+        return;
+    }
+    if setup().is_ok() {
+        tracing::info!("Telegram идёт мимо моста — показал окно «Добавить прокси»");
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub fn auto_prompt_once() {}
 
 #[cfg(target_os = "windows")]
 pub fn setup() -> Result<TelegramStatus, String> {

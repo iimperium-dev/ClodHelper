@@ -1,27 +1,60 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { FolderOpen, Loader2, Plus } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Button } from "../components/Button";
-import { AppRow } from "../components/AppRow";
+import { AppRow, type RowAction, type RowStatus } from "../components/AppRow";
 import { InfoTip } from "../components/InfoTip";
 import { ClaudeProxyControl } from "../components/ClaudeProxyControl";
-import { TelegramProxyControl } from "../components/TelegramProxyControl";
 import {
   appsAddCustom,
   appsCreateShortcut,
   appsLaunch,
   appsList,
+  appsRelaunch,
   appsRemove,
   appsSet,
+  appsTraffic,
+  claudeProxyDisable,
+  claudeProxyEnable,
+  claudeProxyStatus,
+  telegramSetup,
+  telegramStatus,
 } from "../lib/api";
-import type { AppProfileStatus, ShortcutTarget } from "../lib/types";
+import type {
+  AppProfileStatus,
+  AppTraffic,
+  ClaudeProxyStatus,
+  TelegramStatus,
+} from "../lib/types";
 import { fadeInUp, staggerContainer } from "../lib/motion";
 import { isMac } from "../lib/platform";
 
+/** Статус по соединениям: раз в 5с, после действия — чаще (ждём переключения). */
+const TRAFFIC_POLL_MS = 5_000;
+const TRAFFIC_FAST_MS = 1_500;
+const FAST_TICKS = 20;
+
+const CLAUDE_ID = "claude-desktop";
+const TELEGRAM_ID = "telegram";
+
+const n = (k: number) => `${k} ${k % 10 === 1 && k % 100 !== 11 ? "соединение" : k % 10 >= 2 && k % 10 <= 4 && (k % 100 < 10 || k % 100 >= 20) ? "соединения" : "соединений"}`;
+
+/** Общая часть статуса: что показывают живые соединения процесса. */
+function trafficStatus(t: AppTraffic | undefined, idle: string): RowStatus {
+  if (!t?.running) return { tone: "muted", text: idle };
+  if (t.via_bridge > 0 && t.direct === 0) return { tone: "ok", text: `Через мост · ${n(t.via_bridge)}` };
+  if (t.direct > 0 && t.via_bridge === 0) return { tone: "warn", text: "Напрямую, мимо моста" };
+  if (t.direct > 0) return { tone: "warn", text: `Частично мимо моста · напрямую ${t.direct}` };
+  return { tone: "muted", text: "Открыт · сейчас без соединений" };
+}
+
 /*
-  Приложения: список профилей + добавление своего .exe В ОДНОМ месте
-  (раньше форма жила в Настройках, а список на Dashboard — context switch).
+  Приложения: один список одинаковых строк. У каждой — статус по ЖИВЫМ
+  соединениям (через мост / мимо моста) и одна кнопка, если что-то не так.
+  Claude Desktop и Telegram — такие же строки; их настройка — та же кнопка
+  «Подключить», а не отдельные панели. На Windows статуса по соединениям нет —
+  там работает тумблер killswitch и прежняя панель Claude.
 */
 export function Apps() {
   const [apps, setApps] = useState<AppProfileStatus[] | null>(null);
@@ -31,13 +64,133 @@ export function Apps() {
   const [addBusy, setAddBusy] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
 
+  const [traffic, setTraffic] = useState<Record<string, AppTraffic>>({});
+  const [claude, setClaude] = useState<ClaudeProxyStatus | null>(null);
+  const [telegram, setTelegram] = useState<TelegramStatus | null>(null);
+  const fastTicks = useRef(0);
+
   const load = useCallback(async () => {
     setApps(await appsList().catch(() => []));
   }, []);
 
+  const loadTraffic = useCallback(async () => {
+    if (!isMac) return;
+    const list = await appsTraffic().catch(() => [] as AppTraffic[]);
+    setTraffic(Object.fromEntries(list.map((t) => [t.id, t])));
+  }, []);
+
+  const loadSetup = useCallback(async () => {
+    if (!isMac) return;
+    await Promise.all([
+      claudeProxyStatus().then(setClaude).catch(() => {}),
+      telegramStatus().then(setTelegram).catch(() => {}),
+    ]);
+  }, []);
+
   useEffect(() => {
     void load();
-  }, [load]);
+    void loadSetup();
+    void loadTraffic();
+    if (!isMac) return;
+    // Скрытое окно не опрашиваем; после действия — чаще, пока не переключится.
+    let timer = 0;
+    const tick = () => {
+      if (!document.hidden) void loadTraffic();
+      const fast = fastTicks.current > 0;
+      if (fast) fastTicks.current -= 1;
+      timer = window.setTimeout(tick, fast ? TRAFFIC_FAST_MS : TRAFFIC_POLL_MS);
+    };
+    timer = window.setTimeout(tick, TRAFFIC_POLL_MS);
+    return () => window.clearTimeout(timer);
+  }, [load, loadSetup, loadTraffic]);
+
+  /** После действия: обновить настройки и чаще смотреть соединения. */
+  const after = async <T,>(p: Promise<T>): Promise<T> => {
+    const r = await p;
+    fastTicks.current = FAST_TICKS;
+    void loadSetup();
+    void loadTraffic();
+    return r;
+  };
+
+  const shortcutMenu = (app: AppProfileStatus): RowAction[] => [
+    {
+      label: "Ярлык на рабочий стол",
+      run: () => appsCreateShortcut(app.id, "desktop").then(() => "Ярлык на рабочем столе"),
+    },
+    {
+      label: isMac ? "Ярлык в «Программы»" : "Ярлык в меню Пуск",
+      run: () =>
+        appsCreateShortcut(app.id, "start_menu").then(() =>
+          isMac ? "Ярлык в «Программах» — перетащите его в Dock" : "Ярлык в Пуске",
+        ),
+    },
+  ];
+
+  /** Статус, главная кнопка и меню строки (macOS — по соединениям). */
+  const describe = (
+    app: AppProfileStatus,
+  ): { status: RowStatus | null; action: RowAction | null; menu: RowAction[] } => {
+    const remove: RowAction[] = app.builtin
+      ? []
+      : [{ label: "Удалить из списка", run: () => removeApp(app.id), danger: true }];
+    if (!isMac) {
+      return { status: null, action: null, menu: [...shortcutMenu(app), ...remove] };
+    }
+    const t = traffic[app.id];
+    const relaunch: RowAction = {
+      label: "Перезапустить через мост",
+      run: () => after(appsRelaunch(app.id)),
+    };
+
+    if (app.id === CLAUDE_ID) {
+      const policy = claude?.policy;
+      const menu = shortcutMenu(app);
+      if (policy?.managed) {
+        menu.push({
+          label: "Отключить прокси Claude",
+          run: () => after(claudeProxyDisable()).then((r) => r.policy.notice ?? "Прежние настройки Claude восстановлены"),
+          danger: true,
+        });
+      }
+      if (policy && !policy.configured) {
+        if (policy.conflict) {
+          return { status: { tone: "warn", text: "Задан чужой прокси Claude — Helper его не меняет" }, action: null, menu };
+        }
+        return {
+          status: { tone: "warn", text: "Прокси Claude не настроен" },
+          action: {
+            label: "Подключить",
+            run: () =>
+              after(claudeProxyEnable()).then(
+                (r) => r.policy.notice ?? "Готово. Перезапустите Claude Desktop (Cmd+Q и открыть снова).",
+              ),
+          },
+          menu,
+        };
+      }
+      const st = trafficStatus(t, "Настроен · откроется через мост");
+      if (st.tone === "warn") return { status: { tone: "warn", text: "Открыт до настройки — идёт мимо моста" }, action: relaunch, menu };
+      if (st.tone === "muted" && t?.running) return { status: { tone: "ok", text: "Через мост" }, action: null, menu };
+      return { status: st, action: null, menu };
+    }
+
+    if (app.id === TELEGRAM_ID) {
+      const connect: RowAction = {
+        label: "Подключить",
+        run: () => after(telegramSetup()).then(() => "В окне Telegram нажмите «Подключить»"),
+      };
+      const menu: RowAction[] = [{ label: "Открыть окно прокси в Telegram", run: connect.run }];
+      if (telegram && !telegram.socks_ready) {
+        return { status: { tone: "warn", text: "Мосту нужно обновление — «Обновить» в Обзоре" }, action: null, menu: [] };
+      }
+      const st = trafficStatus(t, "Не запущен");
+      return { status: st, action: st.tone === "warn" ? connect : null, menu };
+    }
+
+    const st = trafficStatus(t, "Откроется через мост");
+    return { status: st, action: st.tone === "warn" ? relaunch : null, menu: [...shortcutMenu(app), ...remove] };
+  };
 
   const toggleApp = async (id: string, enabled: boolean) => {
     if (!apps) return;
@@ -121,14 +274,16 @@ export function Apps() {
           <h1 className="flex items-center gap-2 text-[24px] font-bold leading-tight tracking-[-0.02em] text-vb-fg">
             Приложения
             <InfoTip>
-              «Открыть» и ярлык запускают приложение с настройкой прокси.
-              Для Claude Desktop настройте также штатный прокси в разделе ниже:
-              он передаётся агенту и локальному Cowork. Произвольные инструменты
-              могут игнорировать настройки прокси.
+              Статус — по реальным соединениям: «Через мост» значит, что трафик
+              приложения сейчас идёт через ваш прокси. «Открыть» и ярлыки
+              запускают приложение сразу через мост. Claude Desktop получает
+              прокси штатной настройкой (вместе с агентами и Cowork), Telegram —
+              через отдельный SOCKS-вход моста; звонки Telegram через прокси не
+              идут. Программы, игнорирующие прокси, могут выйти напрямую.
             </InfoTip>
           </h1>
           <p className="mt-0.5 text-[13px] text-vb-silver-dim">
-            Запуск приложений и настройка прокси Claude
+            Всё, что идёт через ваш прокси
           </p>
         </div>
         <Button variant="secondary" size="sm" onClick={() => setAdding((v) => !v)}>
@@ -212,22 +367,26 @@ export function Apps() {
         ) : (
           <div className="surface-card divide-y divide-vb-border/70 overflow-visible">
             <AnimatePresence mode="popLayout">
-              {apps.map((app) => (
-                <AppRow
-                  key={app.id}
-                  app={app}
-                  onToggle={(en) => toggleApp(app.id, en)}
-                  onLaunch={() => appsLaunch(app.id)}
-                  onShortcut={(t: ShortcutTarget) => appsCreateShortcut(app.id, t)}
-                  onRemove={app.builtin ? undefined : () => removeApp(app.id)}
-                />
-              ))}
+              {apps.map((app) => {
+                const row = describe(app);
+                return (
+                  <AppRow
+                    key={app.id}
+                    app={app}
+                    status={row.status}
+                    action={row.action}
+                    menu={row.menu}
+                    onToggle={(en) => toggleApp(app.id, en)}
+                    onLaunch={() => after(appsLaunch(app.id))}
+                  />
+                );
+              })}
             </AnimatePresence>
           </div>
         )}
       </motion.section>
-      <ClaudeProxyControl />
-      {isMac && <TelegramProxyControl />}
+      {/* macOS: Claude настраивается из своей строки. Windows — прежняя панель. */}
+      {!isMac && <ClaudeProxyControl />}
     </motion.div>
   );
 }

@@ -107,12 +107,30 @@ pub fn builtin_presets() -> Vec<AppProfile> {
             enabled: false,
             builtin: true,
         },
+        // Telegram не понимает --proxy-server и HTTP-прокси: он ходит через
+        // SOCKS-вход моста, настраивается в самом Telegram (telegram.rs),
+        // а «Открыть» просто запускает его.
+        AppProfile {
+            id: TELEGRAM_ID.into(),
+            name: "Telegram".into(),
+            kind: LaunchKind::ExeFlag,
+            exe_path: crate::macos::find_app(&["Telegram.app", "Telegram Desktop.app"])
+                .map(|p| p.to_string_lossy().to_string()),
+            app_id: None,
+            process_names: vec!["Telegram".into()],
+            enabled: false,
+            builtin: true,
+        },
     ]
 }
 
+/// Профиль Telegram (только macOS).
+pub const TELEGRAM_ID: &str = "telegram";
+
+/// На Mac Codex поставляется внутри десктопного ChatGPT.app.
 #[cfg(not(target_os = "windows"))]
 fn find_codex_app() -> Option<PathBuf> {
-    crate::macos::find_app(&["Codex.app"])
+    crate::macos::find_app(&["Codex.app", "ChatGPT.app"])
 }
 
 #[cfg(target_os = "windows")]
@@ -332,6 +350,45 @@ fn local_proxy_url() -> String {
 /// Msix: активируем через ярлык `.lnk` (несёт `--proxy-server`), если он есть;
 ///   иначе — голая MSIX-активация (UI-прокси может не подхватиться, но
 ///   killswitch-файрвол всё равно держит трафик в мосте).
+/// Приложение уже открыто мимо моста: настройки прокси применяются только при
+/// старте, поэтому закрываем его штатно (как Cmd+Q — с вопросами о
+/// несохранённом) и запускаем заново через мост.
+#[cfg(not(target_os = "windows"))]
+pub fn relaunch(p: &AppProfile) -> Result<(), String> {
+    let (installed, location) = profile_installed(p);
+    if !installed {
+        return Err(format!("{} не найден", p.name));
+    }
+    let exe = location.ok_or_else(|| format!("Путь к {} не определён", p.name))?;
+    let name = std::path::Path::new(exe.trim_end_matches('/'))
+        .file_stem()
+        .map(|s| s.to_string_lossy().replace('"', ""))
+        .ok_or_else(|| format!("Путь к {} не определён", p.name))?;
+    let is_running = || {
+        Command::new("/usr/bin/osascript")
+            .args(["-e", &format!("application \"{name}\" is running")])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "true")
+            .unwrap_or(false)
+    };
+    if is_running() {
+        let _ = Command::new("/usr/bin/osascript")
+            .args(["-e", &format!("tell application \"{name}\" to quit")])
+            .status();
+        // Ждём до 20с: приложение может спросить про несохранённое.
+        for _ in 0..40 {
+            if !is_running() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        if is_running() {
+            return Err(format!("{} не закрылся — закройте его и нажмите «Открыть»", p.name));
+        }
+    }
+    launch(p)
+}
+
 pub fn launch(p: &AppProfile) -> Result<(), String> {
     if p.id == crate::claude_desktop::PROFILE_ID {
         return crate::claude_desktop::launch();
@@ -357,6 +414,17 @@ fn launch_exe(p: &AppProfile) -> Result<(), String> {
     // передаётся — его дают глобальные переменные (launchctl setenv).
     #[cfg(not(target_os = "windows"))]
     {
+        if p.id == TELEGRAM_ID {
+            // Прокси Telegram — в его собственных настройках (SOCKS моста):
+            // флаги командной строки он не понимает.
+            let ok = Command::new("/usr/bin/open")
+                .arg("-a")
+                .arg(&exe)
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            return if ok { Ok(()) } else { Err("Не удалось запустить Telegram".into()) };
+        }
         if exe.trim_end_matches('/').ends_with(".app") {
             return open_app(&exe, &proxy, &p.name);
         }
