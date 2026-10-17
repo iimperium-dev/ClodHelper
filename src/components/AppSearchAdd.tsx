@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { FolderOpen, Loader2, Search } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { appsSearch } from "../lib/api";
+import { appsIcons, appsSearch } from "../lib/api";
 import type { FoundApp } from "../lib/types";
 import { appBrand, BrandTile } from "./BrandLogos";
 import { cn } from "../lib/cn";
@@ -27,7 +27,17 @@ export function AppSearchAdd({ existing, onAdd, onClose }: Props) {
   const [active, setActive] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [icons, setIcons] = useState<Record<string, string>>({});
   const seq = useRef(0);
+
+  // Настоящие иконки найденных программ (подгружаются после подсказок).
+  useEffect(() => {
+    const need = results.map((r) => r.path).filter((p) => !(p in icons));
+    if (need.length === 0) return;
+    appsIcons(need)
+      .then((got) => setIcons((old) => ({ ...old, ...got })))
+      .catch(() => {});
+  }, [results, icons]);
 
   useEffect(() => {
     const q = query.trim();
@@ -102,6 +112,12 @@ export function AppSearchAdd({ existing, onAdd, onClose }: Props) {
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={onKey}
           placeholder="Название программы"
+          // Без автодополнения macOS: подсказка «Wec ×» над полем мешала.
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="off"
+          spellCheck={false}
+          {...{ writingsuggestions: "false" }}
           className="h-11 min-w-0 flex-1 bg-transparent text-[14px] text-vb-fg outline-none placeholder:text-vb-silver-faint"
         />
         <button
@@ -144,7 +160,9 @@ export function AppSearchAdd({ existing, onAdd, onClose }: Props) {
                         i === active ? "bg-vb-surface-2" : "hover:bg-vb-surface-2/60",
                       )}
                     >
-                      {brand ? (
+                      {icons[r.path] ? (
+                        <img src={icons[r.path]} alt="" className="h-8 w-8 shrink-0" draggable={false} />
+                      ) : brand ? (
                         <BrandTile glow={brand.glow}>{brand.glyph}</BrandTile>
                       ) : (
                         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-vb-surface-2 text-[13px] font-semibold text-vb-silver">

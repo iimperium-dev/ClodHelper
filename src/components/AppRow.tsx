@@ -38,6 +38,8 @@ interface Props {
   /** Пункты меню «…» (ярлыки, отключение, удаление). */
   menu: RowAction[];
   onLaunch: () => Promise<void>;
+  /** Настоящая иконка программы (macOS, свои приложения). */
+  icon?: string;
   /** Тумблер — только Windows (там он управляет killswitch). */
   onToggle?: (enabled: boolean) => void;
 }
@@ -48,7 +50,7 @@ interface Props {
   «Подключить», если трафик идёт мимо моста, иначе «Открыть». Всё
   второстепенное — в меню «…».
 */
-export function AppRow({ app, status, action, menu, onLaunch, onToggle }: Props) {
+export function AppRow({ app, status, action, menu, onLaunch, onToggle, icon }: Props) {
   const [busy, setBusy] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [flash, setFlash] = useState<{ ok: boolean; text: string } | null>(null);
@@ -92,7 +94,14 @@ export function AppRow({ app, status, action, menu, onLaunch, onToggle }: Props)
   return (
     <motion.div layout className="px-4 py-3">
       <div className="flex items-center gap-3">
-        {brand ? (
+        {icon && !brand ? (
+          <img
+            src={icon}
+            alt=""
+            draggable={false}
+            className={cn("h-8 w-8 shrink-0", !app.installed && "opacity-50 saturate-50")}
+          />
+        ) : brand ? (
           <BrandTile glow={brand.glow} disabled={!app.installed}>
             {brand.glyph}
           </BrandTile>

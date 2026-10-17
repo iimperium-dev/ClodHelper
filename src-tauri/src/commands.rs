@@ -826,6 +826,14 @@ pub async fn apps_list() -> Result<Vec<AppProfileStatus>, String> {
     .map_err(|e| format!("Внутренняя ошибка: {e}"))
 }
 
+/// Иконки программ (data-URL PNG) для подсказок и строк своих приложений.
+#[tauri::command]
+pub async fn apps_icons(paths: Vec<String>) -> Result<std::collections::HashMap<String, String>, String> {
+    tokio::task::spawn_blocking(move || apps::icons(&paths))
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))
+}
+
 /// Поиск установленных программ по названию (Spotlight, macOS).
 #[tauri::command]
 pub async fn apps_search(query: String) -> Result<Vec<apps::FoundApp>, String> {

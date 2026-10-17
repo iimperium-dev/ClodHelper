@@ -1090,5 +1090,67 @@ mod search_tests {
         for q in ["телег", "vs", "vsc", "терм", "chat", "хром", "ватс"] {
             println!("{q} → {:?}", search_installed(q).iter().map(|f| &f.name).collect::<Vec<_>>());
         }
+        let icons = icons(&["/System/Applications/Utilities/Terminal.app".to_string()]);
+        println!("icon → {}", icons.values().next().map(|v| &v[..40]).unwrap_or("нет"));
     }
+}
+
+// ─── Иконки программ (macOS) ────────────────────────────────────
+
+#[cfg(not(target_os = "windows"))]
+const ICON_SCRIPT: &str = include_str!("../resources/app-icons.js");
+
+/// Иконки программ как data-URL PNG 64×64 (для подсказок поиска и строк
+/// своих приложений). Кэш в памяти: иконки не меняются за время работы.
+#[cfg(not(target_os = "windows"))]
+pub fn icons(paths: &[String]) -> std::collections::HashMap<String, String> {
+    use std::collections::HashMap;
+    use std::io::Write;
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    let missing: Vec<&String> = {
+        let c = cache.lock().map(|c| c.clone()).unwrap_or_default();
+        paths
+            .iter()
+            .filter(|p| !c.contains_key(*p) && p.ends_with(".app") && std::path::Path::new(p).exists())
+            .take(24)
+            .collect()
+    };
+    if !missing.is_empty() {
+        let child = Command::new("/usr/bin/osascript")
+            .args(["-l", "JavaScript", "-"])
+            .args(missing.iter().map(|p| p.as_str()))
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        if let Ok(mut child) = child {
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(ICON_SCRIPT.as_bytes());
+            }
+            if let Ok(out) = child.wait_with_output() {
+                if let Ok(map) =
+                    serde_json::from_slice::<HashMap<String, String>>(&out.stdout)
+                {
+                    if let Ok(mut c) = cache.lock() {
+                        for (k, v) in map {
+                            c.insert(k, format!("data:image/png;base64,{v}"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let c = cache.lock().map(|c| c.clone()).unwrap_or_default();
+    paths
+        .iter()
+        .filter_map(|p| c.get(p).map(|v| (p.clone(), v.clone())))
+        .collect()
+}
+
+#[cfg(target_os = "windows")]
+pub fn icons(_paths: &[String]) -> std::collections::HashMap<String, String> {
+    std::collections::HashMap::new()
 }

@@ -9,6 +9,7 @@ import { AppSearchAdd } from "../components/AppSearchAdd";
 import {
   appsAddCustom,
   appsCreateShortcut,
+  appsIcons,
   appsLaunch,
   appsList,
   appsRelaunch,
@@ -67,11 +68,24 @@ export function Apps() {
   const [traffic, setTraffic] = useState<Record<string, AppTraffic>>({});
   const [claude, setClaude] = useState<ClaudeProxyStatus | null>(null);
   const [telegram, setTelegram] = useState<TelegramStatus | null>(null);
+  const [icons, setIcons] = useState<Record<string, string>>({});
   const fastTicks = useRef(0);
 
   const load = useCallback(async () => {
     setApps(await appsList().catch(() => []));
   }, []);
+
+  // Иконки своих приложений (встроенные рисуются брендовыми плитками).
+  useEffect(() => {
+    if (!isMac || !apps) return;
+    const need = apps
+      .filter((a) => !a.builtin && a.location && !(a.location in icons))
+      .map((a) => a.location as string);
+    if (need.length === 0) return;
+    appsIcons(need)
+      .then((got) => setIcons((old) => ({ ...old, ...got })))
+      .catch(() => {});
+  }, [apps, icons]);
 
   const loadTraffic = useCallback(async () => {
     if (!isMac) return;
@@ -389,6 +403,7 @@ export function Apps() {
                     menu={row.menu}
                     onToggle={(en) => toggleApp(app.id, en)}
                     onLaunch={() => after(appsLaunch(app.id))}
+                    icon={app.location ? icons[app.location] : undefined}
                   />
                 );
               })}

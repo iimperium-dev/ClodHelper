@@ -111,6 +111,11 @@ export async function appsList(): Promise<AppProfileStatus[]> {
   return invoke<AppProfileStatus[]>("apps_list");
 }
 
+/** Иконки программ: путь .app → data-URL PNG (macOS; кэшируются в бэкенде). */
+export function appsIcons(paths: string[]): Promise<Record<string, string>> {
+  return invoke<Record<string, string>>("apps_icons", { paths });
+}
+
 /** Поиск установленных программ по названию (Spotlight, macOS). */
 export function appsSearch(query: string): Promise<FoundApp[]> {
   return invoke<FoundApp[]>("apps_search", { query });
