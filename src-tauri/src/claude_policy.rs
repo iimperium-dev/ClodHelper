@@ -28,6 +28,9 @@ pub struct ClaudePolicyStatus {
     pub proxy_url: Option<String>,
     pub pac_configured: bool,
     pub notice: Option<String>,
+    /// macOS: стоит служба, возвращающая настройку, если система её сотрёт.
+    #[serde(default)]
+    pub auto_restore: bool,
 }
 
 #[derive(Deserialize)]
@@ -69,7 +72,9 @@ pub fn enable() -> Result<ClaudePolicyStatus, String> {
     if let Some(conflict) = current.conflict.as_ref() {
         return Err(format!("Политика Claude: {conflict}"));
     }
-    if current.configured && current.managed {
+    // macOS: уже настроенным без службы автовосстановления повторный Enable
+    // её доставит (политика при этом не меняется — значение уже наше).
+    if current.configured && current.managed && (current.auto_restore || cfg!(target_os = "windows")) {
         return Ok(current);
     }
     mutate("Enable")
@@ -155,9 +160,19 @@ pub fn status() -> Result<ClaudePolicyStatus, String> {
 fn elevate(action: &str) -> Result<ClaudePolicyStatus, String> {
     use base64::Engine;
     let encoded = base64::engine::general_purpose::STANDARD.encode(POLICY_SCRIPT);
-    let shell = format!(
-        "/bin/echo {encoded} | /usr/bin/base64 -D | /bin/sh -s -- {action}; exit 0"
-    );
+    // Enable кладёт копию скрипта в root-папку — её запускает служба
+    // автовосстановления (LaunchDaemon). Пишет root в root-owned каталог:
+    // пользовательский процесс подменить копию не может.
+    let shell = if action == "Enable" {
+        format!(
+            "/bin/mkdir -p '{dir}' && /usr/sbin/chown root:wheel '{dir}' && /bin/chmod 755 '{dir}' && \
+             /bin/echo {encoded} | /usr/bin/base64 -D > '{dir}/claude-proxy-policy.sh'; \
+             /bin/echo {encoded} | /usr/bin/base64 -D | /bin/sh -s -- {action}; exit 0",
+            dir = "/Library/Application Support/ClodHelper",
+        )
+    } else {
+        format!("/bin/echo {encoded} | /usr/bin/base64 -D | /bin/sh -s -- {action}; exit 0")
+    };
     let apple = format!(
         "do shell script \"{shell}\" with prompt \"Clod Helper настраивает прокси для Claude Desktop.\" with administrator privileges"
     );

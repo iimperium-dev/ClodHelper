@@ -146,6 +146,12 @@ export function Apps() {
     if (app.id === CLAUDE_ID) {
       const policy = claude?.policy;
       const menu = shortcutMenu(app);
+      if (policy?.configured && policy.auto_restore === false) {
+        menu.push({
+          label: "Включить автовосстановление",
+          run: () => after(claudeProxyEnable()).then((r) => r.policy.notice ?? "Автовосстановление включено"),
+        });
+      }
       if (policy?.managed) {
         menu.push({
           label: "Отключить прокси Claude",
