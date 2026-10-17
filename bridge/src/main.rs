@@ -35,7 +35,7 @@ use std::time::{Duration, Instant};
 
 use base64::Engine;
 use serde::Deserialize;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
@@ -45,8 +45,25 @@ use tokio::time::timeout;
 const MAX_CONNECTIONS: usize = 256;
 /// Максимум байтов заголовков первого запроса.
 const HEAD_LIMIT: usize = 65536;
-/// Таймаут установки исходящего TCP-соединения (upstream или direct).
+/// Таймаут установки прямого (DIRECT) TCP-соединения.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+/// Таймаут TCP-коннекта к upstream'у. Короче DIRECT: живой прокси отвечает
+/// за десятки миллисекунд, а зависший SYN раньше съедал 20с — дольше, чем
+/// клиент готов ждать, и 502 приходил уже в закрытый сокет.
+const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(4);
+/// Сколько ждём ответа upstream'а на CONNECT. Прокси, принявший TCP, но
+/// молчащий на CONNECT, — главный источник «зависших на 15с» запросов.
+const UPSTREAM_REPLY_TIMEOUT: Duration = if cfg!(test) {
+    Duration::from_millis(300)
+} else {
+    Duration::from_secs(10)
+};
+/// Попыток на ОДИН и тот же upstream до отказа. Повтор безопасен: клиенту
+/// ещё ничего не отвечено, а выходной IP тот же (прокси тот же).
+const UPSTREAM_ATTEMPTS: usize = 2;
+/// Подряд идущих отказов, после которых upstream считается нездоровым в
+/// /healthz. Одиночный сбой — не повод красить дашборд в красный.
+const UNHEALTHY_STREAK: u64 = 3;
 /// Таймаут чтения заголовков от клиента.
 const HEAD_TIMEOUT: Duration = Duration::from_secs(30);
 /// Отлёжка упавшего upstream'а перед повторной попыткой.
@@ -144,6 +161,8 @@ struct Upstream {
     masked: String,
     ok: AtomicU64,
     fail: AtomicU64,
+    /// Отказов подряд (сбрасывается первым успехом).
+    streak: AtomicU64,
     /// Отлёжка после фейла коннекта: до этого момента upstream пропускается
     /// (passive failover). None — здоров.
     bad_until: Mutex<Option<Instant>>,
@@ -156,14 +175,19 @@ impl Upstream {
             .map(|g| g.map(|t| t > Instant::now()).unwrap_or(false))
             .unwrap_or(false)
     }
+    fn healthy(&self) -> bool {
+        self.streak.load(Ordering::Relaxed) < UNHEALTHY_STREAK
+    }
     fn mark_ok(&self) {
         self.ok.fetch_add(1, Ordering::Relaxed);
+        self.streak.store(0, Ordering::Relaxed);
         if let Ok(mut g) = self.bad_until.lock() {
             *g = None;
         }
     }
     fn mark_fail(&self) {
         self.fail.fetch_add(1, Ordering::Relaxed);
+        self.streak.fetch_add(1, Ordering::Relaxed);
         if let Ok(mut g) = self.bad_until.lock() {
             *g = Some(Instant::now() + UPSTREAM_COOLDOWN);
         }
@@ -190,6 +214,9 @@ struct State {
     /// чтобы Dashboard мог показать пользователю ЧТО именно ломалось
     /// (супервизор запускает мост скрыто, stderr некуда смотреть).
     last_errors: Mutex<std::collections::VecDeque<(u64, String)>>,
+    /// Последняя напечатанная ошибка и сколько раз она повторилась с тех пор:
+    /// мёртвый прокси иначе пишет одну и ту же строку на каждый запрос.
+    last_logged: Mutex<(String, u64)>,
 }
 
 /// Сколько последних ошибок держим для /healthz.
@@ -205,15 +232,23 @@ impl State {
 
     fn log(&self, msg: &str) {
         if !self.quiet {
-            eprintln!("[{:>8.1}s] {msg}", self.started.elapsed().as_secs_f64());
+            eprintln!("[{}] {msg}", wall_clock());
         }
     }
     /// Ошибки видны и в quiet-режиме + попадают в кольцевой буфер /healthz.
+    /// Подряд идущие одинаковые строки схлопываются в «повторилось N раз».
     fn log_err(&self, msg: &str) {
-        eprintln!(
-            "[{:>8.1}s] ERROR {msg}",
-            self.started.elapsed().as_secs_f64()
-        );
+        if let Ok(mut last) = self.last_logged.lock() {
+            if last.0 == msg {
+                last.1 += 1;
+            } else {
+                if last.1 > 0 {
+                    eprintln!("[{}] ERROR (предыдущее повторилось ещё {} раз)", wall_clock(), last.1);
+                }
+                eprintln!("[{}] ERROR {msg}", wall_clock());
+                *last = (msg.to_string(), 0);
+            }
+        }
         if let Ok(mut g) = self.last_errors.lock() {
             if g.len() >= LAST_ERRORS_CAP {
                 g.pop_front();
@@ -221,6 +256,32 @@ impl State {
             g.push_back((self.started.elapsed().as_secs(), msg.to_string()));
         }
     }
+}
+
+/// Текущее время UTC «YYYY-MM-DD HH:MM:SSZ» — без chrono: журнал launchd
+/// иначе не сопоставить с жалобой пользователя («отвалилось в 4:20»).
+fn wall_clock() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let (days, rem) = (secs / 86_400, secs % 86_400);
+    // Civil-from-days (H. Hinnant), эпоха 1970-01-01.
+    let z = days as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!(
+        "{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02}Z",
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60
+    )
 }
 
 /// http://login:pass@ip:port → Upstream. Формат тот же, что у python-моста.
@@ -254,6 +315,7 @@ fn parse_upstream(raw: &str) -> Result<Upstream, String> {
         masked,
         ok: AtomicU64::new(0),
         fail: AtomicU64::new(0),
+        streak: AtomicU64::new(0),
         bad_until: Mutex::new(None),
     })
 }
@@ -302,6 +364,9 @@ fn load_rules(path: Option<&str>) -> (Mode, Vec<String>, Vec<String>, Vec<(Strin
                 }
                 proxy.extend(r.proxy_domains.unwrap_or_default());
                 direct.extend(r.direct_domains.unwrap_or_default());
+                for d in proxy.iter_mut().chain(direct.iter_mut()) {
+                    *d = normalize_host(d);
+                }
                 // Нормализация + детерминированный порядок (длина ↓, имя, индекс):
                 // HashMap-порядок случаен, и при дублях-тезках победитель менялся
                 // бы от рестарта к рестарту — а это скачок выходного IP.
@@ -338,13 +403,20 @@ enum Route {
     Upstream,
 }
 
+/// Хвостовая точка FQDN ("claude.ai.") и регистр нормализуются — иначе
+/// канонические имена обходили бы и роутинг, и закрепление.
+fn normalize_host(host: &str) -> String {
+    host.trim_end_matches('.').to_ascii_lowercase()
+}
+
 /// Матч по суффиксу: "api.anthropic.com" матчится на "anthropic.com".
-/// Хвостовая точка FQDN ("claude.ai.") нормализуется — иначе канонические
-/// имена обходили бы и роутинг, и закрепление.
+/// Оба аргумента уже нормализованы (normalize_host) — без аллокаций на
+/// каждое сравнение: решение принимается на каждом соединении.
 fn host_matches(host: &str, domain: &str) -> bool {
-    let h = host.trim_end_matches('.').to_ascii_lowercase();
-    let d = domain.trim_end_matches('.').to_ascii_lowercase();
-    h == d || h.ends_with(&format!(".{d}"))
+    host == domain
+        || (host.len() > domain.len()
+            && host.ends_with(domain)
+            && host.as_bytes()[host.len() - domain.len() - 1] == b'.')
 }
 
 fn decide(state: &State, host: &str) -> Route {
@@ -376,6 +448,9 @@ fn enable_keepalive(stream: &TcpStream) {
     let ka = TcpKeepalive::new()
         .with_time(Duration::from_secs(30))
         .with_interval(Duration::from_secs(10));
+    // 3 пробы вместо системных 8 (macOS): мёртвый пир виден за ~60с, а не ~110с.
+    #[cfg(not(windows))]
+    let ka = ka.with_retries(3);
     let _ = SockRef::from(stream).set_tcp_keepalive(&ka);
     let _ = stream.set_nodelay(true);
 }
@@ -384,19 +459,32 @@ fn enable_keepalive(stream: &TcpStream) {
 /// Дедлайн один на ВСЮ голову: per-read таймаут позволял клиенту, капающему
 /// по байту, держать permit семафора бесконечно.
 async fn read_head(client: &mut TcpStream) -> Result<Vec<u8>, String> {
+    read_head_within(client, HEAD_TIMEOUT).await
+}
+
+/// То же для любого потока и дедлайна (ответ upstream'а на CONNECT).
+/// Возвращает всё прочитанное: байты после головы (ServerHello, пришедший
+/// одним пакетом с «200») тоже принадлежат клиенту.
+async fn read_head_within<S: AsyncRead + Unpin>(
+    stream: &mut S,
+    deadline: Duration,
+) -> Result<Vec<u8>, String> {
     let read_all = async {
         let mut buf = Vec::with_capacity(2048);
         let mut chunk = [0u8; 8192];
         loop {
-            let n = client
+            let n = stream
                 .read(&mut chunk)
                 .await
                 .map_err(|e| format!("head read: {e}"))?;
             if n == 0 {
-                return Err("client closed before full head".to_string());
+                return Err("peer closed before full head".to_string());
             }
+            // Ищем конец только в новом хвосте (+3 байта стыка), а не
+            // пересканируем весь буфер на каждом read.
+            let from = buf.len().saturating_sub(3);
             buf.extend_from_slice(&chunk[..n]);
-            if find_head_end(&buf).is_some() {
+            if find_head_end(&buf[from..]).is_some() {
                 return Ok(buf);
             }
             if buf.len() > HEAD_LIMIT {
@@ -404,9 +492,20 @@ async fn read_head(client: &mut TcpStream) -> Result<Vec<u8>, String> {
             }
         }
     };
-    timeout(HEAD_TIMEOUT, read_all)
+    timeout(deadline, read_all)
         .await
         .map_err(|_| "head read timeout".to_string())?
+}
+
+/// Код статуса из первой строки ответа ("HTTP/1.1 200 Connection established").
+fn status_code(head: &[u8]) -> Option<u16> {
+    let line_end = head.windows(2).position(|w| w == b"\r\n")?;
+    let line = std::str::from_utf8(&head[..line_end]).ok()?;
+    let mut parts = line.split_whitespace();
+    if !parts.next()?.starts_with("HTTP/") {
+        return None;
+    }
+    parts.next()?.parse().ok()
 }
 
 fn find_head_end(buf: &[u8]) -> Option<usize> {
@@ -531,60 +630,145 @@ fn request_upstream(state: &State, host: &str) -> Pin {
     }
 }
 
-/// Одна попытка коннекта к upstream'у №i с учётом статистики и cooldown.
-async fn try_upstream(state: &State, i: usize, pinned: bool) -> Option<TcpStream> {
-    let u = &state.upstreams[i];
-    match timeout(
-        CONNECT_TIMEOUT,
+/// Установленный через upstream канал: сокет + ответ upstream'а на CONNECT
+/// (его отдаём клиенту как есть; для plain HTTP ответ придёт через pipe).
+struct UpstreamConn {
+    stream: TcpStream,
+    reply: Option<Vec<u8>>,
+}
+
+/// Одна попытка: TCP-коннект, отправка первого запроса с auth и — для
+/// CONNECT — ожидание ответа прокси. Ошибка = клиенту ещё ничего не ушло,
+/// попытку можно безопасно повторить.
+async fn attempt_upstream(u: &Upstream, head: &[u8], is_connect: bool) -> Result<UpstreamConn, String> {
+    let mut stream = timeout(
+        UPSTREAM_CONNECT_TIMEOUT,
         TcpStream::connect((u.host.as_str(), u.port)),
     )
     .await
-    {
-        Ok(Ok(s)) => {
-            u.mark_ok();
-            Some(s)
-        }
-        _ => {
-            u.mark_fail();
-            state.log_err(&if pinned {
-                format!(
-                    "назначенный прокси {} не отвечает — жду восстановления, IP не меняю",
-                    u.masked
-                )
+    .map_err(|_| "нет ответа на TCP-коннект".to_string())?
+    .map_err(|e| format!("коннект: {e}"))?;
+    enable_keepalive(&stream);
+    let rewritten = rewrite_head(head, u.auth.as_deref(), false, !is_connect);
+    stream
+        .write_all(&rewritten)
+        .await
+        .map_err(|e| format!("запись запроса: {e}"))?;
+    if !is_connect {
+        // Ответ на обычный HTTP — это ответ origin'а, он может думать долго
+        // (стрим LLM): таймаут на него вешать нельзя.
+        return Ok(UpstreamConn { stream, reply: None });
+    }
+    let reply = read_head_within(&mut stream, UPSTREAM_REPLY_TIMEOUT)
+        .await
+        .map_err(|e| {
+            if e.contains("timeout") {
+                "принял соединение, но молчит на CONNECT".to_string()
             } else {
-                format!("прокси {} не отвечает — пробую следующий", u.masked)
-            });
-            None
+                format!("ответ на CONNECT: {e}")
+            }
+        })?;
+    Ok(UpstreamConn { stream, reply: Some(reply) })
+}
+
+/// Попытки к upstream'у №i с учётом статистики. `retry` — повторить один раз
+/// тот же прокси (IP не меняется), прежде чем сдаться.
+async fn try_upstream(
+    state: &State,
+    i: usize,
+    pinned: bool,
+    retry: bool,
+    head: &[u8],
+    is_connect: bool,
+) -> Option<UpstreamConn> {
+    let u = &state.upstreams[i];
+    let attempts = if retry { UPSTREAM_ATTEMPTS } else { 1 };
+    let mut last_err = String::new();
+    for attempt in 0..attempts {
+        match attempt_upstream(u, head, is_connect).await {
+            Ok(conn) => {
+                match conn.reply.as_deref().map(status_code) {
+                    // 2xx (или plain HTTP) — прокси жив и пустил нас.
+                    None | Some(Some(200..=299)) => u.mark_ok(),
+                    // Прокси ответил, но отказал (407 — логин/пароль, 5xx — не
+                    // достучался до сайта). Повторяем 5xx один раз; ответ
+                    // отдаём клиенту как есть — молча менять IP нельзя.
+                    Some(code) => {
+                        u.mark_fail();
+                        let code = code.map(|c| c.to_string()).unwrap_or_else(|| "?".into());
+                        if code == "407" {
+                            state.log_err(&format!(
+                                "прокси {} отклонил логин/пароль (407) — проверьте данные прокси",
+                                u.masked
+                            ));
+                        } else if code.starts_with('5') && attempt + 1 < attempts {
+                            last_err = format!("ответил {code}");
+                            continue;
+                        } else {
+                            state.log_err(&format!("прокси {} ответил {code} на CONNECT", u.masked));
+                        }
+                    }
+                }
+                if attempt > 0 {
+                    state.log(&format!("прокси {}: успех со второй попытки", u.masked));
+                }
+                return Some(conn);
+            }
+            Err(e) => last_err = e,
         }
     }
+    u.mark_fail();
+    state.log_err(&if pinned {
+        format!(
+            "назначенный прокси {} не отвечает ({last_err}) — жду восстановления, IP не меняю",
+            u.masked
+        )
+    } else {
+        format!("прокси {} не отвечает ({last_err}) — пробую следующий", u.masked)
+    });
+    None
 }
 
 /// Выбрать живой upstream и подключиться.
 /// `pinned` (назначенный домену прокси) — СТРОГО: пробуем только его, на
-/// другие НЕ уходим — выходной IP сервиса не должен прыгать.
+/// другие НЕ уходим — выходной IP сервиса не должен прыгать. Зато ему (как и
+/// единственному прокси в пуле) положен повтор: зависание одного TCP-коннекта
+/// к прокси — частый сбой, и второй коннект обычно проходит.
 /// Без назначения — passive failover: первый проход пропускает остывающих,
 /// второй шанс даётся ТОЛЬКО пропущенным (повторять только что упавших —
 /// удвоение таймаута для клиента без шанса на успех).
-async fn connect_upstream(state: &State, pinned: Option<usize>) -> Option<(TcpStream, usize)> {
+async fn connect_upstream(
+    state: &State,
+    pinned: Option<usize>,
+    head: &[u8],
+    is_connect: bool,
+) -> Option<(UpstreamConn, usize)> {
     let n = state.upstreams.len();
     let (order, is_pin): (Vec<usize>, bool) = match pinned {
         Some(p) if p < n => (vec![p], true),
         Some(_) => return None, // битый индекс — сюда не должен дойти (Pin::Broken отсекается раньше)
         None => ((0..n).collect(), false),
     };
+    let retry = is_pin || n == 1;
+    if is_pin {
+        // Остывание для закреплённого бессмысленно: альтернативы нет.
+        return try_upstream(state, order[0], true, retry, head, is_connect)
+            .await
+            .map(|c| (c, order[0]));
+    }
     let mut skipped: Vec<usize> = Vec::new();
     for &i in &order {
         if state.upstreams[i].cooling() {
             skipped.push(i);
             continue;
         }
-        if let Some(s) = try_upstream(state, i, is_pin).await {
-            return Some((s, i));
+        if let Some(c) = try_upstream(state, i, false, retry, head, is_connect).await {
+            return Some((c, i));
         }
     }
     for &i in &skipped {
-        if let Some(s) = try_upstream(state, i, is_pin).await {
-            return Some((s, i));
+        if let Some(c) = try_upstream(state, i, false, retry, head, is_connect).await {
+            return Some((c, i));
         }
     }
     None
@@ -601,9 +785,11 @@ fn healthz_json(state: &State) -> String {
         .map(|u| {
             serde_json::json!({
                 "url": u.masked,
-                "healthy": !u.cooling(),
+                "healthy": u.healthy(),
+                "cooling": u.cooling(),
                 "ok": u.ok.load(Ordering::Relaxed),
                 "fail": u.fail.load(Ordering::Relaxed),
+                "fail_streak": u.streak.load(Ordering::Relaxed),
             })
         })
         .collect();
@@ -727,7 +913,7 @@ impl Drop for ActiveGuard<'_> {
     }
 }
 
-async fn handle(mut client: TcpStream, state: Arc<State>) {
+async fn handle(mut client: TcpStream, state: Arc<State>, sem: Arc<Semaphore>) {
     let head = match read_head(&mut client).await {
         Ok(h) => h,
         Err(e) => {
@@ -735,7 +921,7 @@ async fn handle(mut client: TcpStream, state: Arc<State>) {
             return;
         }
     };
-    let req = match parse_request(&head) {
+    let mut req = match parse_request(&head) {
         Ok(r) => r,
         Err(e) => {
             state.log(&format!("bad request: {e}"));
@@ -752,6 +938,20 @@ async fn handle(mut client: TcpStream, state: Arc<State>) {
         serve_local(&mut client, &path, &state).await;
         return;
     }
+
+    // Лимит — только на проксируемые соединения: /healthz отвечает даже при
+    // забитом пуле, и дашборд видит «мост жив, но перегружен», а не «мёртв».
+    let _permit = match sem.try_acquire_owned() {
+        Ok(p) => p,
+        Err(_) => {
+            state.log_err(&format!("лимит {MAX_CONNECTIONS} соединений — отбиваю запрос, сервер жив"));
+            let _ = client
+                .write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .await;
+            return;
+        }
+    };
+    req.host = normalize_host(&req.host);
 
     state.total.fetch_add(1, Ordering::Relaxed);
     state.active.fetch_add(1, Ordering::Relaxed);
@@ -789,7 +989,7 @@ async fn handle(mut client: TcpStream, state: Arc<State>) {
     // Устанавливаем исходящее соединение. Для Upstream запоминаем auth ИМЕННО
     // того прокси, к которому реально подключились (failover мог выбрать не первый).
     // via_* считаем только по факту успешного коннекта — неудачи идут в errors.
-    let (mut server, upstream_auth): (TcpStream, Option<String>) = match route {
+    let (mut server, upstream_reply): (TcpStream, Option<Vec<u8>>) = match route {
         Route::Direct => {
             match timeout(
                 CONNECT_TIMEOUT,
@@ -819,19 +1019,17 @@ async fn handle(mut client: TcpStream, state: Arc<State>) {
                 Pin::Pinned(i) => Some(i),
                 _ => None,
             };
-            match connect_upstream(&state, pinned).await {
-                Some((s, i)) => {
+            match connect_upstream(&state, pinned, &head, req.is_connect).await {
+                Some((c, _)) => {
                     state.via_upstream.fetch_add(1, Ordering::Relaxed);
-                    let auth = state.upstreams[i].auth.clone();
-                    (s, auth)
+                    (c.stream, c.reply)
                 }
                 None => {
                     state.errors.fetch_add(1, Ordering::Relaxed);
-                    state.log_err(if pinned.is_some() {
-                        "назначенный прокси недоступен — жду восстановления"
-                    } else {
-                        "все upstream-прокси недоступны"
-                    });
+                    // Закреплённый отказ уже залогирован в try_upstream.
+                    if pinned.is_none() && state.upstreams.len() > 1 {
+                        state.log_err("все upstream-прокси недоступны");
+                    }
                     let _ = client
                         .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
                         .await;
@@ -873,14 +1071,13 @@ async fn handle(mut client: TcpStream, state: Arc<State>) {
             }
         }
         Route::Upstream => {
-            // Форвардим первый запрос (CONNECT или обычный) upstream'у,
-            // впрыснув auth. Ответ (включая "200 Connection Established")
-            // придёт клиенту от самого upstream'а через pipe ниже.
-            let rewritten = rewrite_head(&head, upstream_auth.as_deref(), false, !req.is_connect);
-            if server.write_all(&rewritten).await.is_err() {
-                state.errors.fetch_add(1, Ordering::Relaxed);
-                state.log_err(&format!("upstream оборвал соединение ({})", req.host));
-                return;
+            // Первый запрос с auth уже ушёл upstream'у (connect_upstream).
+            // Ответ на CONNECT прочитан там же — отдаём клиенту как есть,
+            // вместе с данными, пришедшими следом.
+            if let Some(reply) = upstream_reply {
+                if client.write_all(&reply).await.is_err() {
+                    return;
+                }
             }
         }
     }
@@ -921,6 +1118,13 @@ fn parse_args_from(argv: Vec<String>) -> Result<Args, String> {
                 a.upstreams
                     .push(argv.get(i).ok_or("--upstream requires URL")?.clone());
             }
+            "--upstream-file" => {
+                // Файл (0600) вместо argv: аргументы процесса видит любой
+                // пользователь машины через ps, а с ними — пароль прокси.
+                i += 1;
+                let path = argv.get(i).ok_or("--upstream-file requires FILE")?;
+                a.upstreams.extend(read_upstream_file(path)?);
+            }
             "--listen" => {
                 i += 1;
                 a.listen = argv.get(i).ok_or("--listen requires HOST:PORT")?.clone();
@@ -957,6 +1161,36 @@ fn parse_args_from(argv: Vec<String>) -> Result<Args, String> {
         return Err("--strict-listen must use a loopback IP and a non-zero port".into());
     }
     Ok(a)
+}
+
+/// Upstream'ы из файла: по одному URL в строке, пустые строки и `#` игнорируются.
+fn read_upstream_file(path: &str) -> Result<Vec<String>, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("--upstream-file {path}: {e}"))?;
+    Ok(text
+        .trim_start_matches('\u{feff}')
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(String::from)
+        .collect())
+}
+
+/// launchd по умолчанию даёт процессу 256 дескрипторов: ~120 туннелей и
+/// EMFILE раньше, чем сработает MAX_CONNECTIONS. Поднимаем мягкий лимит.
+#[cfg(unix)]
+fn raise_fd_limit() {
+    let mut lim = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+    // SAFETY: getrlimit/setrlimit пишут/читают только переданную структуру.
+    unsafe {
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) == 0 {
+            let want: libc::rlim_t = 4096;
+            if lim.rlim_cur < want {
+                lim.rlim_cur = want.min(lim.rlim_max);
+                libc::setrlimit(libc::RLIMIT_NOFILE, &lim);
+            }
+        }
+    }
 }
 
 /// Цикл самосупервизии: спавним себя-воркера (те же argv минус --supervise),
@@ -1016,6 +1250,8 @@ async fn main() {
     if args.supervise {
         run_supervisor();
     }
+    #[cfg(unix)]
+    raise_fd_limit();
 
     let mut upstreams = Vec::new();
     for raw in &args.upstreams {
@@ -1046,6 +1282,7 @@ async fn main() {
         via_direct: AtomicU64::new(0),
         errors: AtomicU64::new(0),
         last_errors: Mutex::new(std::collections::VecDeque::new()),
+        last_logged: Mutex::new((String::new(), 0)),
     });
 
     let strict_state = Arc::new(State {
@@ -1064,6 +1301,7 @@ async fn main() {
         via_direct: AtomicU64::new(0),
         errors: AtomicU64::new(0),
         last_errors: Mutex::new(std::collections::VecDeque::new()),
+        last_logged: Mutex::new((String::new(), 0)),
     });
 
     // Коллизия строгого порта запрещает запуск Claude, но не должна
@@ -1090,9 +1328,11 @@ async fn main() {
         ));
     }
 
-    // Семафор — как в python-мосте: лишние соединения ждут слот, а не валят
-    // процесс. Accept-цикл НИКОГДА не падает.
+    // Семафор — как в python-мосте: лишние соединения не валят процесс.
+    // Свой пул у каждого входа: браузерный трафик на общем входе не должен
+    // выедать слоты Claude Desktop на строгом. Accept-цикл НИКОГДА не падает.
     let sem = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+    let strict_sem = Arc::new(Semaphore::new(MAX_CONNECTIONS));
     match strict_listener {
         Ok(strict_listener) => {
             strict_state.log(&format!(
@@ -1102,7 +1342,7 @@ async fn main() {
             ));
             tokio::join!(
                 serve_listener(listener, state, sem.clone()),
-                serve_listener(strict_listener, strict_state, sem),
+                serve_listener(strict_listener, strict_state, strict_sem),
             );
         }
         Err(error) => {
@@ -1129,7 +1369,7 @@ async fn bind_listeners(
 
 async fn serve_listener(listener: TcpListener, state: Arc<State>, sem: Arc<Semaphore>) {
     loop {
-        let (client, addr) = match listener.accept().await {
+        let (client, _addr) = match listener.accept().await {
             Ok(x) => x,
             Err(e) => {
                 state.log_err(&format!("accept: {e} — продолжаю слушать"));
@@ -1137,21 +1377,9 @@ async fn serve_listener(listener: TcpListener, state: Arc<State>, sem: Arc<Semap
                 continue;
             }
         };
-        let permit = match timeout(Duration::from_secs(5), sem.clone().acquire_owned()).await {
-            Ok(Ok(p)) => p,
-            _ => {
-                state.log_err(&format!(
-                    "лимит {MAX_CONNECTIONS} соединений — отбиваю {addr}, сервер жив"
-                ));
-                drop(client);
-                continue;
-            }
-        };
-        let st = state.clone();
-        tokio::spawn(async move {
-            handle(client, st).await;
-            drop(permit);
-        });
+        // Слот берётся внутри handle и без ожидания: раньше accept-цикл
+        // стоял до 5с в ожидании слота, и в это время не отвечал даже /healthz.
+        tokio::spawn(handle(client, state.clone(), sem.clone()));
     }
 }
 
@@ -1176,6 +1404,7 @@ mod tests {
             via_direct: AtomicU64::new(0),
             errors: AtomicU64::new(0),
             last_errors: Mutex::new(std::collections::VecDeque::new()),
+            last_logged: Mutex::new((String::new(), 0)),
         }
     }
 
@@ -1184,7 +1413,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             let (client, _) = listener.accept().await.unwrap();
-            handle(client, state).await;
+            handle(client, state, Arc::new(Semaphore::new(MAX_CONNECTIONS))).await;
         });
         let mut client = TcpStream::connect(addr).await.unwrap();
         client.write_all(request.as_bytes()).await.unwrap();
@@ -1293,14 +1522,17 @@ mod tests {
             let upstream_addr = upstream.local_addr().unwrap();
             let upstream_task = tokio::spawn(async move {
                 let (mut stream, _) = upstream.accept().await.unwrap();
-                let mut request = Vec::new();
-                stream.read_to_end(&mut request).await.unwrap();
+                // Как настоящий прокси: отвечает, дочитав заголовки, а не EOF.
+                let mut request = read_head_within(&mut stream, Duration::from_secs(3))
+                    .await
+                    .unwrap();
                 let response = if is_connect {
                     b"HTTP/1.1 200 Connection Established\r\n\r\nupstream tunnel".as_slice()
                 } else {
                     b"HTTP/1.1 200 OK\r\nContent-Length: 13\r\nConnection: close\r\n\r\nupstream http".as_slice()
                 };
                 stream.write_all(response).await.unwrap();
+                stream.read_to_end(&mut request).await.unwrap();
                 request
             });
             let mut state = test_state(
@@ -1491,7 +1723,7 @@ mod tests {
         let state = Arc::new(test_state(RoutingPolicy::Rules, Vec::new()));
         let server = tokio::spawn(async move {
             let (client, _) = shared.accept().await.unwrap();
-            handle(client, state).await;
+            handle(client, state, Arc::new(Semaphore::new(MAX_CONNECTIONS))).await;
         });
         let mut client = TcpStream::connect(addr).await.unwrap();
         client
@@ -1534,5 +1766,112 @@ mod tests {
         ] {
             assert!(args(Some(endpoint)).is_err(), "accepted {endpoint}");
         }
+    }
+
+    /// Фейковый прокси: на i-е соединение отвечает replies[i] (None — молчит,
+    /// держа сокет). Возвращает адрес и счётчик принятых соединений.
+    async fn scripted_proxy(replies: Vec<Option<&'static [u8]>>) -> (SocketAddr, Arc<AtomicU64>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let accepted = Arc::new(AtomicU64::new(0));
+        let counter = accepted.clone();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            for reply in replies {
+                let Ok((mut stream, _)) = listener.accept().await else { return };
+                counter.fetch_add(1, Ordering::Relaxed);
+                let _ = read_head_within(&mut stream, Duration::from_secs(3)).await;
+                match reply {
+                    // Ответил и закрыл — туннель завершится, клиент получит EOF.
+                    Some(r) => {
+                        let _ = stream.write_all(r).await;
+                    }
+                    None => held.push(stream),
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        });
+        (addr, accepted)
+    }
+
+    #[tokio::test]
+    async fn silent_upstream_is_retried_on_the_same_proxy() {
+        let (addr, accepted) = scripted_proxy(vec![
+            None,
+            Some(b"HTTP/1.1 200 Connection Established\r\n\r\nhello"),
+        ])
+        .await;
+        let state = Arc::new(test_state(
+            RoutingPolicy::UpstreamOnly,
+            vec![parse_upstream(&format!("http://u:p@{addr}")).unwrap()],
+        ));
+        let response = single_request(state.clone(), "CONNECT claude.ai:443 HTTP/1.1\r\n\r\n".into()).await;
+        let text = String::from_utf8_lossy(&response);
+        assert!(text.starts_with("HTTP/1.1 200"), "{text}");
+        assert!(text.ends_with("hello"), "данные после головы ответа потеряны: {text}");
+        assert_eq!(accepted.load(Ordering::Relaxed), 2);
+        let u = &state.upstreams[0];
+        assert_eq!(u.ok.load(Ordering::Relaxed), 1);
+        assert!(u.healthy());
+    }
+
+    #[tokio::test]
+    async fn proxy_refusal_is_forwarded_without_retry_or_ip_change() {
+        let (addr, accepted) =
+            scripted_proxy(vec![Some(b"HTTP/1.1 407 Proxy Authentication Required\r\n\r\n")]).await;
+        let state = Arc::new(test_state(
+            RoutingPolicy::UpstreamOnly,
+            vec![parse_upstream(&format!("http://u:p@{addr}")).unwrap()],
+        ));
+        let response = single_request(state.clone(), "CONNECT claude.ai:443 HTTP/1.1\r\n\r\n".into()).await;
+        assert!(response.starts_with(b"HTTP/1.1 407"));
+        assert_eq!(accepted.load(Ordering::Relaxed), 1);
+        assert_eq!(state.upstreams[0].fail.load(Ordering::Relaxed), 1);
+        assert_eq!(state.via_direct.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn silent_upstream_gives_502_and_unhealthy_only_after_a_streak() {
+        let (addr, accepted) = scripted_proxy(vec![None; 6]).await;
+        let state = Arc::new(test_state(
+            RoutingPolicy::UpstreamOnly,
+            vec![parse_upstream(&format!("http://{addr}")).unwrap()],
+        ));
+        let request = "CONNECT claude.ai:443 HTTP/1.1\r\n\r\n";
+        let response = single_request(state.clone(), request.into()).await;
+        assert!(response.starts_with(b"HTTP/1.1 502"));
+        assert_eq!(accepted.load(Ordering::Relaxed), 2, "одна попытка + один повтор");
+        assert!(state.upstreams[0].healthy(), "один сбой — ещё не «нездоров»");
+        for _ in 0..2 {
+            single_request(state.clone(), request.into()).await;
+        }
+        assert!(!state.upstreams[0].healthy());
+        let health: serde_json::Value = serde_json::from_str(&healthz_json(&state)).unwrap();
+        assert_eq!(health["upstreams"][0]["fail_streak"], 3);
+    }
+
+    #[test]
+    fn upstream_file_skips_comments_and_bom() {
+        let path = std::env::temp_dir().join(format!("clod-upstreams-{}.txt", std::process::id()));
+        std::fs::write(&path, "\u{feff}# основной\nhttp://a:b@127.0.0.1:1\n\n  http://127.0.0.1:2  \n").unwrap();
+        let args = parse_args_from(vec!["--upstream-file".into(), path.to_str().unwrap().into()]).unwrap();
+        assert_eq!(args.upstreams, vec!["http://a:b@127.0.0.1:1", "http://127.0.0.1:2"]);
+        std::fs::remove_file(path).unwrap();
+        assert!(parse_args_from(vec!["--upstream-file".into(), "/nonexistent/clod".into()]).is_err());
+    }
+
+    #[test]
+    fn host_matching_is_suffix_safe() {
+        assert!(host_matches("api.anthropic.com", "anthropic.com"));
+        assert!(host_matches("anthropic.com", "anthropic.com"));
+        assert!(!host_matches("evilanthropic.com", "anthropic.com"));
+        assert_eq!(normalize_host("Claude.AI."), "claude.ai");
+    }
+
+    #[test]
+    fn wall_clock_formats_utc() {
+        let t = wall_clock();
+        assert_eq!(t.len(), 20, "{t}");
+        assert!(t.starts_with("20") && t.ends_with('Z'));
     }
 }
