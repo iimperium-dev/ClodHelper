@@ -76,6 +76,13 @@ pub const SERVICE_GROUPS: &[(&str, &[&str])] = &[
             "cursor.com",
         ],
     ),
+    // Telegram ходит по IP дата-центров через SOCKS-вход моста: тот берёт
+    // прокси, назначенный «telegram.org» (bridge socks_upstream). Остальные
+    // домены — веб-версия и ссылки в браузере через общий вход.
+    (
+        "telegram",
+        &["telegram.org", "t.me", "telegram.me", "telesco.pe", "tdesktop.com", "telegra.ph"],
+    ),
 ];
 
 /// Записать rules-файл моста из settings (route_mode + proxy_assignments).

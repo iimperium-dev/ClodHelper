@@ -30,6 +30,7 @@ import { useStatus } from "../lib/status";
 import type { ProxyCheckResult, ServiceGroup } from "../lib/types";
 import { fadeInUp, staggerContainer } from "../lib/motion";
 import { cn } from "../lib/cn";
+import { isMac } from "../lib/platform";
 
 /** Сервисы для назначений (mirror tasks::SERVICE_GROUPS в Rust). */
 const SERVICES: { id: ServiceGroup; name: string; sub: string }[] = [
@@ -37,6 +38,10 @@ const SERVICES: { id: ServiceGroup; name: string; sub: string }[] = [
   { id: "openai", name: "ChatGPT", sub: "OpenAI · Codex" },
   { id: "google", name: "Gemini", sub: "Google AI" },
   { id: "other_ai", name: "Остальные AI", sub: "Copilot · Cursor · Grok…" },
+  // Telegram через SOCKS-вход моста есть только в версии для macOS.
+  ...(isMac
+    ? [{ id: "telegram" as const, name: "Telegram", sub: "Через мост · «Авто» = основной прокси" }]
+    : []),
 ];
 
 

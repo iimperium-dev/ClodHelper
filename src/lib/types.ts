@@ -242,4 +242,4 @@ export interface ProxyPing {
 }
 
 /** Группы сервисов для назначений (mirror tasks::SERVICE_GROUPS). */
-export type ServiceGroup = "anthropic" | "openai" | "google" | "other_ai";
+export type ServiceGroup = "anthropic" | "openai" | "google" | "other_ai" | "telegram";

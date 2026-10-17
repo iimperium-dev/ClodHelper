@@ -119,6 +119,7 @@ export function ServiceLogo({ id }: { id: ServiceGroup }) {
     openai: "oklch(75% 0.11 180 / 0.2)",
     google: "oklch(70% 0.15 285 / 0.24)",
     other_ai: "oklch(82% 0.02 160 / 0.14)",
+    telegram: "oklch(72% 0.13 230 / 0.26)",
   };
   return (
     <BrandTile glow={glow[id]}>
@@ -126,6 +127,7 @@ export function ServiceLogo({ id }: { id: ServiceGroup }) {
       {id === "openai" && <OpenAiKnot />}
       {id === "google" && <GeminiMark />}
       {id === "other_ai" && <CopilotMark />}
+      {id === "telegram" && <TelegramMark />}
     </BrandTile>
   );
 }
