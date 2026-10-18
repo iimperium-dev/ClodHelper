@@ -99,34 +99,6 @@ function Get-PythonCommand {
     return $null
 }
 
-function Find-ClaudeDesktopExe {
-    # Современные версии Claude Desktop ставятся как MSIX/AppX-пакет —
-    # пытаемся найти через Get-AppxPackage, exe лежит внутри пакета.
-    try {
-        $pkg = Get-AppxPackage -Name 'Claude' -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($pkg -and $pkg.InstallLocation) {
-            $msixExe = Join-Path $pkg.InstallLocation 'app\Claude.exe'
-            if (Test-Path $msixExe) { return $msixExe }
-            # Fallback на корень пакета на случай если структура изменится.
-            $altExe = Join-Path $pkg.InstallLocation 'Claude.exe'
-            if (Test-Path $altExe) { return $altExe }
-        }
-    } catch {}
-
-    # Legacy: старые NSIS/Squirrel установки в %LOCALAPPDATA%.
-    $candidates = @(
-        (Join-Path $env:LOCALAPPDATA 'AnthropicClaude\claude.exe'),
-        (Join-Path $env:LOCALAPPDATA 'AnthropicClaude\Claude.exe'),
-        (Join-Path $env:LOCALAPPDATA 'Programs\claude-desktop\Claude.exe'),
-        (Join-Path $env:LOCALAPPDATA 'Programs\Claude\Claude.exe'),
-        (Join-Path $env:LOCALAPPDATA 'Programs\AnthropicClaude\Claude.exe')
-    )
-    foreach ($p in $candidates) {
-        if (Test-Path $p) { return $p }
-    }
-    return $null
-}
-
 function Stop-ProxyProcess {
     # Найти процесс который слушает наш порт и убить его.
     $procs = Get-NetTCPConnection -State Listen -LocalAddress '127.0.0.1' -LocalPort $Port -ErrorAction SilentlyContinue
@@ -141,6 +113,23 @@ function Stop-ProxyProcess {
 
 if ($Uninstall) {
     Write-Header "Удаление Claude Desktop Proxy"
+
+    # Do not leave ordinary Store launches pinned to a deleted bridge.
+    $policyBase = [Microsoft.Win32.RegistryKey]::OpenBaseKey('LocalMachine', 'Registry64')
+    $policyKey = $null
+    $ownershipKey = $null
+    try {
+        $policyKey = $policyBase.OpenSubKey('SOFTWARE\Policies\Claude')
+        $ownershipKey = $policyBase.OpenSubKey('SOFTWARE\ClodHelper\ClaudeProxyPolicy')
+        if (($policyKey -and $policyKey.GetValue('egressProxyUrl') -eq 'http://127.0.0.1:8890') -or
+            ($ownershipKey -and $null -ne $ownershipKey.GetValue('State'))) {
+            throw 'Сначала откройте Clod Helper → Приложения → Вернуть прежние настройки. Затем повторите удаление моста.'
+        }
+    } finally {
+        if ($policyKey) { $policyKey.Dispose() }
+        if ($ownershipKey) { $ownershipKey.Dispose() }
+        $policyBase.Dispose()
+    }
 
     Write-Step 1 4 "Останавливаю работающий прокси..."
     Stop-ProxyProcess
@@ -264,17 +253,29 @@ if ($SkipDesktopShortcut) {
     exit 0
 }
 
-$claudeExe = Find-ClaudeDesktopExe
-if (-not $claudeExe) {
+$sourceLauncher = Join-Path $SourceDir 'claude-desktop-launch.ps1'
+if (-not (Test-Path -LiteralPath $sourceLauncher -PathType Leaf)) {
+    Write-Err "Не найден claude-desktop-launch.ps1 рядом с этим скриптом. Переустановите Clod Helper."
+    exit 1
+}
+$launcherPath = Join-Path $InstallDir 'claude-desktop-launch.ps1'
+if ([IO.Path]::GetFullPath($sourceLauncher) -ine [IO.Path]::GetFullPath($launcherPath)) {
+    Copy-Item -LiteralPath $sourceLauncher -Destination $launcherPath -Force
+}
+. $launcherPath -Port $Port
+$claudeInstallation = Resolve-ClaudeDesktopInstallation
+if (-not $claudeInstallation) {
     Write-Warn "Claude Desktop не найден на этом ПК"
     Write-Host "        Скачай и установи с https://claude.ai/download" -ForegroundColor Yellow
     Write-Host "        Потом перезапусти этот скрипт чтобы создать ярлык." -ForegroundColor Yellow
 } else {
+    $claudeExe = $claudeInstallation.exe_path
     $wsh = New-Object -ComObject WScript.Shell
     $sc = $wsh.CreateShortcut($DesktopShortcut)
-    $sc.TargetPath = $claudeExe
-    $sc.Arguments = "--proxy-server=http://127.0.0.1:$Port"
-    $sc.WorkingDirectory = Split-Path $claudeExe
+    $sc.TargetPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $sc.Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$launcherPath`" -Port 8890 -ShowError"
+    $sc.WorkingDirectory = $InstallDir
+    $sc.WindowStyle = 7
     $sc.IconLocation = "$claudeExe,0"
     $sc.Description = 'Claude Desktop через локальный прокси'
     $sc.Save()
@@ -290,9 +291,11 @@ Write-Host "└─────────────────────�
 Write-Host ""
 Write-Host "  Что дальше:" -ForegroundColor White
 Write-Host ""
-Write-Host "  1. " -NoNewline; Write-Host "Запусти Claude Desktop через ярлык" -ForegroundColor Yellow
+Write-Host "  1. " -NoNewline; Write-Host "В Clod Helper открой Приложения → Настроить Claude." -ForegroundColor Yellow
+Write-Host "     Это включает штатный прокси для Claude и агента на порту 8890."
+Write-Host "     Затем полностью закрой Claude через трей и запусти через ярлык"
 Write-Host "     'Claude Desktop (proxy)' с рабочего стола."
-Write-Host "     Если запускать обычным ярлыком — прокси НЕ применится."
+Write-Host "     Штатная настройка применяется также при запуске обычным ярлыком."
 Write-Host ""
 Write-Host "  2. " -NoNewline; Write-Host "Прокси автоматически запустится при каждом логине Windows" -ForegroundColor Yellow
 Write-Host "     (через файл $StartupVbs)."

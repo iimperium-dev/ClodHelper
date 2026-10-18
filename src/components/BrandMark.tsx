@@ -1,4 +1,4 @@
-import { orbStateOf, useStatus } from "../lib/status";
+import { useStatus } from "../lib/status";
 import { cn } from "../lib/cn";
 
 interface Props {
@@ -15,8 +15,7 @@ interface Props {
   у иконки в трее. Используется в titlebar и сайдбаре.
 */
 export function BrandMark({ size = 32, withStatus = true, className }: Props) {
-  const { status, health } = useStatus();
-  const st = orbStateOf(status, health);
+  const { orb: st } = useStatus();
   const dotColor =
     st === "ok"
       ? "bg-vb-emerald"

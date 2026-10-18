@@ -24,7 +24,14 @@ pub struct CursorInfo {
     pub shortcut_exists: bool,
 }
 
+/// macOS: путь к бандлу Cursor.app.
+#[cfg(not(target_os = "windows"))]
+pub fn find_cursor_exe() -> Option<std::path::PathBuf> {
+    crate::macos::find_app(&["Cursor.app"])
+}
+
 /// Найти Cursor.exe в стандартных местах установки (per-user / system).
+#[cfg(target_os = "windows")]
 pub fn find_cursor_exe() -> Option<std::path::PathBuf> {
     let mut candidates: Vec<std::path::PathBuf> = Vec::new();
     if let Ok(local) = std::env::var("LOCALAPPDATA") {
@@ -47,7 +54,7 @@ pub fn find_cursor_exe() -> Option<std::path::PathBuf> {
 /// Путь к ярлыку «Cursor (proxy)» на рабочем столе пользователя.
 /// Через known-folder (OneDrive-aware), не сырой USERPROFILE\Desktop.
 pub fn cursor_shortcut_path() -> Option<std::path::PathBuf> {
-    Some(crate::apps::desktop_dir()?.join("Cursor (proxy).lnk"))
+    Some(crate::apps::desktop_dir()?.join(format!("Cursor (proxy).{}", crate::apps::SHORTCUT_EXT)))
 }
 
 pub fn detect_cursor() -> CursorInfo {

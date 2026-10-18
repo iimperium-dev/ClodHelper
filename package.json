@@ -1,20 +1,20 @@
 {
   "name": "clod-helper",
   "private": true,
-  "version": "0.5.0",
+  "version": "0.6.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "bridge:build": "cargo build --release --manifest-path bridge/Cargo.toml && node -e \"require('fs').copyFileSync('bridge/target/release/clod-bridge.exe','src-tauri/resources/clod-bridge.exe')\""
+    "bridge:build": "cargo build --release --manifest-path bridge/Cargo.toml && node -e \"require('fs').copyFileSync('bridge/target/release/clod-bridge.exe','src-tauri/resources/clod-bridge.exe')\"",
+    "bridge:build:mac": "sh scripts/build-bridge-mac.sh"
   },
   "dependencies": {
     "@fontsource/inter": "^5.1.0",
     "@fontsource/jetbrains-mono": "^5.1.0",
     "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-autostart": "^2",
     "@tauri-apps/plugin-dialog": "^2.7.1",
     "@tauri-apps/plugin-opener": "^2",
     "@tauri-apps/plugin-shell": "^2",

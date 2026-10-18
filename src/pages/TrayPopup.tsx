@@ -36,7 +36,8 @@ import { cn } from "../lib/cn";
   (Rust), тень рисуем CSS. Всё управление — не открывая большого окна.
 */
 export function TrayPopup() {
-  const { status, health, refresh, env, setEnv } = useStatus();
+  // orb — единое состояние из StatusProvider (учитывает и «нестабилен»).
+  const { status, health, refresh, env, setEnv, orb } = useStatus();
 
   const [busy, setBusy] = useState<"start" | "stop" | "restart" | "test" | null>(null);
   const [testResult, setTestResult] = useState<ShimTestResult | null>(null);
@@ -52,14 +53,6 @@ export function TrayPopup() {
 
   const loading = status === null;
   const running = status?.running ?? false;
-  const upstreamDown = health !== null && health.upstreams.some((u) => !u.healthy);
-  const orb = loading
-    ? ("loading" as const)
-    : !running
-      ? ("down" as const)
-      : upstreamDown
-        ? ("warn" as const)
-        : ("ok" as const);
 
   const envOn = (env?.present ?? false) && (env?.points_to_bridge ?? false);
   const smartOn = health?.mode === "smart";

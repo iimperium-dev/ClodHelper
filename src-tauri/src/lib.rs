@@ -1,19 +1,48 @@
 mod apps;
+mod autostart;
+mod claude_desktop;
+mod claude_policy;
+mod claude_proxy;
 mod commands;
 mod env_proxy;
+#[cfg_attr(not(target_os = "windows"), path = "firewall_stub.rs")]
 mod firewall;
+// В тестах модуль собирается и на Windows: его чистые функции покрыты
+// юнит-тестами, а реальный прогон на macOS доступен только в CI.
+#[cfg(any(not(target_os = "windows"), test))]
+mod macos;
 mod monitor;
 mod proxy;
 mod settings;
 mod shim;
 mod system;
 mod tasks;
+mod telegram;
+mod traffic;
+mod browser_ext;
 mod vscode_config;
 
 use tauri::{
     tray::{MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager, WindowEvent,
 };
+
+/// Служебные CLI-режимы, которые отрабатывают и выходят без GUI
+/// (LaunchAgent переменных прокси). None — обычный запуск приложения.
+pub fn cli_mode() -> Option<i32> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        let args: Vec<String> = std::env::args().collect();
+        if let Some(code) = env_proxy::apply_env_cli(&args) {
+            return Some(code);
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(code) = autostart::login_item_cli(&args) {
+            return Some(code);
+        }
+    }
+    None
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -24,15 +53,25 @@ pub fn run() {
         )
         .init();
 
-    tauri::Builder::default()
+    // Из Dock/Finder приложение получает PATH без Homebrew/nvm — node, npm и
+    // claude не нашлись бы. Чиним до любых спавнов.
+    #[cfg(not(target_os = "windows"))]
+    macos::fix_path_env();
+
+    let builder = tauri::Builder::default();
+    // Автозапуск: на Windows — плагин (ключ Run), на macOS — SMAppService
+    // (src/autostart.rs); плагин там больше не регистрируется.
+    #[cfg(target_os = "windows")]
+    let builder = builder.plugin(tauri_plugin_autostart::init(
+        tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+        Some(vec!["--tray"]),
+    ));
+
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            Some(vec!["--tray"]),
-        ))
         .invoke_handler(tauri::generate_handler![
             commands::detect_node,
             commands::detect_python,
@@ -40,6 +79,19 @@ pub fn run() {
             commands::check_proxy,
             commands::run_install,
             commands::launch_claude_desktop,
+            commands::claude_proxy_status,
+            commands::telegram_status,
+            commands::apps_traffic,
+            commands::apps_open_extension,
+            commands::apps_search,
+            commands::apps_icons,
+            commands::apps_layout_get,
+            commands::apps_settings_set,
+            commands::apps_layout_set,
+            commands::apps_relaunch,
+            commands::telegram_setup,
+            commands::claude_proxy_enable,
+            commands::claude_proxy_disable,
             commands::launch_claude_code,
             commands::detect_cursor,
             commands::setup_cursor,
@@ -75,6 +127,9 @@ pub fn run() {
             // Мост: здоровье и маршрутизация
             commands::bridge_health,
             commands::bridge_exe_legacy,
+            commands::bridge_versions,
+            commands::autostart_get,
+            commands::autostart_set,
             commands::bridge_set_route_mode,
             commands::bridge_update,
             commands::wizard_install,
@@ -108,6 +163,14 @@ pub fn run() {
             // с автоперезапуском. Фоново — PS-вызовы медленные, UI не ждёт.
             std::thread::spawn(tasks::migrate_from_startup_vbs);
 
+            // macOS: агент переменных старого формата (`/bin/sh -c`, виден в
+            // «Объектах входа» как безымянный «sh») → `clod-helper --apply-env`.
+            #[cfg(not(target_os = "windows"))]
+            std::thread::spawn(env_proxy::migrate_legacy_agent);
+
+            // Автозапуск плагина («Clod Helper.plist») → SMAppService.
+            std::thread::spawn(autostart::migrate_legacy);
+
             // Если запущены с флагом --tray (после автозапуска Windows) —
             // прячем главное окно при старте, видна только иконка в трее.
             let args: Vec<String> = std::env::args().collect();
@@ -115,6 +178,7 @@ pub fn run() {
                 if let Some(win) = app.get_webview_window("main") {
                     let _ = win.hide();
                 }
+                set_dock_visible(app.handle(), false);
             }
             Ok(())
         })
@@ -125,6 +189,9 @@ pub fn run() {
                     // Полный выход — только через меню трея "Выход".
                     api.prevent_close();
                     let _ = window.hide();
+                    if window.label() == "main" {
+                        set_dock_visible(window.app_handle(), false);
+                    }
                 }
                 // Трей-попап: light dismiss — потерял фокус → спрятался
                 // (паттерн Tailscale/WARP).
@@ -134,8 +201,20 @@ pub fn run() {
                 _ => {}
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app, event| {
+            // macOS: окно спрятано в трей (close-to-tray), а клик по иконке
+            // в Dock должен вернуть его, как у любого mac-приложения.
+            #[cfg(target_os = "macos")]
+            {
+                if let tauri::RunEvent::Reopen { .. } = event {
+                    show_main_window(app);
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
+        });
 }
 
 fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<monitor::TrayHandles> {
@@ -143,8 +222,16 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<monitor::TrayHandles> {
     // выглядело «как у старых приложух». Любой клик (левый и правый) открывает
     // фирменный попап — паттерн Cloudflare WARP. Вся функциональность меню
     // (статус, тест, тумблеры, рестарт/стоп, выход) живёт в попапе.
-    let tray = TrayIconBuilder::with_id("main-tray")
-        .icon(app.default_window_icon().unwrap().clone())
+    let builder = TrayIconBuilder::with_id("main-tray");
+    // macOS: сразу монохромная template-иконка (цветная иконка приложения в
+    // строке меню выглядит чужеродно); дальше её ведёт monitor.
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .icon(tauri::image::Image::from_bytes(monitor::MAC_TEMPLATE)?)
+        .icon_as_template(true);
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.icon(app.default_window_icon().unwrap().clone());
+    let tray = builder
         .tooltip("Clod Helper")
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
@@ -238,4 +325,27 @@ fn show_tray_popup(app: &tauri::AppHandle, cx: f64, cy: f64) {
     }
     let _ = win.show();
     let _ = win.set_focus();
+}
+
+/// macOS: иконка в Dock — только пока видно главное окно (как у менюбар-
+/// утилит). Без этого после автозапуска с --tray в Dock висела иконка без окна.
+pub(crate) fn set_dock_visible(app: &tauri::AppHandle, visible: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.set_dock_visibility(visible);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, visible);
+    }
+}
+
+/// Показать главное окно (меню трея, Dock, кнопка в трей-попапе).
+pub(crate) fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        set_dock_visible(app, true);
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
+    }
 }

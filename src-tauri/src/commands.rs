@@ -34,48 +34,91 @@ pub async fn detect_cursor() -> Result<CursorInfo, String> {
 }
 
 #[tauri::command]
-pub fn launch_claude_desktop() -> Result<(), String> {
-    // Prefer the shortcut we created on desktop — it carries the
-    // --proxy-server flag. If the user deleted it, fall back to launching
-    // Claude.exe directly out of the MSIX install location.
-    // Desktop — через known-folder: при OneDrive KFM сырой USERPROFILE\Desktop
-    // не видит ярлык, и запуск тихо падал в fallback БЕЗ прокси (реальный IP).
-    let shortcut = crate::apps::desktop_dir()
-        .ok_or_else(|| "Не нашёл рабочий стол".to_string())?
-        .join("Claude Desktop (proxy).lnk");
-
-    if shortcut.exists() {
-        let mut cmd = Command::new("cmd");
-        cmd.args(["/c", "start", "", shortcut.to_str().unwrap_or("")]);
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            cmd.creation_flags(CREATE_NO_WINDOW);
-        }
-        cmd.spawn().map_err(|e| format!("Не удалось запустить ярлык: {e}"))?;
-        return Ok(());
-    }
-
-    // Fallback: launch via shell:AppsFolder (MSIX activation).
-    let mut cmd = Command::new("cmd");
-    cmd.args([
-        "/c",
-        "start",
-        "",
-        "shell:AppsFolder\\Claude_pzs8sxrjxfjjc!Claude",
-    ]);
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    cmd.spawn()
-        .map_err(|e| format!("Не удалось запустить Claude Desktop: {e}"))?;
-    Ok(())
+pub async fn launch_claude_desktop() -> Result<(), String> {
+    tokio::task::spawn_blocking(crate::claude_desktop::launch)
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))?
 }
 
+/// Telegram через SOCKS-вход моста (macOS): статус по живым соединениям.
+#[tauri::command]
+pub async fn telegram_status() -> Result<crate::telegram::TelegramStatus, String> {
+    tokio::task::spawn_blocking(crate::telegram::status)
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))
+}
+
+/// Открыть в Telegram окно «Добавить прокси» (tg://socks) с входом моста.
+#[tauri::command]
+pub async fn telegram_setup() -> Result<crate::telegram::TelegramStatus, String> {
+    tokio::task::spawn_blocking(crate::telegram::setup)
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))?
+}
+
+/// Claude policy is separate from system proxy/environment settings.
+#[tauri::command]
+pub async fn claude_proxy_status() -> Result<crate::claude_proxy::ClaudeProxyStatus, String> {
+    crate::claude_proxy::status().await
+}
+
+#[tauri::command]
+pub async fn claude_proxy_enable(app: AppHandle) -> Result<crate::claude_proxy::ClaudeProxyStatus, String> {
+    let policy = tokio::task::spawn_blocking(crate::claude_policy::status)
+        .await.map_err(|e| e.to_string())??;
+    if let Some(conflict) = policy.conflict {
+        return Err(conflict);
+    }
+    // Upgrade only the bridge, preserving its existing shared routing config.
+    // Never point Claude at the old Smart listener as a fallback.
+    if crate::claude_proxy::check_bridge().await.is_err() {
+        bridge_update(app).await?;
+        crate::claude_proxy::wait_for_bridge().await?;
+    }
+    crate::claude_proxy::check_bridge().await?;
+    let policy = tokio::task::spawn_blocking(|| {
+        crate::claude_desktop::install_launcher()?;
+        crate::claude_policy::enable()
+    }).await.map_err(|e| e.to_string())??;
+    let mut status = crate::claude_proxy::status().await?;
+    status.policy = policy;
+    Ok(status)
+}
+
+#[tauri::command]
+pub async fn claude_proxy_disable() -> Result<crate::claude_proxy::ClaudeProxyStatus, String> {
+    let policy = tokio::task::spawn_blocking(crate::claude_policy::disable)
+        .await.map_err(|e| e.to_string())??;
+    let mut status = crate::claude_proxy::status().await?;
+    status.policy = policy; // retain any ownership/restore notice
+    Ok(status)
+}
+
+/// macOS: новое окно Терминала с `claude`. Терминал запускается через
+/// LaunchServices и получает глобальные прокси-переменные (launchctl setenv).
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+pub fn launch_claude_code() -> Result<(), String> {
+    let out = Command::new("/usr/bin/osascript")
+        .args([
+            "-e",
+            "tell application \"Terminal\" to do script \"claude\"",
+            "-e",
+            "tell application \"Terminal\" to activate",
+        ])
+        .output()
+        .map_err(|e| format!("Не удалось открыть Терминал: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Не удалось открыть Терминал: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))
+    }
+}
+
+#[cfg(target_os = "windows")]
 #[tauri::command]
 pub fn launch_claude_code() -> Result<(), String> {
     // Open a new Windows Terminal (preferred) or PowerShell window with
@@ -104,6 +147,20 @@ pub fn launch_claude_code() -> Result<(), String> {
     Ok(())
 }
 
+/// macOS: прямой запуск бандла с флагом (ярлык-обёртка несёт тот же флаг).
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+pub fn launch_cursor() -> Result<(), String> {
+    let app = system::find_cursor_exe()
+        .ok_or_else(|| "Cursor не найден на этом Mac".to_string())?;
+    apps::open_app(
+        &app.to_string_lossy(),
+        &format!("http://127.0.0.1:{}", shim::LISTEN_PORT),
+        "Cursor",
+    )
+}
+
+#[cfg(target_os = "windows")]
 #[tauri::command]
 pub fn launch_cursor() -> Result<(), String> {
     // Предпочитаем ярлык «Cursor (proxy)» — он несёт --proxy-server. Если его
@@ -115,7 +172,6 @@ pub fn launch_cursor() -> Result<(), String> {
     if shortcut.exists() {
         let mut cmd = Command::new("cmd");
         cmd.args(["/c", "start", "", shortcut.to_str().unwrap_or("")]);
-        #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
             const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -130,7 +186,6 @@ pub fn launch_cursor() -> Result<(), String> {
     let exe = system::find_cursor_exe()
         .ok_or_else(|| "Cursor не найден на этом ПК".to_string())?;
     let mut cmd = Command::new(&exe);
-    #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -149,6 +204,49 @@ pub struct CursorSetupResult {
     pub message: String,
 }
 
+/// macOS: ярлык «Cursor (proxy).app» на рабочем столе.
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+pub async fn setup_cursor() -> Result<CursorSetupResult, String> {
+    tokio::task::spawn_blocking(|| {
+        let Some(app) = system::find_cursor_exe() else {
+            return CursorSetupResult {
+                ok: false,
+                found: false,
+                message: "Cursor не найден на этом Mac. Установите его с cursor.com и повторите.".into(),
+            };
+        };
+        let created = system::cursor_shortcut_path()
+            .ok_or_else(|| "Не нашёл рабочий стол".to_string())
+            .and_then(|dest| {
+                let body = format!(
+                    "exec /usr/bin/open -a {} --args {}",
+                    crate::macos::sh_quote(&app.to_string_lossy()),
+                    crate::macos::sh_quote(&format!(
+                        "--proxy-server=http://127.0.0.1:{}",
+                        shim::LISTEN_PORT
+                    )),
+                );
+                crate::macos::create_app_wrapper(&dest, "Cursor (proxy)", &body, Some(&app))
+            });
+        match created {
+            Ok(()) => CursorSetupResult {
+                ok: true,
+                found: true,
+                message: "Ярлык «Cursor (proxy)» создан на рабочем столе.".into(),
+            },
+            Err(e) => CursorSetupResult {
+                ok: false,
+                found: true,
+                message: format!("Не удалось создать ярлык: {e}"),
+            },
+        }
+    })
+    .await
+    .map_err(|e| format!("Внутренняя ошибка: {e}"))
+}
+
+#[cfg(target_os = "windows")]
 #[tauri::command]
 pub async fn setup_cursor(app: AppHandle) -> Result<CursorSetupResult, String> {
     // Создаёт ярлык «Cursor (proxy)». Сам мост уже поднят шимом — здесь только
@@ -199,6 +297,10 @@ pub async fn run_install(
     cursor: bool,
     proxy_url: String,
 ) -> Result<(), String> {
+    // Легаси-установка через PS-скрипты; новый мастер — wizard_install.
+    if cfg!(not(target_os = "windows")) {
+        return Err("Легаси-установка доступна только на Windows — используйте мастер".into());
+    }
     // Validate proxy first — fail fast with a friendly message.
     proxy::parse(&proxy_url)?;
 
@@ -346,6 +448,7 @@ fn resolve_resource(app: &AppHandle, name: &str) -> Result<std::path::PathBuf, S
 /// Запустить PS-скрипт блокирующе и вернуть объединённый stdout+stderr (UTF-8).
 /// Используется для коротких операций без стриминга в UI (например setup_cursor
 /// с Dashboard). Ошибка — только если powershell не стартовал.
+#[cfg(target_os = "windows")]
 async fn run_ps_capture(
     script: &std::path::Path,
     args: &[&str],
@@ -723,6 +826,87 @@ pub async fn apps_list() -> Result<Vec<AppProfileStatus>, String> {
     .map_err(|e| format!("Внутренняя ошибка: {e}"))
 }
 
+/// Иконки программ (data-URL PNG) для подсказок и строк своих приложений.
+#[tauri::command]
+pub async fn apps_icons(paths: Vec<String>) -> Result<std::collections::HashMap<String, String>, String> {
+    tokio::task::spawn_blocking(move || apps::icons(&paths))
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))
+}
+
+/// Поиск установленных программ по названию (Spotlight, macOS).
+#[tauri::command]
+pub async fn apps_search(query: String) -> Result<Vec<apps::FoundApp>, String> {
+    tokio::task::spawn_blocking(move || apps::search_installed(&query))
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))
+}
+
+/// Настройки приложения: свой прокси (None — «Авто») и «весь трафик».
+/// Для Claude / Codex / Telegram прокси задаётся назначением сервиса (UI
+/// вызывает proxy_assignments_set) — здесь только профиль.
+#[tauri::command]
+pub async fn apps_settings_set(
+    id: String,
+    proxy: Option<usize>,
+    full_proxy: Option<bool>,
+) -> Result<Vec<AppProfileStatus>, String> {
+    let mut s = settings::load_with_presets();
+    let p = s
+        .app_profiles
+        .iter_mut()
+        .find(|p| p.id == id)
+        .ok_or_else(|| "Профиль не найден".to_string())?;
+    p.proxy = proxy;
+    p.full_proxy = full_proxy;
+    let saved = settings::set_profiles(s.app_profiles)?;
+    Ok(apps::statuses(&saved.app_profiles))
+}
+
+/// Раскладка «Приложений» (вид, папки, порядок) — JSON от UI.
+#[tauri::command]
+pub async fn apps_layout_get() -> Result<Option<serde_json::Value>, String> {
+    Ok(settings::load().apps_layout)
+}
+
+#[tauri::command]
+pub async fn apps_layout_set(layout: serde_json::Value) -> Result<(), String> {
+    let mut s = settings::load();
+    s.apps_layout = Some(layout);
+    settings::save(&s)
+}
+
+/// Открыть в браузере страницу расширения, перехватившего прокси.
+#[tauri::command]
+pub async fn apps_open_extension(id: String, ext_id: String) -> Result<(), String> {
+    let path = settings::load_with_presets()
+        .app_profiles
+        .into_iter()
+        .find(|p| p.id == id)
+        .and_then(|p| p.exe_path)
+        .ok_or_else(|| "Профиль не найден".to_string())?;
+    #[cfg(not(target_os = "windows"))]
+    return tokio::task::spawn_blocking(move || crate::browser_ext::open_extension_page(&path, &ext_id))
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))?;
+    #[cfg(target_os = "windows")]
+    {
+        let _ = (path, ext_id);
+        Err("Пока только для macOS".into())
+    }
+}
+
+/// Через мост ли идёт каждое приложение — по живым соединениям (macOS).
+#[tauri::command]
+pub async fn apps_traffic() -> Result<Vec<crate::traffic::AppTraffic>, String> {
+    tokio::task::spawn_blocking(|| {
+        let s = settings::load_with_presets();
+        crate::traffic::snapshot(&s.app_profiles)
+    })
+    .await
+    .map_err(|e| format!("Внутренняя ошибка: {e}"))
+}
+
 /// Сохранить новое состояние профилей (enabled-галочки, добавленные свои).
 /// Если killswitch активен — правила файрвола НЕ пересобираются автоматически
 /// здесь (это делает отдельный killswitch_enable), чтобы не плодить UAC-промпты
@@ -744,6 +928,16 @@ pub async fn apps_add_custom(
         return Err("Файл не найден по указанному пути".into());
     }
     let mut s = settings::load_with_presets();
+    // Программа уже есть, но убрана из списка (в т.ч. встроенная) — вернуть.
+    if let Some(p) = s
+        .app_profiles
+        .iter_mut()
+        .find(|p| p.hidden && p.exe_path.as_deref() == Some(exe_path.as_str()))
+    {
+        p.hidden = false;
+        let saved = settings::set_profiles(s.app_profiles)?;
+        return Ok(apps::statuses(&saved.app_profiles));
+    }
     // id = custom-<N>
     let n = s
         .app_profiles
@@ -764,6 +958,9 @@ pub async fn apps_add_custom(
         process_names: vec![leaf],
         enabled: true,
         builtin: false,
+        hidden: false,
+        proxy: None,
+        full_proxy: None,
     });
     let saved = settings::set_profiles(s.app_profiles)?;
     Ok(apps::statuses(&saved.app_profiles))
@@ -773,12 +970,12 @@ pub async fn apps_add_custom(
 #[tauri::command]
 pub async fn apps_remove(id: String) -> Result<Vec<AppProfileStatus>, String> {
     let mut s = settings::load_with_presets();
-    if let Some(p) = s.app_profiles.iter().find(|p| p.id == id) {
-        if p.builtin {
-            return Err("Встроенный профиль нельзя удалить — только выключить".into());
-        }
+    // Встроенный не удаляем (пресеты пересеялись бы при запуске) — прячем.
+    if let Some(p) = s.app_profiles.iter_mut().find(|p| p.id == id && p.builtin) {
+        p.hidden = true;
+    } else {
+        s.app_profiles.retain(|p| p.id != id);
     }
-    s.app_profiles.retain(|p| p.id != id);
     let saved = settings::set_profiles(s.app_profiles)?;
     Ok(apps::statuses(&saved.app_profiles))
 }
@@ -796,6 +993,24 @@ pub async fn apps_launch(id: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || apps::launch(&profile))
         .await
         .map_err(|e| format!("Внутренняя ошибка: {e}"))?
+}
+
+/// Закрыть приложение, открытое мимо моста, и запустить через мост (macOS).
+#[tauri::command]
+pub async fn apps_relaunch(id: String) -> Result<(), String> {
+    let profile = settings::load_with_presets()
+        .app_profiles
+        .into_iter()
+        .find(|p| p.id == id)
+        .ok_or_else(|| "Профиль не найден".to_string())?;
+    #[cfg(not(target_os = "windows"))]
+    return tokio::task::spawn_blocking(move || apps::relaunch(&profile))
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))?;
+    #[cfg(target_os = "windows")]
+    return tokio::task::spawn_blocking(move || apps::launch(&profile))
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))?;
 }
 
 /// Создать ярлык «<name> (proxy)» на рабочем столе или в панели задач.
@@ -927,12 +1142,15 @@ pub async fn bridge_task_register() -> Result<crate::tasks::BridgeTaskStatus, St
     let url = settings::load()
         .proxy_url
         .ok_or_else(|| "Прокси ещё не настроен — сначала сохраните его".to_string())?;
-    tokio::task::spawn_blocking(move || crate::tasks::register(&url))
+    tokio::task::spawn_blocking(move || -> Result<crate::tasks::BridgeTaskStatus, String> {
+        crate::tasks::register(&url)?;
+        // Повторная настройка должна сразу восстановить мост, а не только
+        // записать задачу автозапуска до следующего входа в Windows.
+        shim::start()?;
+        Ok(crate::tasks::status())
+    })
         .await
-        .map_err(|e| format!("Внутренняя ошибка: {e}"))??;
-    Ok(tokio::task::spawn_blocking(crate::tasks::status)
-        .await
-        .map_err(|e| format!("Внутренняя ошибка: {e}"))?)
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))?
 }
 
 // ─── Мост: здоровье и маршрутизация ─────────────────────────────
@@ -943,6 +1161,9 @@ pub struct BridgeUpstreamHealth {
     pub healthy: bool,
     pub ok: u64,
     pub fail: u64,
+    /// Отказов подряд (мост 1.5.0+; у старых — 0).
+    #[serde(default)]
+    pub fail_streak: u64,
 }
 
 /// Одна ошибка из кольцевого буфера моста: секунды-от-старта + текст.
@@ -982,15 +1203,77 @@ pub async fn bridge_exe_legacy() -> Result<bool, String> {
         .map_err(|e| format!("Внутренняя ошибка: {e}"))
 }
 
+/// Версии моста: установленного и встроенного в приложение. Если встроенный
+/// новее — UI предлагает «Обновить мост» (иначе после апдейта Clod Helper
+/// пользователь навсегда остался бы на старом мосте: exe копируется только
+/// мастером установки).
+#[derive(Debug, Serialize)]
+pub struct BridgeVersions {
+    pub installed: Option<String>,
+    pub bundled: Option<String>,
+    pub outdated: bool,
+}
+
+#[tauri::command]
+pub async fn bridge_versions(app: AppHandle) -> Result<BridgeVersions, String> {
+    let bundled_path = resolve_resource(&app, shim::BRIDGE_EXE).ok();
+    tokio::task::spawn_blocking(move || {
+        let installed = shim::bridge_exe_path()
+            .filter(|p| p.exists())
+            .and_then(|p| crate::tasks::exe_version(&p));
+        let bundled = bundled_path
+            .filter(|p| p.exists())
+            .and_then(|p| crate::tasks::exe_version(&p));
+        let outdated = match (
+            installed.as_deref().and_then(crate::tasks::parse_version),
+            bundled.as_deref().and_then(crate::tasks::parse_version),
+        ) {
+            (Some(i), Some(b)) => b > i,
+            _ => false,
+        };
+        BridgeVersions { installed, bundled, outdated }
+    })
+    .await
+    .map_err(|e| format!("Внутренняя ошибка: {e}"))
+}
+
+// ─── Автозапуск приложения ──────────────────────────────────────
+
+#[tauri::command]
+pub async fn autostart_get(app: AppHandle) -> Result<crate::autostart::AutostartState, String> {
+    tokio::task::spawn_blocking(move || crate::autostart::get(&app))
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))?
+}
+
+#[tauri::command]
+pub async fn autostart_set(
+    app: AppHandle,
+    enabled: bool,
+) -> Result<crate::autostart::AutostartState, String> {
+    tokio::task::spawn_blocking(move || crate::autostart::set(&app, enabled))
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))?
+}
+
 /// Живые счётчики моста. Ошибка = мост не отвечает ИЛИ это старый python-мост
 /// без /healthz (UI предложит «Обновить мост»).
 #[tauri::command]
 pub async fn bridge_health() -> Result<BridgeHealth, String> {
-    let client = reqwest::Client::builder()
-        .no_proxy() // сами к себе — не через системный прокси
-        .timeout(std::time::Duration::from_secs(3))
-        .build()
-        .map_err(|e| format!("client: {e}"))?;
+    // Один клиент на всё время жизни: UI спрашивает здоровье каждые 5с, а
+    // сборка reqwest-клиента (TLS-конфиг, пул) — не бесплатная.
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    let client = match CLIENT.get() {
+        Some(c) => c,
+        None => {
+            let c = reqwest::Client::builder()
+                .no_proxy() // сами к себе — не через системный прокси
+                .timeout(std::time::Duration::from_secs(3))
+                .build()
+                .map_err(|e| format!("client: {e}"))?;
+            CLIENT.get_or_init(|| c)
+        }
+    };
     let resp = client
         .get(format!("http://127.0.0.1:{}/healthz", shim::LISTEN_PORT))
         .send()
@@ -1031,9 +1314,9 @@ pub async fn bridge_set_route_mode(mode: String) -> Result<(), String> {
 /// (новый exe попадает в resources при апдейте Clod Helper).
 #[tauri::command]
 pub async fn bridge_update(app: AppHandle) -> Result<String, String> {
-    let src = resolve_resource(&app, "clod-bridge.exe")?;
+    let src = resolve_resource(&app, shim::BRIDGE_EXE)?;
     if !src.exists() {
-        return Err("В ресурсах приложения нет clod-bridge.exe".into());
+        return Err(format!("В ресурсах приложения нет {}", shim::BRIDGE_EXE));
     }
     let dst = shim::bridge_exe_path()
         .ok_or_else(|| "Не нашёл папку ClaudeDesktopProxy".to_string())?;
@@ -1046,12 +1329,14 @@ pub async fn bridge_update(app: AppHandle) -> Result<String, String> {
         // Страховка отката: старый exe сохраняем рядом (.bak) — если новый
         // мост у пользователя поведёт себя хуже, можно вернуть вручную.
         if dst.exists() {
-            let _ = std::fs::copy(&dst, dst.with_extension("exe.bak"));
+            let mut bak = dst.clone().into_os_string();
+            bak.push(".bak");
+            let _ = std::fs::copy(&dst, bak);
         }
         // Файл может освобождаться не мгновенно после kill — пара ретраев.
         let mut last_err = String::new();
         for _ in 0..3 {
-            match std::fs::copy(&src, &dst) {
+            match shim::install_bridge_binary(&src, &dst) {
                 Ok(_) => {
                     // Перерегистрировать задачу: новый Rust-мост понимает
                     // --rules, vbs должен его получить (иначе smart-режим не
@@ -1111,7 +1396,7 @@ pub async fn wizard_install(
 
     // 1) Мост: копия из ресурсов в %LOCALAPPDATA%\ClaudeDesktopProxy.
     step("bridge", "start");
-    let src = resolve_resource(&app, "clod-bridge.exe")?;
+    let src = resolve_resource(&app, shim::BRIDGE_EXE)?;
     let dst = shim::bridge_exe_path()
         .ok_or_else(|| "Не нашёл папку ClaudeDesktopProxy".to_string())?;
     let copied = tokio::task::spawn_blocking(move || -> Result<(), String> {
@@ -1122,7 +1407,7 @@ pub async fn wizard_install(
         }
         let mut last_err = String::new();
         for _ in 0..3 {
-            match std::fs::copy(&src, &dst) {
+            match shim::install_bridge_binary(&src, &dst) {
                 Ok(_) => {
                     last_err.clear();
                     break;
@@ -1178,7 +1463,46 @@ pub async fn wizard_install(
     let _ = tokio::task::spawn_blocking(settings::load_with_presets).await;
     step("presets", "ok");
 
-    // 5) Честная проверка: реальный запрос через мост, не зелёный pill.
+    // 5) Claude Desktop (macOS): штатный прокси Claude — одна системная
+    //    просьба пароля прямо в мастере, а не поиск кнопки потом. Отмена или
+    //    конфликт не фатальны: в «Приложениях» будет «Подключить».
+    #[cfg(not(target_os = "windows"))]
+    {
+        let has_claude = tokio::task::spawn_blocking(|| crate::claude_desktop::detect().is_some())
+            .await
+            .unwrap_or(false);
+        if has_claude {
+            step("claude", "start");
+            let configured = tokio::task::spawn_blocking(crate::claude_policy::status)
+                .await
+                .ok()
+                .and_then(|r| r.ok())
+                .is_some_and(|s| s.configured);
+            let ok = configured || claude_proxy_enable(app.clone()).await.is_ok();
+            step("claude", if ok { "ok" } else { "err" });
+        } else {
+            step("claude", "skip");
+        }
+    }
+
+    // 6) Telegram (macOS): мост уже слушает SOCKS — открываем окно «Добавить
+    //    прокси». Нет Telegram — шаг пропускается. Не фатально.
+    #[cfg(not(target_os = "windows"))]
+    {
+        step("telegram", "start");
+        let installed = tokio::task::spawn_blocking(|| {
+            let st = crate::telegram::status();
+            if st.app_path.is_some() && st.socks_ready && st.via_bridge == 0 {
+                let _ = crate::telegram::setup();
+            }
+            st.app_path.is_some()
+        })
+        .await
+        .unwrap_or(false);
+        step("telegram", if installed { "ok" } else { "skip" });
+    }
+
+    // 7) Честная проверка: реальный запрос через мост, не зелёный pill.
     step("test", "start");
     tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
     let test = shim::test().await;
@@ -1312,11 +1636,7 @@ pub async fn proxies_ping() -> Vec<ProxyPing> {
 /// Показать главное окно (кнопка «Открыть приложение» в трей-попапе).
 #[tauri::command]
 pub fn show_main_window(app: AppHandle) {
-    if let Some(win) = app.get_webview_window("main") {
-        let _ = win.show();
-        let _ = win.unminimize();
-        let _ = win.set_focus();
-    }
+    crate::show_main_window(&app);
 }
 
 /// Полный выход из GUI. Мост — отдельный процесс, он продолжает работать.

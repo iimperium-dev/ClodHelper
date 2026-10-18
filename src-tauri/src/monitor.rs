@@ -25,14 +25,68 @@ use tauri_plugin_notification::NotificationExt;
 
 use crate::shim::{self, LISTEN_PORT};
 
+#[cfg(not(target_os = "macos"))]
 const TRAY_OK: &[u8] = include_bytes!("../icons/tray-ok.png");
+#[cfg(not(target_os = "macos"))]
 const TRAY_WARN: &[u8] = include_bytes!("../icons/tray-warn.png");
+#[cfg(not(target_os = "macos"))]
 const TRAY_DOWN: &[u8] = include_bytes!("../icons/tray-down.png");
+
+/// macOS: норма — template (macOS сама красит под светлую/тёмную строку
+/// меню); тревога — «C» в цвет строки меню + цветная точка. Template-картинку
+/// с цветной точкой сделать нельзя: macOS перекрашивает её целиком.
+/// Генератор: scripts/gen-tray-icons-mac.py.
+#[cfg(target_os = "macos")]
+pub const MAC_TEMPLATE: &[u8] = include_bytes!("../icons/tray-mac-template.png");
+#[cfg(target_os = "macos")]
+const MAC_WARN: [&[u8]; 2] = [
+    include_bytes!("../icons/tray-mac-warn-light.png"),
+    include_bytes!("../icons/tray-mac-warn-dark.png"),
+];
+#[cfg(target_os = "macos")]
+const MAC_DOWN: [&[u8]; 2] = [
+    include_bytes!("../icons/tray-mac-down-light.png"),
+    include_bytes!("../icons/tray-mac-down-dark.png"),
+];
+
+/// Тёмная ли строка меню (системная тема). Дёшево: чтение NSUserDefaults.
+#[cfg(target_os = "macos")]
+fn menu_bar_dark() -> bool {
+    use objc2_foundation::{NSString, NSUserDefaults};
+    let defaults = NSUserDefaults::standardUserDefaults();
+    defaults
+        .stringForKey(&NSString::from_str("AppleInterfaceStyle"))
+        .is_some_and(|s| s.to_string().eq_ignore_ascii_case("dark"))
+}
+
+/// Картинка трея для состояния: (байты PNG, template?) + «вариант» для
+/// сравнения (на macOS тревожная иконка зависит ещё и от темы).
+fn tray_icon_for(state: BridgeState) -> (&'static [u8], bool, u8) {
+    #[cfg(target_os = "macos")]
+    {
+        let dark = usize::from(menu_bar_dark());
+        match state {
+            BridgeState::Ok => (MAC_TEMPLATE, true, 0),
+            BridgeState::Warn => (MAC_WARN[dark], false, 1 + dark as u8),
+            BridgeState::Down => (MAC_DOWN[dark], false, 3 + dark as u8),
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    match state {
+        BridgeState::Ok => (TRAY_OK, false, 0),
+        BridgeState::Warn => (TRAY_WARN, false, 1),
+        BridgeState::Down => (TRAY_DOWN, false, 3),
+    }
+}
 
 const TICK: Duration = Duration::from_secs(5);
 /// Пинг до upstream: раз в 12 тиков (~60с); «высоким» считаем > 1500 мс.
 const LATENCY_EVERY_TICKS: u32 = 12;
 const LATENCY_WARN_MS: u128 = 1500;
+/// Высокий пинг должен повториться столько замеров подряд (~2 мин).
+const PING_ALERT_STREAK: u32 = 2;
+/// Прокси нездоров столько тиков подряд (~30с), прежде чем тревожить.
+const UPSTREAM_ALERT_TICKS: u32 = 6;
 
 /// Ручки трея, которые монитор обновляет на лету (иконка + tooltip;
 /// нативного меню нет — статус живёт в попапе и tooltip'е).
@@ -58,6 +112,8 @@ struct Health {
 #[derive(Deserialize)]
 struct UpHealth {
     url: String,
+    /// Мост ≥1.5: false только после серии отказов подряд, а не после
+    /// единичного сбоя — уведомление больше не дёргается от каждого флапа.
     healthy: bool,
 }
 
@@ -95,7 +151,16 @@ fn run(app: AppHandle, h: TrayHandles) {
     let mut nf_down = Debounce::new(Duration::from_secs(60));
     let mut nf_up = Debounce::new(Duration::from_secs(60));
     let mut nf_upstream = Debounce::new(Duration::from_secs(300));
+    let mut nf_upstream_back = Debounce::new(Duration::from_secs(300));
+    let mut upstream_alerted = false;
+    let mut prev_tooltip = String::new();
+    let mut prev_icon: Option<u8> = None;
     let mut nf_ping = Debounce::new(Duration::from_secs(600));
+    // Сколько замеров подряд пинг высокий / тиков подряд прокси нездоров.
+    // Тревожим только затяжные проблемы: единичный потерянный пакет при
+    // TCP-коннекте — это повтор SYN через 1–2с, а не «медленный прокси».
+    let mut ping_high_streak: u32 = 0;
+    let mut upstream_bad_ticks: u32 = 0;
 
     loop {
         let listening = port_listening();
@@ -127,21 +192,27 @@ fn run(app: AppHandle, h: TrayHandles) {
         if tick % LATENCY_EVERY_TICKS == 0 {
             if let Some(hh) = &health {
                 if let Some(addr) = hh.upstreams.first().and_then(|u| upstream_addr(&u.url)) {
-                    last_latency_ms = measure_connect_ms(&addr);
-                    if let Some(ms) = last_latency_ms {
-                        if ms > LATENCY_WARN_MS && nf_ping.ready() {
-                            notify(&app, &format!("Высокий пинг до прокси: {ms} мс — соединения могут тормозить"));
-                        }
+                    last_latency_ms = measure_latency_median(&addr);
+                    let high = last_latency_ms.is_some_and(|ms| ms > LATENCY_WARN_MS);
+                    ping_high_streak = if high { ping_high_streak + 1 } else { 0 };
+                    if ping_high_streak == PING_ALERT_STREAK && internet_ok() && nf_ping.ready() {
+                        let ms = last_latency_ms.unwrap_or_default();
+                        notify(&app, &format!("Прокси отвечает медленно ({ms} мс) уже пару минут — соединения могут тормозить"));
                     }
                 }
             }
+        }
+
+        // Telegram мимо моста → один раз сами открываем его окно прокси.
+        if tick % LATENCY_EVERY_TICKS == 6 && listening {
+            crate::telegram::auto_prompt_once();
         }
 
         let upstream_ok = health
             .as_ref()
             .map(|hh| hh.upstreams.iter().all(|u| u.healthy))
             .unwrap_or(true);
-        let high_ping = last_latency_ms.map(|ms| ms > LATENCY_WARN_MS).unwrap_or(false);
+        let high_ping = ping_high_streak >= PING_ALERT_STREAK;
 
         let state = if !listening {
             BridgeState::Down
@@ -152,26 +223,29 @@ fn run(app: AppHandle, h: TrayHandles) {
         };
 
         // ── Иконка: меняем только на переходе (без мерцания) ──
-        if prev_state != Some(state) {
-            let bytes = match state {
-                BridgeState::Ok => TRAY_OK,
-                BridgeState::Warn => TRAY_WARN,
-                BridgeState::Down => TRAY_DOWN,
-            };
+        // (на macOS ещё и при смене темы, пока иконка тревожная)
+        let (bytes, template, variant) = tray_icon_for(state);
+        if prev_icon != Some(variant) {
+            let _ = h.tray.set_icon_as_template(template);
             if let Ok(img) = tauri::image::Image::from_bytes(bytes) {
                 let _ = h.tray.set_icon(Some(img));
             }
+            prev_icon = Some(variant);
         }
 
         // ── Tooltip ──
+        // set_tooltip — вызов в UI-поток; дёргаем только когда текст поменялся.
         let tooltip = describe(state, &health, last_latency_ms);
-        let _ = h.tray.set_tooltip(Some(&tooltip));
+        if tooltip != prev_tooltip {
+            let _ = h.tray.set_tooltip(Some(&tooltip));
+            prev_tooltip = tooltip;
+        }
 
         // ── Уведомления на переходах ──
         match (prev_state, state) {
             (Some(BridgeState::Ok | BridgeState::Warn), BridgeState::Down) => {
                 if !shim::manually_stopped() && nf_down.ready() {
-                    notify(&app, "Мост упал — супервизор поднимет его в течение ~5 секунд");
+                    notify(&app, "Мост остановился — он перезапустится автоматически в течение ~5 секунд");
                 }
             }
             (Some(BridgeState::Down), BridgeState::Ok | BridgeState::Warn) => {
@@ -181,14 +255,39 @@ fn run(app: AppHandle, h: TrayHandles) {
             }
             _ => {}
         }
-        if prev_upstream_ok && !upstream_ok && nf_upstream.ready() {
-            notify(&app, "Upstream-прокси не отвечает — включён failover/повторы");
+        upstream_bad_ticks = if upstream_ok { 0 } else { upstream_bad_ticks + 1 };
+        // Тревога — только если сбой держится UPSTREAM_ALERT_TICKS тиков (~30с)
+        // и интернет у самого Mac есть: при отвалившемся Wi‑Fi прокси ни при чём.
+        if upstream_bad_ticks == UPSTREAM_ALERT_TICKS && internet_ok() && nf_upstream.ready() {
+            let pool = health.as_ref().map(|hh| hh.upstreams.len()).unwrap_or(1);
+            notify(&app, &upstream_down_text(pool));
+            upstream_alerted = true;
+        }
+        // Парное «отбой тревоги» — иначе пользователь не знает, кончилось ли.
+        if upstream_alerted && !prev_upstream_ok && upstream_ok && nf_upstream_back.ready() {
+            notify(&app, "Прокси снова отвечает — соединения идут как обычно");
+            upstream_alerted = false;
         }
 
         prev_state = Some(state);
         prev_upstream_ok = upstream_ok;
         tick = tick.wrapping_add(1);
         std::thread::sleep(TICK);
+    }
+}
+
+/// Текст тревоги по прокси. Закреплённый сервис (Claude) НИКОГДА не уходит
+/// на другой прокси — обещать «failover» нельзя: мост повторяет попытку к
+/// тому же прокси и ждёт его, выходной IP не меняется.
+fn upstream_down_text(pool: usize) -> String {
+    if pool > 1 {
+        "Прокси перестал отвечать. Claude ждёт свой прокси (IP не меняется), \
+         остальные сервисы переходят на резервный"
+            .into()
+    } else {
+        "Прокси перестал отвечать. Мост повторяет подключение к нему же — \
+         IP не меняется, трафик в обход прокси не идёт"
+            .into()
     }
 }
 
@@ -251,6 +350,28 @@ fn fetch_healthz() -> Option<Health> {
 fn upstream_addr(url_masked: &str) -> Option<String> {
     let rest = url_masked.split("://").nth(1)?;
     Some(rest.rsplit('@').next()?.trim_end_matches('/').to_string())
+}
+
+/// Медиана трёх TCP-коннектов до upstream, мс. Один замер врёт: потерянный
+/// SYN даёт «2–3 секунды» при живом прокси. Неудачные попытки не считаются;
+/// None — не подключились ни разу.
+fn measure_latency_median(addr: &str) -> Option<u128> {
+    let mut v: Vec<u128> = (0..3).filter_map(|_| measure_connect_ms(addr)).collect();
+    if v.is_empty() {
+        return None;
+    }
+    v.sort_unstable();
+    Some(v[v.len() / 2])
+}
+
+/// Есть ли интернет у самого Mac (мимо прокси)? Если нет — проблема в Wi‑Fi,
+/// а не в прокси, и тревожить «прокси не отвечает» нельзя. Два независимых
+/// адреса: Cloudflare и Яндекс DNS.
+fn internet_ok() -> bool {
+    ["1.1.1.1:443", "77.88.8.8:53"].iter().any(|a| {
+        a.parse::<SocketAddr>()
+            .is_ok_and(|addr| TcpStream::connect_timeout(&addr, Duration::from_millis(1500)).is_ok())
+    })
 }
 
 /// Время TCP-коннекта до upstream, мс. None — не подключились (это отдельно

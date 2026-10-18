@@ -5,10 +5,14 @@
 //! метаданные издателя и asInvoker-манифест заметно снижают скоринг.
 
 fn main() {
-    #[cfg(target_os = "windows")]
-    {
+    // Целевая ОС, а не ОС сборки: #[cfg] в build.rs смотрит на хост.
+    // Для macOS ресурсы не нужны (метаданные несёт Info.plist бандла).
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let mut res = winresource::WindowsResource::new();
-        res.set("FileDescription", "Clod Bridge — local AI proxy bridge (Clod Helper)");
+        res.set(
+            "FileDescription",
+            "Clod Bridge — local AI proxy bridge (Clod Helper)",
+        );
         res.set("ProductName", "Clod Helper Bridge");
         res.set("CompanyName", "iimperium");
         res.set("LegalCopyright", "© iimperium");
@@ -33,6 +37,7 @@ fn main() {
   </compatibility>
 </assembly>"#,
         );
-        res.compile().expect("winresource: не удалось вкомпилировать ресурсы");
+        res.compile()
+            .expect("winresource: не удалось вкомпилировать ресурсы");
     }
 }

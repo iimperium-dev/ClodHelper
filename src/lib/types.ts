@@ -102,6 +102,8 @@ export interface AppProfile {
   process_names: string[];
   enabled: boolean;
   builtin: boolean;
+  /** Убрано пользователем из списка. */
+  hidden?: boolean;
 }
 
 /** Runtime-статус профиля (mirror of Rust AppProfileStatus). */
@@ -111,6 +113,12 @@ export interface AppProfileStatus {
   kind: LaunchKind;
   enabled: boolean;
   builtin: boolean;
+  /** Убрано из списка (встроенные прячутся, а не удаляются). */
+  hidden: boolean;
+  /** Свой прокси из пула (индекс); null — «Авто». */
+  proxy: number | null;
+  /** Весь трафик через прокси (иначе только AI-сайты). */
+  full_proxy: boolean;
   installed: boolean;
   location?: string;
   desktop_shortcut: boolean;
@@ -118,6 +126,22 @@ export interface AppProfileStatus {
 }
 
 export type ShortcutTarget = "desktop" | "start_menu";
+
+export interface ClaudeProxyStatus {
+  policy: {
+    configured: boolean;
+    managed: boolean;
+    conflict: string | null;
+    proxy_url: string | null;
+    pac_configured: boolean;
+    notice: string | null;
+    /** macOS: служба возвращает настройку, если система её сотрёт. */
+    auto_restore?: boolean;
+  };
+  bridge_ready: boolean;
+  bridge_error: string | null;
+  network_enforced: boolean;
+}
 
 // ─── Killswitch ──────────────────────────────────────────────────
 
@@ -152,6 +176,52 @@ export interface BridgeUpstreamHealth {
   healthy: boolean;
   ok: number;
   fail: number;
+  /** Отказов подряд (мост 1.5.0+). */
+  fail_streak?: number;
+}
+
+/** Автозапуск приложения при входе в систему. */
+export interface AutostartState {
+  enabled: boolean;
+  /** macOS: объект входа ждёт разрешения в Системных настройках. */
+  needs_approval: boolean;
+}
+
+/** Найденная установленная программа (поиск при добавлении, macOS). */
+export interface FoundApp {
+  name: string;
+  path: string;
+}
+
+/** Живые соединения приложения: через мост / мимо моста (macOS). */
+export interface AppTraffic {
+  id: string;
+  running: boolean;
+  via_bridge: number;
+  direct: number;
+  /** Браузер: включённое расширение, перехватившее прокси. */
+  proxy_extension: { id: string; name: string } | null;
+}
+
+/** Telegram через SOCKS-вход моста (macOS). */
+export interface TelegramStatus {
+  supported: boolean;
+  app_path: string | null;
+  running: boolean;
+  /** Мост слушает SOCKS 127.0.0.1:8891 (мост ≥1.6). */
+  socks_ready: boolean;
+  /** Соединений Telegram через мост сейчас. */
+  via_bridge: number;
+  /** Соединений Telegram наружу мимо моста. */
+  direct: number;
+}
+
+/** Версии моста: установленного и встроенного в приложение. */
+export interface BridgeVersions {
+  installed: string | null;
+  bundled: string | null;
+  /** Встроенный новее установленного — пора «Обновить мост». */
+  outdated: boolean;
 }
 
 /** Ошибка из кольцевого буфера моста: секунды-от-старта + текст. */
@@ -188,4 +258,4 @@ export interface ProxyPing {
 }
 
 /** Группы сервисов для назначений (mirror tasks::SERVICE_GROUPS). */
-export type ServiceGroup = "anthropic" | "openai" | "google" | "other_ai";
+export type ServiceGroup = "anthropic" | "openai" | "google" | "other_ai" | "telegram";

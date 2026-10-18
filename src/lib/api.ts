@@ -4,7 +4,13 @@ import type {
   AppProfileStatus,
   AppSettings,
   BridgeHealth,
+  BridgeVersions,
+  TelegramStatus,
+  AppTraffic,
+  FoundApp,
+  AutostartState,
   BridgeTaskStatus,
+  ClaudeProxyStatus,
   CursorInfo,
   CursorSetupResult,
   GlobalProxyEnv,
@@ -105,6 +111,70 @@ export async function appsList(): Promise<AppProfileStatus[]> {
   return invoke<AppProfileStatus[]>("apps_list");
 }
 
+/** Иконки программ: путь .app → data-URL PNG (macOS; кэшируются в бэкенде). */
+export function appsIcons(paths: string[]): Promise<Record<string, string>> {
+  return invoke<Record<string, string>>("apps_icons", { paths });
+}
+
+/** Настройки приложения: свой прокси (null — «Авто») и «весь трафик». */
+export function appsSettingsSet(
+  id: string,
+  proxy: number | null,
+  fullProxy: boolean | null,
+): Promise<AppProfileStatus[]> {
+  return invoke<AppProfileStatus[]>("apps_settings_set", { id, proxy, fullProxy });
+}
+
+/** Раскладка «Приложений» (вид, папки, порядок). */
+export function appsLayoutGet(): Promise<unknown> {
+  return invoke<unknown>("apps_layout_get");
+}
+
+export function appsLayoutSet(layout: unknown): Promise<void> {
+  return invoke<void>("apps_layout_set", { layout });
+}
+
+/** Поиск установленных программ по названию (Spotlight, macOS). */
+export function appsSearch(query: string): Promise<FoundApp[]> {
+  return invoke<FoundApp[]>("apps_search", { query });
+}
+
+/** Через мост ли идёт каждое приложение — по живым соединениям (macOS). */
+export function appsTraffic(): Promise<AppTraffic[]> {
+  return invoke<AppTraffic[]>("apps_traffic");
+}
+
+/** Открыть в браузере страницу расширения, перехватившего прокси. */
+export function appsOpenExtension(id: string, extId: string): Promise<void> {
+  return invoke<void>("apps_open_extension", { id, extId });
+}
+
+/** Закрыть приложение, открытое мимо моста, и открыть через мост. */
+export function appsRelaunch(id: string): Promise<void> {
+  return invoke<void>("apps_relaunch", { id });
+}
+
+export function telegramStatus(): Promise<TelegramStatus> {
+  return invoke<TelegramStatus>("telegram_status");
+}
+
+/** Открыть в Telegram окно «Добавить прокси» с SOCKS-входом моста. */
+export function telegramSetup(): Promise<TelegramStatus> {
+  return invoke<TelegramStatus>("telegram_setup");
+}
+
+export function claudeProxyStatus(): Promise<ClaudeProxyStatus> {
+  return invoke<ClaudeProxyStatus>("claude_proxy_status");
+}
+
+export function claudeProxyEnable(): Promise<ClaudeProxyStatus> {
+  return invoke<ClaudeProxyStatus>("claude_proxy_enable");
+}
+
+export function claudeProxyDisable(): Promise<ClaudeProxyStatus> {
+  return invoke<ClaudeProxyStatus>("claude_proxy_disable");
+}
+
 export async function appsSet(
   profiles: AppProfile[],
 ): Promise<AppProfileStatus[]> {
@@ -182,6 +252,20 @@ export async function bridgeHealth(): Promise<BridgeHealth> {
 /** Установленный exe моста — легаси-python (без /healthz)? Кэшируется по mtime. */
 export async function bridgeExeLegacy(): Promise<boolean> {
   return invoke<boolean>("bridge_exe_legacy");
+}
+
+/** Автозапуск приложения при входе (Windows — реестр, macOS — SMAppService). */
+export async function autostartGet(): Promise<AutostartState> {
+  return invoke<AutostartState>("autostart_get");
+}
+
+export async function autostartSet(enabled: boolean): Promise<AutostartState> {
+  return invoke<AutostartState>("autostart_set", { enabled });
+}
+
+/** Версии установленного и встроенного моста. */
+export async function bridgeVersions(): Promise<BridgeVersions> {
+  return invoke<BridgeVersions>("bridge_versions");
 }
 
 export async function bridgeSetRouteMode(mode: "smart" | "all"): Promise<void> {

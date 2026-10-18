@@ -1,5 +1,5 @@
 import { useId, type ReactNode } from "react";
-import { siClaude, siCursor, siGithubcopilot, siGooglegemini } from "simple-icons";
+import { siClaude, siCursor, siGithubcopilot, siGooglegemini, siTelegram } from "simple-icons";
 import { cn } from "../lib/cn";
 import type { ServiceGroup } from "../lib/types";
 
@@ -73,6 +73,14 @@ export function ClaudeMark({ className }: { className?: string }) {
   );
 }
 
+export function TelegramMark({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className ?? "h-4 w-4"} fill={`#${siTelegram.hex}`}>
+      <path d={siTelegram.path} />
+    </svg>
+  );
+}
+
 export function GeminiMark({ className }: { className?: string }) {
   const gid = useId();
   return (
@@ -111,6 +119,7 @@ export function ServiceLogo({ id }: { id: ServiceGroup }) {
     openai: "oklch(75% 0.11 180 / 0.2)",
     google: "oklch(70% 0.15 285 / 0.24)",
     other_ai: "oklch(82% 0.02 160 / 0.14)",
+    telegram: "oklch(72% 0.13 230 / 0.26)",
   };
   return (
     <BrandTile glow={glow[id]}>
@@ -118,6 +127,7 @@ export function ServiceLogo({ id }: { id: ServiceGroup }) {
       {id === "openai" && <OpenAiKnot />}
       {id === "google" && <GeminiMark />}
       {id === "other_ai" && <CopilotMark />}
+      {id === "telegram" && <TelegramMark />}
     </BrandTile>
   );
 }
@@ -139,6 +149,9 @@ export function appBrand(name: string): { glyph: ReactNode; glow: string } | nul
   }
   if (n.includes("copilot")) {
     return { glyph: <CopilotMark />, glow: "oklch(82% 0.02 160 / 0.14)" };
+  }
+  if (n.includes("telegram")) {
+    return { glyph: <TelegramMark />, glow: "oklch(72% 0.13 230 / 0.26)" };
   }
   if (n.includes("gemini")) {
     return { glyph: <GeminiMark />, glow: "oklch(70% 0.15 285 / 0.24)" };

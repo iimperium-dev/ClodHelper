@@ -12,7 +12,6 @@ import {
   Trash2,
 } from "lucide-react";
 import { Button } from "../components/Button";
-import { InfoTip } from "../components/InfoTip";
 import { CountryFlag } from "../components/CountryFlag";
 import {
   bridgeUpdate,
@@ -30,6 +29,7 @@ import { useStatus } from "../lib/status";
 import type { ProxyCheckResult, ServiceGroup } from "../lib/types";
 import { fadeInUp, staggerContainer } from "../lib/motion";
 import { cn } from "../lib/cn";
+import { isMac } from "../lib/platform";
 
 /** Сервисы для назначений (mirror tasks::SERVICE_GROUPS в Rust). */
 const SERVICES: { id: ServiceGroup; name: string; sub: string }[] = [
@@ -37,6 +37,10 @@ const SERVICES: { id: ServiceGroup; name: string; sub: string }[] = [
   { id: "openai", name: "ChatGPT", sub: "OpenAI · Codex" },
   { id: "google", name: "Gemini", sub: "Google AI" },
   { id: "other_ai", name: "Остальные AI", sub: "Copilot · Cursor · Grok…" },
+  // Telegram через SOCKS-вход моста есть только в версии для macOS.
+  ...(isMac
+    ? [{ id: "telegram" as const, name: "Telegram", sub: "Через мост · «Авто» = основной прокси" }]
+    : []),
 ];
 
 
@@ -375,20 +379,15 @@ export function Proxies() {
       variants={staggerContainer}
       initial="hidden"
       animate="show"
-      className="mx-auto flex w-full max-w-[620px] flex-col px-8 py-7"
+      className="mx-auto flex w-full max-w-[520px] flex-col px-6 py-6"
     >
       <motion.header variants={fadeInUp} className="flex items-end justify-between">
         <div>
-          <h1 className="flex items-center gap-2 text-[24px] font-bold leading-tight tracking-[-0.02em] text-vb-fg">
+          <h1 className="text-[20px] font-semibold leading-tight tracking-[-0.02em] text-vb-fg">
             Прокси
-            <InfoTip>
-              Пул до {MAX_POOL} прокси-серверов. <b>Основной</b> используется по
-              умолчанию; если он не отвечает — мост автоматически переключается
-              на запасные. Ниже можно закрепить сервисы за конкретными прокси.
-            </InfoTip>
           </h1>
-          <p className="mt-0.5 text-[13px] text-vb-silver-dim">
-            Основной, запасные и назначения по сервисам
+          <p className="text-[12px] text-vb-silver-faint">
+            Основной работает всегда, запасные — если он упал
           </p>
         </div>
         {pool !== null && pool.length < MAX_POOL && (
@@ -696,18 +695,13 @@ export function Proxies() {
         </p>
       </motion.section>
 
-      {/* ── Назначения по сервисам ── */}
+      {/* ── Назначения по сервисам (Windows). На macOS прокси выбирается в
+          настройках каждого приложения («Приложения» → шестерёнка). ── */}
+      {!isMac && (
       <motion.section variants={fadeInUp} className="mt-6">
-        <div className="mb-2 flex items-center gap-2 px-1">
+        <div className="mb-2 px-1">
           <h2 className="text-[15px] font-semibold text-vb-fg">Назначения</h2>
-          <InfoTip>
-            Каждый AI-сервис можно закрепить за конкретным прокси из пула.
-            Закрепление <b>строгое</b>: сервис ходит только через выбранный
-            прокси — если тот лёг, сервис ждёт его восстановления, а НЕ
-            прыгает на другой IP (AI-сервисы, особенно Claude, флагают
-            аккаунты за смену IP). «Авто» — основной прокси, при его падении
-            разрешён переход на резервные.
-          </InfoTip>
+          <p className="text-[12px] text-vb-silver-faint">Сервис всегда выходит через выбранный прокси</p>
         </div>
 
         {!bridgeSupportsAssignments && health !== null && (
@@ -764,6 +758,7 @@ export function Proxies() {
           })}
         </div>
       </motion.section>
+      )}
     </motion.div>
   );
 }

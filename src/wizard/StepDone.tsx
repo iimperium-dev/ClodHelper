@@ -3,6 +3,7 @@ import { AlertTriangle, AppWindow, Check, Globe } from "lucide-react";
 import { Button } from "../components/Button";
 import type { WizardInstallResult } from "../lib/types";
 import { cn } from "../lib/cn";
+import { osName } from "../lib/platform";
 
 interface Props {
   result: WizardInstallResult;
@@ -61,7 +62,7 @@ export function StepDone({ result, onFinish }: Props) {
       <div className="mx-auto mt-6 max-w-md space-y-2 text-left">
         <div className="flex items-center gap-2.5 rounded-lg border border-vb-border/70 px-3.5 py-2.5 text-[13px] text-vb-silver">
           <Check className="h-4 w-4 shrink-0 text-vb-emerald" />
-          Мост установлен и будет запускаться сам при входе в Windows
+          Мост установлен и будет запускаться сам при входе в {osName}
         </div>
         <div className="flex items-center gap-2.5 rounded-lg border border-vb-border/70 px-3.5 py-2.5 text-[13px] text-vb-silver">
           {result.env_on ? (

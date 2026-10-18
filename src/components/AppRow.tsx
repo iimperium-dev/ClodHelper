@@ -1,213 +1,240 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  AlertCircle,
   Check,
-  ChevronDown,
-  ExternalLink,
+  CheckCircle2,
   Loader2,
-  MonitorDown,
+  GripVertical,
+  Minus,
+  MoreHorizontal,
   Play,
-  Trash2,
 } from "lucide-react";
 import { Toggle } from "./Toggle";
-import { appBrand, BrandTile } from "./BrandLogos";
+import { Button } from "./Button";
+import { isMac } from "../lib/platform";
+import { AppIcon, IconWithGear } from "./AppTile";
 import { cn } from "../lib/cn";
-import type { AppProfileStatus, ShortcutTarget } from "../lib/types";
+import type { AppProfileStatus } from "../lib/types";
+
+/** Статус-строка под названием: что реально происходит с трафиком. */
+export interface RowStatus {
+  tone: "ok" | "warn" | "muted";
+  text: string;
+}
+
+/** Действие строки (главная кнопка или пункт меню «…»). */
+export interface RowAction {
+  label: string;
+  run: () => Promise<unknown> | void;
+  danger?: boolean;
+}
 
 interface Props {
   app: AppProfileStatus;
-  onToggle: (enabled: boolean) => void;
+  /** null — статуса нет (Windows / ещё не узнали): тихая подпись типа. */
+  status: RowStatus | null;
+  /** Главная кнопка, когда нужно действие («Подключить»). Иначе — «Открыть». */
+  action?: RowAction | null;
+  /** Пункты меню «…» (ярлыки, отключение, удаление). */
+  menu: RowAction[];
   onLaunch: () => Promise<void>;
-  onShortcut: (target: ShortcutTarget) => Promise<string>;
+  /** Настоящая иконка программы (macOS). */
+  icon?: string;
+  /** Режим упорядочивания: «−» слева, ручка справа, без кнопок. */
+  editing?: boolean;
   onRemove?: () => void;
+  /** Открыть настройки приложения (шестерёнка при наведении). */
+  onSettings?: () => void;
+  /** Тумблер — только Windows (там он управляет killswitch). */
+  onToggle?: (enabled: boolean) => void;
 }
 
 /*
-  Строка приложения — плоская (строки в общем контейнере с hairline,
-  не карточка на карточке): иконка, имя+тип, тихие действия, тумблер.
+  Строка приложения — одна для всех (Claude, Telegram, VS Code, свои):
+  логотип, имя, ОДНА строка статуса по живым соединениям, ОДНА кнопка —
+  «Подключить», если трафик идёт мимо моста, иначе «Открыть». Всё
+  второстепенное — в меню «…».
 */
-export function AppRow({ app, onToggle, onLaunch, onShortcut, onRemove }: Props) {
-  const [busy, setBusy] = useState<null | "launch" | "shortcut">(null);
-  const [shortcutOpen, setShortcutOpen] = useState(false);
-  const [flash, setFlash] = useState<string | null>(null);
+export function AppRow({
+  app,
+  status,
+  action,
+  menu,
+  onLaunch,
+  onToggle,
+  icon,
+  editing,
+  onRemove,
+  onSettings,
+}: Props) {
+  const [hover, setHover] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [flash, setFlash] = useState<{ ok: boolean; text: string } | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
-  // Light dismiss: клик вне меню ярлыка закрывает его.
+  // Light dismiss: клик вне меню закрывает его.
   useEffect(() => {
-    if (!shortcutOpen) return;
+    if (!menuOpen) return;
     const close = (e: MouseEvent) => {
-      if (!menuRef.current?.contains(e.target as Node)) setShortcutOpen(false);
+      if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false);
     };
     window.addEventListener("mousedown", close);
     return () => window.removeEventListener("mousedown", close);
-  }, [shortcutOpen]);
+  }, [menuOpen]);
 
-  const launch = async () => {
-    setBusy("launch");
+  const run = async (fn: () => Promise<unknown> | void, okText?: string) => {
+    setBusy(true);
+    setMenuOpen(false);
     try {
-      await onLaunch();
+      const res = await fn();
+      const text = okText ?? (typeof res === "string" ? res : null);
+      if (text) {
+        setFlash({ ok: true, text });
+        window.setTimeout(() => setFlash(null), 4000);
+      }
     } catch (e) {
-      setFlash(String(e));
-      window.setTimeout(() => setFlash(null), 3000);
+      setFlash({ ok: false, text: String(e) });
+      window.setTimeout(() => setFlash(null), 6000);
     } finally {
-      setBusy(null);
-    }
-  };
-
-  const makeShortcut = async (target: ShortcutTarget) => {
-    setBusy("shortcut");
-    setShortcutOpen(false);
-    try {
-      await onShortcut(target);
-      setFlash(
-        target === "desktop"
-          ? "Ярлык на рабочем столе"
-          : "Ярлык в Пуске — правым кликом закрепите на панель",
-      );
-      window.setTimeout(() => setFlash(null), 4000);
-    } catch (e) {
-      setFlash(String(e));
-      window.setTimeout(() => setFlash(null), 3000);
-    } finally {
-      setBusy(null);
+      setBusy(false);
     }
   };
 
   const kindLabel =
-    app.kind === "msix"
-      ? "Microsoft Store"
-      : app.kind === "custom"
-        ? "Своё приложение"
-        : "Приложение";
-
-  const brand = appBrand(app.name);
+    app.kind === "msix" ? "Microsoft Store" : app.kind === "custom" ? "Своё приложение" : "Приложение";
+  const sub: RowStatus = !app.installed
+    ? { tone: "muted", text: "Не установлен" }
+    : (status ?? { tone: "muted", text: kindLabel });
 
   return (
-    <motion.div layout className="px-4 py-3">
+    <motion.div
+      layout
+      className="px-4 py-3"
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+    >
       <div className="flex items-center gap-3">
-        {/* Бренд-логотип приложения; generic-иконка — только для неизвестных */}
-        {brand ? (
-          <BrandTile glow={brand.glow} disabled={!app.enabled}>
-            {brand.glyph}
-          </BrandTile>
-        ) : (
+        <AnimatePresence initial={false}>
+          {editing && (
+            <motion.button
+              type="button"
+              initial={{ width: 0, opacity: 0, scale: 0.5 }}
+              animate={{ width: 22, opacity: 1, scale: 1 }}
+              exit={{ width: 0, opacity: 0, scale: 0.5 }}
+              transition={{ type: "spring", bounce: 0.3, duration: 0.35 }}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={onRemove}
+              aria-label={`Убрать ${app.name}`}
+              className="-mr-1 flex h-[22px] shrink-0 items-center justify-center rounded-full bg-vb-loss text-white"
+            >
+              <Minus className="h-3 w-3" strokeWidth={3} />
+            </motion.button>
+          )}
+        </AnimatePresence>
+        <IconWithGear show={hover && !editing} size={32} onSettings={onSettings}>
+          <AppIcon name={app.name} icon={icon} size={32} dim={!app.installed} />
+        </IconWithGear>
+
+        <div className="min-w-0 flex-1">
           <div
             className={cn(
-              "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors duration-200",
-              app.enabled
-                ? "bg-vb-emerald/12 text-vb-emerald"
-                : "bg-vb-surface-2 text-vb-silver-dim",
+              "truncate text-[14px] font-semibold",
+              app.installed ? "text-vb-fg" : "text-vb-silver-dim",
             )}
           >
-            <MonitorDown className="h-[18px] w-[18px]" strokeWidth={1.75} />
+            {app.name}
+          </div>
+          <div
+            className={cn(
+              "mt-px flex items-center gap-1 truncate text-[12px]",
+              sub.tone === "ok" && "text-vb-emerald",
+              sub.tone === "warn" && "text-vb-warn",
+              sub.tone === "muted" && "text-vb-silver-faint",
+            )}
+          >
+            {sub.tone === "ok" && <CheckCircle2 className="h-3 w-3 shrink-0" />}
+            {sub.tone === "warn" && <AlertCircle className="h-3 w-3 shrink-0" />}
+            <span className="truncate">{sub.text}</span>
+          </div>
+        </div>
+
+        {editing ? (
+          <GripVertical className="h-4 w-4 shrink-0 cursor-grab text-vb-silver-faint" aria-hidden />
+        ) : app.installed && (
+          <div className="flex shrink-0 items-center gap-1">
+            {action ? (
+              <Button size="sm" variant="secondary" onClick={() => run(action.run)} disabled={busy}>
+                {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                {action.label}
+              </Button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => run(onLaunch)}
+                disabled={busy}
+                className={cn(
+                  "flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium text-vb-silver-dim",
+                  "transition-colors duration-150 hover:bg-vb-surface-2 hover:text-vb-silver",
+                  "active:scale-[0.97] disabled:opacity-35",
+                )}
+              >
+                {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+                Открыть
+              </button>
+            )}
+
+            {menu.length > 0 && (
+              <div className="relative" ref={menuRef}>
+                <button
+                  type="button"
+                  onClick={() => setMenuOpen((v) => !v)}
+                  disabled={busy}
+                  aria-label={`Ещё — ${app.name}`}
+                  className="rounded-lg p-1.5 text-vb-silver-faint transition-colors duration-150 hover:bg-vb-surface-2 hover:text-vb-silver active:scale-[0.97]"
+                >
+                  <MoreHorizontal className="h-4 w-4" />
+                </button>
+                <AnimatePresence>
+                  {menuOpen && (
+                    <motion.div
+                      initial={{ opacity: 0, scale: 0.96, y: -4 }}
+                      animate={{ opacity: 1, scale: 1, y: 0 }}
+                      exit={{ opacity: 0, scale: 0.98, y: -2 }}
+                      transition={{ duration: 0.14, ease: [0.22, 1, 0.36, 1] }}
+                      style={{ transformOrigin: "top right" }}
+                      className="z-dropdown absolute right-0 top-full mt-1 w-56 overflow-hidden rounded-lg border border-vb-border bg-vb-surface py-1 shadow-[0_8px_24px_rgba(0,0,0,0.5)]"
+                    >
+                      {menu.map((m) => (
+                        <button
+                          key={m.label}
+                          type="button"
+                          onClick={() => run(m.run)}
+                          className={cn(
+                            "flex w-full items-center px-3 py-2 text-left text-[13px] transition-colors hover:bg-vb-surface-2",
+                            m.danger ? "text-vb-loss" : "text-vb-silver",
+                          )}
+                        >
+                          {m.label}
+                        </button>
+                      ))}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            )}
           </div>
         )}
 
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="truncate text-[14px] font-semibold text-vb-fg">
-              {app.name}
-            </span>
-            {!app.installed && (
-              <span className="rounded-md bg-vb-surface-2 px-1.5 py-0.5 text-[10px] font-medium text-vb-silver-faint">
-                не найдено
-              </span>
-            )}
-          </div>
-          <div className="mt-px truncate text-[11px] text-vb-silver-faint">
-            {kindLabel}
-            {app.installed && app.desktop_shortcut && " · ярлык готов"}
-          </div>
-        </div>
-
-        {/* Действия: тихие icon-кнопки */}
-        <div className="flex shrink-0 items-center gap-1">
-          <button
-            type="button"
-            onClick={launch}
-            disabled={!app.installed || busy !== null}
-            className={cn(
-              "flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium text-vb-silver-dim",
-              "transition-colors duration-150 hover:bg-vb-surface-2 hover:text-vb-silver",
-              "active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-35",
-            )}
-            title="Запустить через мост"
-          >
-            {busy === "launch" ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Play className="h-3.5 w-3.5" />
-            )}
-            Открыть
-          </button>
-
-          <div className="relative" ref={menuRef}>
-            <button
-              type="button"
-              onClick={() => setShortcutOpen((v) => !v)}
-              disabled={!app.installed || busy !== null}
-              className={cn(
-                "flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[12px] font-medium text-vb-silver-dim",
-                "transition-colors duration-150 hover:bg-vb-surface-2 hover:text-vb-silver",
-                "active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-35",
-              )}
-              title="Создать ярлык"
-            >
-              {busy === "shortcut" ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <ExternalLink className="h-3.5 w-3.5" />
-              )}
-              <ChevronDown className="h-3 w-3 opacity-60" />
-            </button>
-
-            <AnimatePresence>
-              {shortcutOpen && (
-                <motion.div
-                  initial={{ opacity: 0, scale: 0.96, y: -4 }}
-                  animate={{ opacity: 1, scale: 1, y: 0 }}
-                  exit={{ opacity: 0, scale: 0.98, y: -2 }}
-                  transition={{ duration: 0.14, ease: [0.22, 1, 0.36, 1] }}
-                  style={{ transformOrigin: "top right" }}
-                  className="z-dropdown absolute right-0 top-full mt-1 w-44 overflow-hidden rounded-lg border border-vb-border bg-vb-surface shadow-[0_8px_24px_rgba(0,0,0,0.5)]"
-                >
-                  <button
-                    type="button"
-                    onClick={() => makeShortcut("desktop")}
-                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] text-vb-silver transition-colors hover:bg-vb-surface-2"
-                  >
-                    На рабочий стол
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => makeShortcut("start_menu")}
-                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] text-vb-silver transition-colors hover:bg-vb-surface-2"
-                  >
-                    В меню Пуск
-                  </button>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-
-          {onRemove && !app.builtin && (
-            <button
-              type="button"
-              onClick={onRemove}
-              className="rounded-lg p-1.5 text-vb-silver-faint transition-colors duration-150 hover:bg-vb-loss/10 hover:text-vb-loss active:scale-[0.97]"
-              title="Удалить профиль"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </button>
-          )}
-        </div>
-
-        <Toggle
-          checked={app.enabled}
-          onChange={onToggle}
-          disabled={!app.installed}
-          label={`Проксировать ${app.name}`}
-        />
+        {!isMac && onToggle && !editing && (
+          <Toggle
+            checked={app.enabled}
+            onChange={onToggle}
+            disabled={!app.installed}
+            label={`Проксировать ${app.name}`}
+          />
+        )}
       </div>
 
       <AnimatePresence>
@@ -221,12 +248,12 @@ export function AppRow({ app, onToggle, onLaunch, onShortcut, onRemove }: Props)
           >
             <div
               className={cn(
-                "flex items-center gap-1.5 pl-12 pt-1.5 text-[12px]",
-                flash.includes("Ярлык") ? "text-vb-emerald" : "text-vb-loss",
+                "flex items-start gap-1.5 pl-11 pt-1.5 text-[12px] leading-snug",
+                flash.ok ? "text-vb-emerald" : "text-vb-loss",
               )}
             >
-              {flash.includes("Ярлык") && <Check className="h-3 w-3" />}
-              {flash}
+              {flash.ok && <Check className="mt-0.5 h-3 w-3 shrink-0" />}
+              {flash.text}
             </div>
           </motion.div>
         )}
