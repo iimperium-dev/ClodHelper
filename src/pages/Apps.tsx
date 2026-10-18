@@ -17,6 +17,7 @@ import {
   appsLayoutGet,
   appsLayoutSet,
   appsLaunch,
+  appsOpenExtension,
   appsList,
   appsRelaunch,
   appsRemove,
@@ -255,6 +256,21 @@ export function Apps() {
       return { status: st, action: st.tone === "warn" ? connect : null, menu };
     }
 
+    // Браузер: расширение (FoxyProxy, SwitchyOmega…) перебивает --proxy-server.
+    if (t?.proxy_extension) {
+      const ext = t.proxy_extension;
+      return {
+        status: { tone: "warn", text: `Прокси перехватывает ${ext.name}` },
+        action: {
+          label: `Отключить ${ext.name}`,
+          run: () =>
+            after(appsOpenExtension(app.id, ext.id)).then(
+              () => `Выключите ${ext.name} в открывшейся вкладке — перезапуск не нужен`,
+            ),
+        },
+        menu: [...shortcutMenu(app), ...remove],
+      };
+    }
     const st = trafficStatus(t, "Откроется через мост");
     return { status: st, action: st.tone === "warn" ? relaunch : null, menu: [...shortcutMenu(app), ...remove] };
   };

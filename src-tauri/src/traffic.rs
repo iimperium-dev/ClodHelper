@@ -23,6 +23,8 @@ pub struct AppTraffic {
     pub via_bridge: u32,
     /// Соединений наружу мимо моста.
     pub direct: u32,
+    /// Браузер: включённое расширение, перехватившее прокси (FoxyProxy…).
+    pub proxy_extension: Option<crate::browser_ext::ProxyExtension>,
 }
 
 /// Имена процессов, по которым узнаём приложение (префикс: «Claude» ловит и
@@ -111,6 +113,26 @@ fn is_telegram_dc(remote: &str) -> bool {
         || in_net([185, 76, 151, 0], 24)
 }
 
+/// Публичные DNS-резолверы (DNS-over-HTTPS / DNS-over-TLS). Движок Chromium
+/// в Electron-приложениях (ChatGPT, VS Code…) ходит к ним напрямую, мимо
+/// --proxy-server, — это поиск адресов, а не трафик к сервису: ни запросы,
+/// ни IP пользователя до OpenAI/Anthropic так не доходят. Считать их «мимо
+/// моста» значило бы вечное ложное «Частично мимо».
+fn is_dns_resolver(remote: &str) -> bool {
+    const RESOLVERS: &[&str] = &[
+        // Cloudflare (chrome./mozilla.cloudflare-dns.com, 1.1.1.1)
+        "172.64.41.3", "172.64.41.4", "162.159.61.3", "162.159.61.4",
+        "104.16.248.249", "104.16.249.249", "1.1.1.1", "1.0.0.1",
+        // Google (dns.google), Quad9, AdGuard, Яндекс DNS
+        "8.8.8.8", "8.8.4.4", "9.9.9.9", "149.112.112.112",
+        "94.140.14.14", "94.140.15.15", "77.88.8.8", "77.88.8.1",
+    ];
+    let Some((host, port)) = remote.rsplit_once(':') else {
+        return false;
+    };
+    matches!(port, "443" | "853") && RESOLVERS.contains(&host)
+}
+
 fn is_loopback(remote: &str) -> bool {
     remote.starts_with("127.") || remote.starts_with("[::1]")
 }
@@ -137,7 +159,10 @@ fn summarize(
                 }
                 if is_bridge(remote) {
                     t.via_bridge += 1;
-                } else if !is_loopback(remote) && (!telegram || is_telegram_dc(remote)) {
+                } else if !is_loopback(remote)
+                    && !is_dns_resolver(remote)
+                    && (!telegram || is_telegram_dc(remote))
+                {
                     t.direct += 1;
                 }
             }
@@ -166,7 +191,13 @@ pub fn snapshot(profiles: &[AppProfile]) -> Vec<AppTraffic> {
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
-    summarize(profiles, &running, &parse_lsof(&out))
+    let mut t = summarize(profiles, &running, &parse_lsof(&out));
+    for (traffic, p) in t.iter_mut().zip(profiles) {
+        if let Some(path) = p.exe_path.as_deref() {
+            traffic.proxy_extension = crate::browser_ext::proxy_extensions(path).into_iter().next();
+        }
+    }
+    t
 }
 
 /// Windows: статус по соединениям пока не считаем (там есть killswitch).
@@ -194,6 +225,18 @@ mod tests {
             proxy: None,
             full_proxy: None,
         }
+    }
+
+    #[test]
+    fn dns_over_https_is_not_a_leak() {
+        let profiles = vec![profile("codex", None)];
+        let lsof = "p1\ncCodex (Service)\nf1\nn127.0.0.1:5000->127.0.0.1:8889\n\
+                    f2\nn192.168.0.5:5001->172.64.41.3:443\n\
+                    f3\nn192.168.0.5:5002->162.159.61.3:443\n";
+        let t = summarize(&profiles, &["Codex (Service)".to_string()], &parse_lsof(lsof));
+        assert_eq!((t[0].via_bridge, t[0].direct), (1, 0));
+        assert!(!is_dns_resolver("172.64.41.3:80"));
+        assert!(!is_dns_resolver("104.18.32.47:443"));
     }
 
     #[test]

@@ -199,6 +199,8 @@ export interface AppTraffic {
   running: boolean;
   via_bridge: number;
   direct: number;
+  /** Браузер: включённое расширение, перехватившее прокси. */
+  proxy_extension: { id: string; name: string } | null;
 }
 
 /** Telegram через SOCKS-вход моста (macOS). */

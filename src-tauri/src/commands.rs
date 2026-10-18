@@ -876,6 +876,26 @@ pub async fn apps_layout_set(layout: serde_json::Value) -> Result<(), String> {
     settings::save(&s)
 }
 
+/// Открыть в браузере страницу расширения, перехватившего прокси.
+#[tauri::command]
+pub async fn apps_open_extension(id: String, ext_id: String) -> Result<(), String> {
+    let path = settings::load_with_presets()
+        .app_profiles
+        .into_iter()
+        .find(|p| p.id == id)
+        .and_then(|p| p.exe_path)
+        .ok_or_else(|| "Профиль не найден".to_string())?;
+    #[cfg(not(target_os = "windows"))]
+    return tokio::task::spawn_blocking(move || crate::browser_ext::open_extension_page(&path, &ext_id))
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))?;
+    #[cfg(target_os = "windows")]
+    {
+        let _ = (path, ext_id);
+        Err("Пока только для macOS".into())
+    }
+}
+
 /// Через мост ли идёт каждое приложение — по живым соединениям (macOS).
 #[tauri::command]
 pub async fn apps_traffic() -> Result<Vec<crate::traffic::AppTraffic>, String> {

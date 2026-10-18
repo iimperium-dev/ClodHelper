@@ -19,6 +19,7 @@ mod system;
 mod tasks;
 mod telegram;
 mod traffic;
+mod browser_ext;
 mod vscode_config;
 
 use tauri::{
@@ -81,6 +82,7 @@ pub fn run() {
             commands::claude_proxy_status,
             commands::telegram_status,
             commands::apps_traffic,
+            commands::apps_open_extension,
             commands::apps_search,
             commands::apps_icons,
             commands::apps_layout_get,

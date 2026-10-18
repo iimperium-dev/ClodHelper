@@ -144,6 +144,11 @@ export function appsTraffic(): Promise<AppTraffic[]> {
   return invoke<AppTraffic[]>("apps_traffic");
 }
 
+/** Открыть в браузере страницу расширения, перехватившего прокси. */
+export function appsOpenExtension(id: string, extId: string): Promise<void> {
+  return invoke<void>("apps_open_extension", { id, extId });
+}
+
 /** Закрыть приложение, открытое мимо моста, и открыть через мост. */
 export function appsRelaunch(id: string): Promise<void> {
   return invoke<void>("apps_relaunch", { id });
