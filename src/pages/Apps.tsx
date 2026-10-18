@@ -1,15 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { FolderOpen, Loader2, Plus } from "lucide-react";
+import { FolderOpen, LayoutGrid, List, Loader2, Plus } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Button } from "../components/Button";
-import { AppRow, type RowAction, type RowStatus } from "../components/AppRow";
+import { type RowAction, type RowStatus } from "../components/AppRow";
 import { ClaudeProxyControl } from "../components/ClaudeProxyControl";
 import { AppSearchAdd } from "../components/AppSearchAdd";
+import { AppsBoard } from "../components/AppsBoard";
+import { AppSettingsModal } from "../components/AppSettingsModal";
+import { moveApp } from "../lib/appLayout";
+import { reconcile, type AppsLayout, type AppsView } from "../lib/appLayout";
 import {
   appsAddCustom,
   appsCreateShortcut,
   appsIcons,
+  appsLayoutGet,
+  appsLayoutSet,
   appsLaunch,
   appsList,
   appsRelaunch,
@@ -30,6 +36,7 @@ import type {
 } from "../lib/types";
 import { fadeInUp, staggerContainer } from "../lib/motion";
 import { isMac } from "../lib/platform";
+import { cn } from "../lib/cn";
 
 /** Статус по соединениям: раз в 5с, после действия — чаще (ждём переключения). */
 const TRAFFIC_POLL_MS = 5_000;
@@ -69,6 +76,31 @@ export function Apps() {
   const [claude, setClaude] = useState<ClaudeProxyStatus | null>(null);
   const [telegram, setTelegram] = useState<TelegramStatus | null>(null);
   const [icons, setIcons] = useState<Record<string, string>>({});
+  const [savedLayout, setSavedLayout] = useState<AppsLayout | null | undefined>(undefined);
+  const [editing, setEditing] = useState(false);
+  const [settingsId, setSettingsId] = useState<string | null>(null);
+
+  // Раскладка (вид, папки, порядок): загрузка один раз, сохранение с паузой.
+  useEffect(() => {
+    appsLayoutGet()
+      .then((l) => setSavedLayout((l as AppsLayout | null) ?? null))
+      .catch(() => setSavedLayout(null));
+  }, []);
+  const visible = (apps ?? []).filter((a) => !a.hidden);
+  const layout = reconcile(savedLayout ?? null, visible);
+  const saveTimer = useRef<number | null>(null);
+  const updateLayout = (l: AppsLayout) => {
+    setSavedLayout(l);
+    if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
+    saveTimer.current = window.setTimeout(() => void appsLayoutSet(l).catch(() => {}), 400);
+  };
+  // Esc выходит из режима упорядочивания.
+  useEffect(() => {
+    if (!editing) return;
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && setEditing(false);
+    window.addEventListener("keydown", esc);
+    return () => window.removeEventListener("keydown", esc);
+  }, [editing]);
   const fastTicks = useRef(0);
 
   const load = useCallback(async () => {
@@ -79,7 +111,7 @@ export function Apps() {
   useEffect(() => {
     if (!isMac || !apps) return;
     const need = apps
-      .filter((a) => !a.builtin && a.location && !(a.location in icons))
+      .filter((a) => a.location && !(a.location in icons))
       .map((a) => a.location as string);
     if (need.length === 0) return;
     appsIcons(need)
@@ -142,7 +174,22 @@ export function Apps() {
   ];
 
   /** Статус, главная кнопка и меню строки (macOS — по соединениям). */
+  /** Строка + «Убрать из списка» у любого приложения (встроенные прячутся,
+      вернуть — через «Добавить»). */
   const describe = (
+    app: AppProfileStatus,
+  ): { status: RowStatus | null; action: RowAction | null; menu: RowAction[] } => {
+    const r = describeInner(app);
+    return {
+      ...r,
+      menu: [
+        ...r.menu.filter((m) => m.label !== "Удалить из списка"),
+        { label: "Убрать из списка", run: () => removeApp(app.id), danger: true },
+      ],
+    };
+  };
+
+  const describeInner = (
     app: AppProfileStatus,
   ): { status: RowStatus | null; action: RowAction | null; menu: RowAction[] } => {
     const remove: RowAction[] = app.builtin
@@ -230,6 +277,7 @@ export function Apps() {
           process_names: a.process_names,
           enabled: a.enabled,
           builtin: a.builtin,
+          hidden: a.hidden,
         })),
       );
       setApps(saved);
@@ -289,19 +337,33 @@ export function Apps() {
       animate="show"
       className="mx-auto flex w-full max-w-[520px] flex-col px-6 py-6"
     >
-      <motion.header variants={fadeInUp} className="flex items-end justify-between">
-        <div>
+      <motion.header variants={fadeInUp} className="flex items-end justify-between gap-3">
+        <div className="min-w-0">
           <h1 className="text-[20px] font-semibold leading-tight tracking-[-0.02em] text-vb-fg">
             Приложения
           </h1>
-          <p className="mt-0.5 text-[13px] text-vb-silver-dim">
-            Всё, что идёт через ваш прокси
+          <p className="text-[12px] text-vb-silver-faint">
+            {editing ? "Перетаскивайте между папками" : "Всё, что идёт через ваш прокси"}
           </p>
         </div>
-        <Button variant="secondary" size="sm" onClick={() => setAdding((v) => !v)}>
-          <Plus className="h-3.5 w-3.5" />
-          Добавить
-        </Button>
+        <div className="flex shrink-0 items-center gap-2">
+          {isMac && !editing && (
+            <ViewSwitch
+              value={layout.view}
+              onChange={(view) => updateLayout({ ...layout, view })}
+            />
+          )}
+          {editing ? (
+            <Button variant="primary" size="sm" onClick={() => setEditing(false)}>
+              Готово
+            </Button>
+          ) : (
+            <Button variant="secondary" size="sm" onClick={() => setAdding((v) => !v)}>
+              <Plus className="h-3.5 w-3.5" />
+              Добавить
+            </Button>
+          )}
+        </div>
       </motion.header>
 
       {/* macOS: умный поиск среди установленных программ */}
@@ -390,29 +452,83 @@ export function Apps() {
             Приложений пока нет — добавьте своё через кнопку выше.
           </div>
         ) : (
-          <div className="surface-card divide-y divide-vb-border/70 overflow-visible">
-            <AnimatePresence mode="popLayout">
-              {apps.map((app) => {
-                const row = describe(app);
-                return (
-                  <AppRow
-                    key={app.id}
-                    app={app}
-                    status={row.status}
-                    action={row.action}
-                    menu={row.menu}
-                    onToggle={(en) => toggleApp(app.id, en)}
-                    onLaunch={() => after(appsLaunch(app.id))}
-                    icon={app.location ? icons[app.location] : undefined}
-                  />
-                );
-              })}
-            </AnimatePresence>
-          </div>
+          <AppsBoard
+            apps={visible}
+            layout={layout}
+            onLayout={updateLayout}
+            editing={editing}
+            onEditing={setEditing}
+            describe={describe}
+            icons={icons}
+            onLaunch={(id) => after(appsLaunch(id))}
+            onRemove={(id) => void removeApp(id)}
+            onToggle={isMac ? undefined : toggleApp}
+            onSettings={setSettingsId}
+          />
         )}
       </motion.section>
+      {(() => {
+        const app = visible.find((a) => a.id === settingsId) ?? null;
+        return (
+          <AppSettingsModal
+            app={app}
+            icon={app?.location ? icons[app.location] : undefined}
+            status={app ? describe(app).status : null}
+            folders={layout.folders}
+            onMoveToFolder={(fid) => app && updateLayout(moveApp(layout, app.id, { folder: fid }))}
+            onRemove={() => {
+              if (app) void removeApp(app.id);
+              setSettingsId(null);
+            }}
+            onRelaunch={() => (app ? after(appsRelaunch(app.id)) : Promise.resolve())}
+            onChanged={(list) => {
+              if (list) setApps(list);
+              void loadSetup();
+              void loadTraffic();
+            }}
+            onClose={() => setSettingsId(null)}
+          />
+        );
+      })()}
+
       {/* macOS: Claude настраивается из своей строки. Windows — прежняя панель. */}
       {!isMac && <ClaudeProxyControl />}
     </motion.div>
+  );
+}
+
+/** Переключатель вида — сегмент в духе iOS: подложка перетекает пружиной. */
+function ViewSwitch({ value, onChange }: { value: AppsView; onChange: (v: AppsView) => void }) {
+  const opts: { id: AppsView; label: string; icon: typeof List }[] = [
+    { id: "list", label: "Список", icon: List },
+    { id: "grid", label: "Сетка", icon: LayoutGrid },
+  ];
+  return (
+    <div className="flex rounded-lg border border-vb-border bg-vb-surface p-0.5" role="radiogroup" aria-label="Вид">
+      {opts.map(({ id, label, icon: Icon }) => (
+        <button
+          key={id}
+          type="button"
+          role="radio"
+          aria-checked={value === id}
+          aria-label={label}
+          title={label}
+          onClick={() => onChange(id)}
+          className={cn(
+            "relative flex h-7 w-8 items-center justify-center rounded-md transition-colors",
+            value === id ? "text-vb-fg" : "text-vb-silver-faint hover:text-vb-silver",
+          )}
+        >
+          {value === id && (
+            <motion.span
+              layoutId="view-switch"
+              className="absolute inset-0 rounded-md bg-vb-surface-2"
+              transition={{ type: "spring", bounce: 0.2, duration: 0.35 }}
+            />
+          )}
+          <Icon className="relative h-3.5 w-3.5" strokeWidth={2} />
+        </button>
+      ))}
+    </div>
   );
 }

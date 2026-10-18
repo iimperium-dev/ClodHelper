@@ -210,6 +210,18 @@ pub fn parse_version(v: &str) -> Option<(u32, u32, u32)> {
     Some((it.next()??, it.next()??, it.next().flatten().unwrap_or(0)))
 }
 
+/// Закреплённые входы моста ≥1.7: 8892 + индекс прокси в пуле. Приложение,
+/// которому выбран конкретный прокси, запускается с этим портом.
+pub const PIN_PORT_BASE: u16 = 8892;
+
+/// Мост ≥1.7 умеет закреплённые входы (`--pin-listen`).
+#[cfg(not(target_os = "windows"))]
+fn bridge_supports_pin_listen(exe: &std::path::Path) -> bool {
+    exe_version(exe)
+        .and_then(|v| parse_version(&v))
+        .is_some_and(|v| v >= (1, 7, 0))
+}
+
 /// Мост ≥1.5 принимает пул прокси файлом (`--upstream-file`).
 #[cfg(not(target_os = "windows"))]
 fn bridge_supports_upstream_file(exe: &std::path::Path) -> bool {
@@ -475,8 +487,8 @@ mod launchd {
     use std::path::PathBuf;
 
     use super::{
-        bridge_supports_rules, bridge_supports_upstream_file, upstream_pool, write_rules_file,
-        BridgeTaskStatus,
+        bridge_supports_pin_listen, bridge_supports_rules, bridge_supports_upstream_file,
+        upstream_pool, write_rules_file, BridgeTaskStatus, PIN_PORT_BASE,
     };
     use crate::macos;
     use crate::shim::{self, LISTEN_PORT};
@@ -521,6 +533,7 @@ mod launchd {
             format!("127.0.0.1:{LISTEN_PORT}"),
         ];
         let pool = upstream_pool(proxy_url);
+        let pool_len = pool.len();
         let modern = bridge_supports_upstream_file(&exe);
         if modern {
             // Пул — файлом 0600: argv процесса видит любой пользователь Mac
@@ -537,6 +550,12 @@ mod launchd {
         args.push("--rules".into());
         args.push(rules_path.to_string_lossy().to_string());
         args.push("--quiet".into());
+        if bridge_supports_pin_listen(&exe) {
+            for i in 0..pool_len {
+                args.push("--pin-listen".into());
+                args.push(format!("127.0.0.1:{}={i}", PIN_PORT_BASE + i as u16));
+            }
+        }
 
         let plist = plist_path().ok_or_else(|| "Не нашёл домашнюю папку".to_string())?;
         // stderr моста (в --quiet — только ошибки) — для диагностики. launchd

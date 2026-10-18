@@ -127,6 +127,9 @@ enum RoutingPolicy {
     /// SOCKS5-вход (Telegram): только upstream; прокси — назначенный группе
     /// «telegram.org», иначе основной (№0).
     Socks,
+    /// Закреплённый вход (--pin-listen ADDR=N): всё только через upstream №N.
+    /// Так приложение (браузер и т.п.) получает «свой» прокси из пула.
+    Fixed(usize),
 }
 
 impl RoutingPolicy {
@@ -135,6 +138,7 @@ impl RoutingPolicy {
             Self::Rules => "rules",
             Self::UpstreamOnly => "upstream_only",
             Self::Socks => "socks_upstream_only",
+            Self::Fixed(_) => "fixed_upstream",
         }
     }
 }
@@ -708,6 +712,8 @@ fn request_upstream(state: &State, host: &str) -> Pin {
     match state.routing_policy {
         RoutingPolicy::UpstreamOnly => strict_upstream(state),
         RoutingPolicy::Socks => socks_upstream(state),
+        RoutingPolicy::Fixed(i) if i < state.upstreams.len() => Pin::Pinned(i),
+        RoutingPolicy::Fixed(_) => Pin::Broken,
         RoutingPolicy::Rules => preferred_upstream(state, host),
     }
 }
@@ -1333,6 +1339,8 @@ struct Args {
     strict_listen: String,
     /// SOCKS5-вход для Telegram; None — выключен (`--socks-listen off`).
     socks_listen: Option<String>,
+    /// Закреплённые входы: (адрес, индекс upstream'а).
+    pin_listen: Vec<(String, usize)>,
     quiet: bool,
     rules: Option<String>,
     /// Собственный файл журнала с ротацией (см. mod logfile).
@@ -1351,6 +1359,7 @@ fn parse_args_from(argv: Vec<String>) -> Result<Args, String> {
         listen: "127.0.0.1:8888".into(),
         strict_listen: "127.0.0.1:8890".into(),
         socks_listen: Some("127.0.0.1:8891".into()),
+        pin_listen: Vec::new(),
         quiet: false,
         rules: None,
         log: None,
@@ -1374,6 +1383,14 @@ fn parse_args_from(argv: Vec<String>) -> Result<Args, String> {
             "--listen" => {
                 i += 1;
                 a.listen = argv.get(i).ok_or("--listen requires HOST:PORT")?.clone();
+            }
+            "--pin-listen" => {
+                // 127.0.0.1:8892=1 — вход, где всё идёт только через upstream №1.
+                i += 1;
+                let v = argv.get(i).ok_or("--pin-listen requires IP:PORT=INDEX")?;
+                let (addr, idx) = v.rsplit_once('=').ok_or("--pin-listen requires IP:PORT=INDEX")?;
+                let idx: usize = idx.parse().map_err(|_| "--pin-listen: bad upstream index")?;
+                a.pin_listen.push((addr.to_string(), idx));
             }
             "--socks-listen" => {
                 i += 1;
@@ -1414,6 +1431,15 @@ fn parse_args_from(argv: Vec<String>) -> Result<Args, String> {
         .map_err(|_| "--strict-listen requires a literal loopback IP and port")?;
     if !strict_addr.ip().is_loopback() || strict_addr.port() == 0 {
         return Err("--strict-listen must use a loopback IP and a non-zero port".into());
+    }
+    // Вход без пароля — только на loopback, иначе это открытый прокси в сеть.
+    for (addr, _) in &a.pin_listen {
+        let sa = addr
+            .parse::<SocketAddr>()
+            .map_err(|_| "--pin-listen requires a literal loopback IP and port")?;
+        if !sa.ip().is_loopback() || sa.port() == 0 {
+            return Err("--pin-listen must use a loopback IP and a non-zero port".into());
+        }
     }
     // SOCKS без пароля — только на loopback, иначе это открытый прокси в сеть.
     if let Some(socks) = &a.socks_listen {
@@ -1622,6 +1648,35 @@ async fn main() {
     // выедать слоты Claude Desktop на строгом. Accept-цикл НИКОГДА не падает.
     let sem = Arc::new(Semaphore::new(MAX_CONNECTIONS));
     let strict_sem = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+    // Закреплённые входы: у каждого свой upstream и свой пул соединений.
+    for (addr, idx) in &args.pin_listen {
+        let pin_state = Arc::new(State {
+            started: state.started,
+            listen: addr.clone(),
+            quiet: args.quiet,
+            mode,
+            routing_policy: RoutingPolicy::Fixed(*idx),
+            proxy_domains: Vec::new(),
+            direct_domains: Vec::new(),
+            assignments: Vec::new(),
+            upstreams: state.upstreams.clone(),
+            total: AtomicU64::new(0),
+            active: AtomicU64::new(0),
+            via_upstream: AtomicU64::new(0),
+            via_direct: AtomicU64::new(0),
+            errors: AtomicU64::new(0),
+            last_errors: Mutex::new(std::collections::VecDeque::new()),
+            last_logged: Mutex::new((String::new(), 0)),
+        });
+        match TcpListener::bind(addr).await {
+            Ok(l) => {
+                pin_state.log(&format!("pinned listener on {addr} → upstream #{idx}"));
+                tokio::spawn(serve_listener(l, pin_state, Arc::new(Semaphore::new(MAX_CONNECTIONS))));
+            }
+            Err(e) => state.log_err(&format!("cannot bind pinned listener {addr} — {e}")),
+        }
+    }
+
     // SOCKS-вход независим от остальных: занятый порт 8891 не мешает Claude.
     if let Some(addr) = args.socks_listen.as_deref() {
         match TcpListener::bind(addr).await {
@@ -2312,5 +2367,42 @@ mod tests {
         assert!(parse("off").unwrap().socks_listen.is_none());
         assert!(parse("0.0.0.0:8891").is_err());
         assert!(parse("[::1]:8891").is_ok());
+    }
+
+    #[tokio::test]
+    async fn pinned_listener_uses_only_its_upstream() {
+        let (addr, accepted) = scripted_proxy(vec![Some(b"HTTP/1.1 200 Connection established\r\n\r\n")]).await;
+        let other = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut st = test_state(
+            RoutingPolicy::Fixed(1),
+            vec![
+                parse_upstream(&format!("http://{}", other.local_addr().unwrap())).unwrap(),
+                parse_upstream(&format!("http://{addr}")).unwrap(),
+            ],
+        );
+        // Ни правила, ни назначения не уводят закреплённый вход с его прокси.
+        st.direct_domains = vec!["2ip.io".into()];
+        st.assignments = vec![("2ip.io".into(), 0)];
+        let response = single_request(Arc::new(st), "CONNECT 2ip.io:443 HTTP/1.1\r\n\r\n".into()).await;
+        assert!(response.starts_with(b"HTTP/1.1 200"));
+        assert_eq!(accepted.load(Ordering::Relaxed), 1);
+        assert_no_connection(&other).await;
+        // Индекс за пределами пула — отказ, а не другой прокси.
+        let st = test_state(RoutingPolicy::Fixed(5), vec![parse_upstream("http://127.0.0.1:1").unwrap()]);
+        let response = single_request(Arc::new(st), "CONNECT 2ip.io:443 HTTP/1.1\r\n\r\n".into()).await;
+        assert!(response.starts_with(b"HTTP/1.1 502"));
+    }
+
+    #[test]
+    fn pin_listen_args() {
+        let a = parse_args_from(
+            ["--upstream", "http://127.0.0.1:1", "--pin-listen", "127.0.0.1:8892=0", "--pin-listen", "127.0.0.1:8893=1"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        )
+        .unwrap();
+        assert_eq!(a.pin_listen, vec![("127.0.0.1:8892".into(), 0), ("127.0.0.1:8893".into(), 1)]);
+        assert!(parse_args_from(["--upstream", "http://127.0.0.1:1", "--pin-listen", "0.0.0.0:8892=0"].iter().map(|s| s.to_string()).collect()).is_err());
     }
 }

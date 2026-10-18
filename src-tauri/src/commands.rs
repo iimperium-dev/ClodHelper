@@ -842,6 +842,40 @@ pub async fn apps_search(query: String) -> Result<Vec<apps::FoundApp>, String> {
         .map_err(|e| format!("Внутренняя ошибка: {e}"))
 }
 
+/// Настройки приложения: свой прокси (None — «Авто») и «весь трафик».
+/// Для Claude / Codex / Telegram прокси задаётся назначением сервиса (UI
+/// вызывает proxy_assignments_set) — здесь только профиль.
+#[tauri::command]
+pub async fn apps_settings_set(
+    id: String,
+    proxy: Option<usize>,
+    full_proxy: Option<bool>,
+) -> Result<Vec<AppProfileStatus>, String> {
+    let mut s = settings::load_with_presets();
+    let p = s
+        .app_profiles
+        .iter_mut()
+        .find(|p| p.id == id)
+        .ok_or_else(|| "Профиль не найден".to_string())?;
+    p.proxy = proxy;
+    p.full_proxy = full_proxy;
+    let saved = settings::set_profiles(s.app_profiles)?;
+    Ok(apps::statuses(&saved.app_profiles))
+}
+
+/// Раскладка «Приложений» (вид, папки, порядок) — JSON от UI.
+#[tauri::command]
+pub async fn apps_layout_get() -> Result<Option<serde_json::Value>, String> {
+    Ok(settings::load().apps_layout)
+}
+
+#[tauri::command]
+pub async fn apps_layout_set(layout: serde_json::Value) -> Result<(), String> {
+    let mut s = settings::load();
+    s.apps_layout = Some(layout);
+    settings::save(&s)
+}
+
 /// Через мост ли идёт каждое приложение — по живым соединениям (macOS).
 #[tauri::command]
 pub async fn apps_traffic() -> Result<Vec<crate::traffic::AppTraffic>, String> {
@@ -874,6 +908,16 @@ pub async fn apps_add_custom(
         return Err("Файл не найден по указанному пути".into());
     }
     let mut s = settings::load_with_presets();
+    // Программа уже есть, но убрана из списка (в т.ч. встроенная) — вернуть.
+    if let Some(p) = s
+        .app_profiles
+        .iter_mut()
+        .find(|p| p.hidden && p.exe_path.as_deref() == Some(exe_path.as_str()))
+    {
+        p.hidden = false;
+        let saved = settings::set_profiles(s.app_profiles)?;
+        return Ok(apps::statuses(&saved.app_profiles));
+    }
     // id = custom-<N>
     let n = s
         .app_profiles
@@ -894,6 +938,9 @@ pub async fn apps_add_custom(
         process_names: vec![leaf],
         enabled: true,
         builtin: false,
+        hidden: false,
+        proxy: None,
+        full_proxy: None,
     });
     let saved = settings::set_profiles(s.app_profiles)?;
     Ok(apps::statuses(&saved.app_profiles))
@@ -903,12 +950,12 @@ pub async fn apps_add_custom(
 #[tauri::command]
 pub async fn apps_remove(id: String) -> Result<Vec<AppProfileStatus>, String> {
     let mut s = settings::load_with_presets();
-    if let Some(p) = s.app_profiles.iter().find(|p| p.id == id) {
-        if p.builtin {
-            return Err("Встроенный профиль нельзя удалить — только выключить".into());
-        }
+    // Встроенный не удаляем (пресеты пересеялись бы при запуске) — прячем.
+    if let Some(p) = s.app_profiles.iter_mut().find(|p| p.id == id && p.builtin) {
+        p.hidden = true;
+    } else {
+        s.app_profiles.retain(|p| p.id != id);
     }
-    s.app_profiles.retain(|p| p.id != id);
     let saved = settings::set_profiles(s.app_profiles)?;
     Ok(apps::statuses(&saved.app_profiles))
 }

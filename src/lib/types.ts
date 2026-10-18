@@ -102,6 +102,8 @@ export interface AppProfile {
   process_names: string[];
   enabled: boolean;
   builtin: boolean;
+  /** Убрано пользователем из списка. */
+  hidden?: boolean;
 }
 
 /** Runtime-статус профиля (mirror of Rust AppProfileStatus). */
@@ -111,6 +113,12 @@ export interface AppProfileStatus {
   kind: LaunchKind;
   enabled: boolean;
   builtin: boolean;
+  /** Убрано из списка (встроенные прячутся, а не удаляются). */
+  hidden: boolean;
+  /** Свой прокси из пула (индекс); null — «Авто». */
+  proxy: number | null;
+  /** Весь трафик через прокси (иначе только AI-сайты). */
+  full_proxy: boolean;
   installed: boolean;
   location?: string;
   desktop_shortcut: boolean;

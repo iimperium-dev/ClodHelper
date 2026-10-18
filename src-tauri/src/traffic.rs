@@ -11,8 +11,9 @@ use serde::Serialize;
 
 use crate::apps::AppProfile;
 
-/// Входы моста: общий HTTP, строгий Claude, SOCKS (Telegram).
-const BRIDGE_PORTS: [u16; 3] = [8889, 8890, 8891];
+/// Входы моста: общий HTTP 8889, строгий Claude 8890, SOCKS 8891 и
+/// закреплённые за прокси пула 8892–8896.
+const BRIDGE_PORTS: std::ops::RangeInclusive<u16> = 8889..=8896;
 
 #[derive(Debug, Serialize, Default, Clone, PartialEq)]
 pub struct AppTraffic {
@@ -73,9 +74,13 @@ fn parse_lsof(out: &str) -> Vec<(String, String)> {
 }
 
 fn is_bridge(remote: &str) -> bool {
-    BRIDGE_PORTS
-        .iter()
-        .any(|p| remote == format!("127.0.0.1:{p}") || remote == format!("[::1]:{p}"))
+    let port = |host: &str| {
+        remote
+            .strip_prefix(host)
+            .and_then(|p| p.parse::<u16>().ok())
+            .is_some_and(|p| BRIDGE_PORTS.contains(&p))
+    };
+    port("127.0.0.1:") || port("[::1]:")
 }
 
 /// Дата-центры Telegram (официальные диапазоны MTProto). Для Telegram
@@ -185,6 +190,9 @@ mod tests {
             process_names: Vec::new(),
             enabled: false,
             builtin: true,
+            hidden: false,
+            proxy: None,
+            full_proxy: None,
         }
     }
 

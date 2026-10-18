@@ -150,6 +150,9 @@ pub fn preset() -> AppProfile {
         process_names: vec![if cfg!(target_os = "windows") { "Claude.exe" } else { "Claude" }.into()],
         enabled: false,
         builtin: true,
+        hidden: false,
+        proxy: None,
+        full_proxy: None,
     }
 }
 

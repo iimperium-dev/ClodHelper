@@ -695,7 +695,9 @@ export function Proxies() {
         </p>
       </motion.section>
 
-      {/* ── Назначения по сервисам ── */}
+      {/* ── Назначения по сервисам (Windows). На macOS прокси выбирается в
+          настройках каждого приложения («Приложения» → шестерёнка). ── */}
+      {!isMac && (
       <motion.section variants={fadeInUp} className="mt-6">
         <div className="mb-2 px-1">
           <h2 className="text-[15px] font-semibold text-vb-fg">Назначения</h2>
@@ -756,6 +758,7 @@ export function Proxies() {
           })}
         </div>
       </motion.section>
+      )}
     </motion.div>
   );
 }

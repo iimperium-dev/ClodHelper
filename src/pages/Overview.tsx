@@ -381,7 +381,7 @@ export function Overview({ onOpenProxies }: Props) {
                   </div>
                   <Sparkline data={history} width={72} height={20} className="shrink-0 opacity-80" />
                 </div>
-                <div className="tnum mt-2 flex items-center gap-x-3 text-[12px] text-vb-silver-faint">
+                <div className="tnum mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 whitespace-nowrap text-[12px] text-vb-silver-faint">
                   <span>
                     <span className="text-vb-silver">
                       <NumberTicker value={health.via_upstream} />

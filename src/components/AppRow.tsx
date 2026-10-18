@@ -5,14 +5,15 @@ import {
   Check,
   CheckCircle2,
   Loader2,
-  MonitorDown,
+  GripVertical,
+  Minus,
   MoreHorizontal,
   Play,
 } from "lucide-react";
 import { Toggle } from "./Toggle";
 import { Button } from "./Button";
 import { isMac } from "../lib/platform";
-import { appBrand, BrandTile } from "./BrandLogos";
+import { AppIcon, IconWithGear } from "./AppTile";
 import { cn } from "../lib/cn";
 import type { AppProfileStatus } from "../lib/types";
 
@@ -38,8 +39,13 @@ interface Props {
   /** Пункты меню «…» (ярлыки, отключение, удаление). */
   menu: RowAction[];
   onLaunch: () => Promise<void>;
-  /** Настоящая иконка программы (macOS, свои приложения). */
+  /** Настоящая иконка программы (macOS). */
   icon?: string;
+  /** Режим упорядочивания: «−» слева, ручка справа, без кнопок. */
+  editing?: boolean;
+  onRemove?: () => void;
+  /** Открыть настройки приложения (шестерёнка при наведении). */
+  onSettings?: () => void;
   /** Тумблер — только Windows (там он управляет killswitch). */
   onToggle?: (enabled: boolean) => void;
 }
@@ -50,7 +56,19 @@ interface Props {
   «Подключить», если трафик идёт мимо моста, иначе «Открыть». Всё
   второстепенное — в меню «…».
 */
-export function AppRow({ app, status, action, menu, onLaunch, onToggle, icon }: Props) {
+export function AppRow({
+  app,
+  status,
+  action,
+  menu,
+  onLaunch,
+  onToggle,
+  icon,
+  editing,
+  onRemove,
+  onSettings,
+}: Props) {
+  const [hover, setHover] = useState(false);
   const [busy, setBusy] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [flash, setFlash] = useState<{ ok: boolean; text: string } | null>(null);
@@ -84,7 +102,6 @@ export function AppRow({ app, status, action, menu, onLaunch, onToggle, icon }: 
     }
   };
 
-  const brand = appBrand(app.name);
   const kindLabel =
     app.kind === "msix" ? "Microsoft Store" : app.kind === "custom" ? "Своё приложение" : "Приложение";
   const sub: RowStatus = !app.installed
@@ -92,29 +109,33 @@ export function AppRow({ app, status, action, menu, onLaunch, onToggle, icon }: 
     : (status ?? { tone: "muted", text: kindLabel });
 
   return (
-    <motion.div layout className="px-4 py-3">
+    <motion.div
+      layout
+      className="px-4 py-3"
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+    >
       <div className="flex items-center gap-3">
-        {icon && !brand ? (
-          <img
-            src={icon}
-            alt=""
-            draggable={false}
-            className={cn("h-8 w-8 shrink-0", !app.installed && "opacity-50 saturate-50")}
-          />
-        ) : brand ? (
-          <BrandTile glow={brand.glow} disabled={!app.installed}>
-            {brand.glyph}
-          </BrandTile>
-        ) : (
-          <div
-            className={cn(
-              "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
-              app.installed ? "bg-vb-emerald/12 text-vb-emerald" : "bg-vb-surface-2 text-vb-silver-dim",
-            )}
-          >
-            <MonitorDown className="h-[18px] w-[18px]" strokeWidth={1.75} />
-          </div>
-        )}
+        <AnimatePresence initial={false}>
+          {editing && (
+            <motion.button
+              type="button"
+              initial={{ width: 0, opacity: 0, scale: 0.5 }}
+              animate={{ width: 22, opacity: 1, scale: 1 }}
+              exit={{ width: 0, opacity: 0, scale: 0.5 }}
+              transition={{ type: "spring", bounce: 0.3, duration: 0.35 }}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={onRemove}
+              aria-label={`Убрать ${app.name}`}
+              className="-mr-1 flex h-[22px] shrink-0 items-center justify-center rounded-full bg-vb-loss text-white"
+            >
+              <Minus className="h-3 w-3" strokeWidth={3} />
+            </motion.button>
+          )}
+        </AnimatePresence>
+        <IconWithGear show={hover && !editing} size={32} onSettings={onSettings}>
+          <AppIcon name={app.name} icon={icon} size={32} dim={!app.installed} />
+        </IconWithGear>
 
         <div className="min-w-0 flex-1">
           <div
@@ -139,7 +160,9 @@ export function AppRow({ app, status, action, menu, onLaunch, onToggle, icon }: 
           </div>
         </div>
 
-        {app.installed && (
+        {editing ? (
+          <GripVertical className="h-4 w-4 shrink-0 cursor-grab text-vb-silver-faint" aria-hidden />
+        ) : app.installed && (
           <div className="flex shrink-0 items-center gap-1">
             {action ? (
               <Button size="sm" variant="secondary" onClick={() => run(action.run)} disabled={busy}>
@@ -204,7 +227,7 @@ export function AppRow({ app, status, action, menu, onLaunch, onToggle, icon }: 
           </div>
         )}
 
-        {!isMac && onToggle && (
+        {!isMac && onToggle && !editing && (
           <Toggle
             checked={app.enabled}
             onChange={onToggle}

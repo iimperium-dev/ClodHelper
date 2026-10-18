@@ -116,6 +116,24 @@ export function appsIcons(paths: string[]): Promise<Record<string, string>> {
   return invoke<Record<string, string>>("apps_icons", { paths });
 }
 
+/** Настройки приложения: свой прокси (null — «Авто») и «весь трафик». */
+export function appsSettingsSet(
+  id: string,
+  proxy: number | null,
+  fullProxy: boolean | null,
+): Promise<AppProfileStatus[]> {
+  return invoke<AppProfileStatus[]>("apps_settings_set", { id, proxy, fullProxy });
+}
+
+/** Раскладка «Приложений» (вид, папки, порядок). */
+export function appsLayoutGet(): Promise<unknown> {
+  return invoke<unknown>("apps_layout_get");
+}
+
+export function appsLayoutSet(layout: unknown): Promise<void> {
+  return invoke<void>("apps_layout_set", { layout });
+}
+
 /** Поиск установленных программ по названию (Spotlight, macOS). */
 export function appsSearch(query: string): Promise<FoundApp[]> {
   return invoke<FoundApp[]>("apps_search", { query });

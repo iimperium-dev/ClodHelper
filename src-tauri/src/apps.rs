@@ -57,6 +57,19 @@ pub struct AppProfile {
     /// Это встроенный пресет (нельзя удалить, только выключить) или кастомный.
     #[serde(default)]
     pub builtin: bool,
+    /// Убран пользователем из списка (встроенные не удаляются, а прячутся;
+    /// вернуть — через «Добавить»).
+    #[serde(default)]
+    pub hidden: bool,
+    /// Свой прокси из пула (индекс) для приложений, запускаемых с
+    /// --proxy-server (VS Code, свои программы). None — «Авто».
+    /// Для Claude / Codex / Telegram выбор хранится в назначениях сервисов.
+    #[serde(default)]
+    pub proxy: Option<usize>,
+    /// Весь трафик через прокси (true) или только AI-сайты (false).
+    /// None — по умолчанию: свои программы целиком, встроенные — только AI.
+    #[serde(default)]
+    pub full_proxy: Option<bool>,
 }
 
 /// Runtime-статус профиля для UI — найдено ли приложение на этом ПК.
@@ -67,6 +80,9 @@ pub struct AppProfileStatus {
     pub kind: LaunchKind,
     pub enabled: bool,
     pub builtin: bool,
+    pub hidden: bool,
+    pub proxy: Option<usize>,
+    pub full_proxy: bool,
     /// Найдено ли приложение (exe существует / MSIX-пакет установлен).
     pub installed: bool,
     /// Путь/AppID для показа в UI.
@@ -96,6 +112,9 @@ pub fn builtin_presets() -> Vec<AppProfile> {
             process_names: vec!["Code".into(), "node".into(), "git".into()],
             enabled: false,
             builtin: true,
+            hidden: false,
+            proxy: None,
+            full_proxy: None,
         },
         AppProfile {
             id: "codex".into(),
@@ -106,6 +125,9 @@ pub fn builtin_presets() -> Vec<AppProfile> {
             process_names: vec!["Codex".into(), "codex".into(), "node".into()],
             enabled: false,
             builtin: true,
+            hidden: false,
+            proxy: None,
+            full_proxy: None,
         },
         // Telegram не понимает --proxy-server и HTTP-прокси: он ходит через
         // SOCKS-вход моста, настраивается в самом Telegram (telegram.rs),
@@ -120,6 +142,9 @@ pub fn builtin_presets() -> Vec<AppProfile> {
             process_names: vec!["Telegram".into()],
             enabled: false,
             builtin: true,
+            hidden: false,
+            proxy: None,
+            full_proxy: None,
         },
     ]
 }
@@ -153,6 +178,9 @@ pub fn builtin_presets() -> Vec<AppProfile> {
             ],
             enabled: false,
             builtin: true,
+            hidden: false,
+            proxy: None,
+            full_proxy: None,
         },
         AppProfile {
             id: "codex".into(),
@@ -173,6 +201,9 @@ pub fn builtin_presets() -> Vec<AppProfile> {
             ],
             enabled: false,
             builtin: true,
+            hidden: false,
+            proxy: None,
+            full_proxy: None,
         },
     ]
 }
@@ -326,6 +357,9 @@ pub fn statuses(profiles: &[AppProfile]) -> Vec<AppProfileStatus> {
                 kind: p.kind.clone(),
                 enabled: p.enabled,
                 builtin: p.builtin,
+                hidden: p.hidden,
+                proxy: p.proxy,
+                full_proxy: full_proxy_of(p),
                 installed,
                 location,
                 desktop_shortcut,
@@ -336,6 +370,28 @@ pub fn statuses(profiles: &[AppProfile]) -> Vec<AppProfileStatus> {
 }
 
 // ─── Запуск ──────────────────────────────────────────────────────
+
+/// Весь трафик приложения через прокси? Своё приложение (браузер) — по
+/// умолчанию целиком; встроенные — только AI-сайты (умный общий вход).
+pub fn full_proxy_of(p: &AppProfile) -> bool {
+    p.full_proxy.unwrap_or(p.kind == LaunchKind::Custom)
+}
+
+/// Через какой вход моста запускать приложение:
+/// - выбран конкретный прокси → закреплённый вход 8892+N (всё через него);
+/// - «весь трафик» → строгий вход 8890 (без DIRECT);
+/// - иначе общий умный вход 8889.
+fn launch_proxy_url(p: &AppProfile) -> String {
+    let pool = crate::settings::effective_proxies(&crate::settings::load()).len();
+    match p.proxy {
+        // Закреплённые входы мост поднимает пока только на macOS.
+        Some(i) if i < pool && cfg!(not(target_os = "windows")) => {
+            format!("http://127.0.0.1:{}", crate::tasks::PIN_PORT_BASE + i as u16)
+        }
+        _ if full_proxy_of(p) => crate::claude_policy::PROXY_URL.to_string(),
+        _ => local_proxy_url(),
+    }
+}
 
 /// Строка прокси для локального моста, которую впрыскиваем приложению.
 fn local_proxy_url() -> String {
@@ -405,7 +461,11 @@ fn launch_exe(p: &AppProfile) -> Result<(), String> {
         return Err(format!("{} не найден на этом ПК", p.name));
     }
     let exe = location.ok_or_else(|| format!("Путь к {} не определён", p.name))?;
-    let proxy = local_proxy_url();
+    // Свои программы (браузер и т.п.) — ЦЕЛИКОМ через прокси: строгий вход
+    // 8890 без DIRECT. Общий вход в умном режиме пускал бы не-AI сайты
+    // напрямую (2ip.io показывал IP пользователя), а человек, добавивший
+    // браузер, ждёт, что весь браузер идёт через прокси.
+    let proxy = launch_proxy_url(p);
 
     // Терминал VS Code (и Claude Code в нём) покрывается глобальными User
     // env-переменными (env_proxy.rs) — правка settings.json больше не нужна.

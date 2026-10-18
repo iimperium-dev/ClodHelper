@@ -54,6 +54,10 @@ pub struct Settings {
     /// автоподсказка) — сами больше не открываем, решает пользователь.
     #[serde(default)]
     pub telegram_prompted: bool,
+    /// Раскладка «Приложений»: вид и папки с порядком (UI хранит как есть,
+    /// бэкенд не интерпретирует). None — умная раскладка по умолчанию.
+    #[serde(default)]
+    pub apps_layout: Option<serde_json::Value>,
     /// Режим маршрутизации моста: "all" (всё через upstream, как раньше) |
     /// "smart" (через upstream только AI-домены, остальное напрямую).
     /// None = "all" — консервативный дефолт для старых установок.
@@ -317,6 +321,9 @@ mod tests {
             process_names: vec!["Claude.exe".into()],
             enabled: false,
             builtin: true,
+            hidden: false,
+            proxy: None,
+            full_proxy: None,
         }
     }
 
@@ -331,6 +338,9 @@ mod tests {
             process_names: vec!["My application.exe".into()],
             enabled: true,
             builtin: false,
+            hidden: false,
+            proxy: None,
+            full_proxy: None,
         };
         let codex = AppProfile {
             id: "codex".into(),
@@ -341,6 +351,9 @@ mod tests {
             process_names: vec!["ChatGPT.exe".into()],
             enabled: true,
             builtin: true,
+            hidden: false,
+            proxy: None,
+            full_proxy: None,
         };
         let mut profiles = vec![custom, codex.clone()];
         let previous_profiles = serde_json::to_value(&profiles).unwrap();
