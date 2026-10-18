@@ -393,6 +393,12 @@ fn launch_proxy_url(p: &AppProfile) -> String {
     }
 }
 
+/// WebRTC (звонки, видео в браузере) ходит по UDP к STUN-серверам мимо
+/// любого HTTP-прокси — сайты так видят настоящий IP (ipleak: «WebRTC
+/// detection»). Флаг Chromium запрещает WebRTC ходить мимо прокси; на
+/// не-Chromium приложения не влияет.
+const WEBRTC_GUARD: &str = "--webrtc-ip-handling-policy=disable_non_proxied_udp";
+
 /// Строка прокси для локального моста, которую впрыскиваем приложению.
 fn local_proxy_url() -> String {
     format!("http://127.0.0.1:{LISTEN_PORT}")
@@ -492,6 +498,7 @@ fn launch_exe(p: &AppProfile) -> Result<(), String> {
 
     let mut cmd = Command::new(&exe);
     cmd.arg(format!("--proxy-server={proxy}"));
+    cmd.arg(WEBRTC_GUARD);
     // env для дочерних процессов (терминал → Claude Code → bash/node/git).
     cmd.env("HTTP_PROXY", &proxy);
     cmd.env("HTTPS_PROXY", &proxy);
@@ -512,6 +519,7 @@ pub(crate) fn open_app(app: &str, proxy: &str, name: &str) -> Result<(), String>
         .arg(app)
         .arg("--args")
         .arg(format!("--proxy-server={proxy}"))
+        .arg(WEBRTC_GUARD)
         .output()
         .map_err(|e| format!("Не удалось запустить {name}: {e}"))?;
     if out.status.success() {
@@ -539,6 +547,7 @@ fn launch_msix(p: &AppProfile) -> Result<(), String> {
     if let Some(exe) = msix_main_exe(p) {
         let mut cmd = Command::new(&exe);
         cmd.arg(format!("--proxy-server={proxy}"));
+        cmd.arg(WEBRTC_GUARD);
         // env — на случай если рантайм внутри (node/codex) читает их.
         cmd.env("HTTP_PROXY", &proxy);
         cmd.env("HTTPS_PROXY", &proxy);
@@ -667,10 +676,12 @@ pub fn create_shortcut(
             sh_quote(&launcher.to_string_lossy())
         )
     } else {
+        // Тот же вход, что и у «Открыть»: свой прокси / весь трафик.
         format!(
-            "exec /usr/bin/open -a {} --args {}",
+            "exec /usr/bin/open -a {} --args {} {}",
             sh_quote(&app),
-            sh_quote(&format!("--proxy-server={}", local_proxy_url()))
+            sh_quote(&format!("--proxy-server={}", launch_proxy_url(p))),
+            WEBRTC_GUARD
         )
     };
     let dir = match target {
@@ -716,13 +727,13 @@ pub fn create_shortcut(
     if !installed {
         return Err(format!("{} не найден — сначала установите приложение", p.name));
     }
-    let proxy = local_proxy_url();
+    let proxy = launch_proxy_url(p);
 
     // Куда указывает ярлык + аргументы.
     let (target_path, arguments) = match p.kind {
         LaunchKind::ExeFlag | LaunchKind::Custom => {
             let exe = location.ok_or_else(|| "Нет пути к exe".to_string())?;
-            (exe, format!("--proxy-server={proxy}"))
+            (exe, format!("--proxy-server={proxy} {WEBRTC_GUARD}"))
         }
         LaunchKind::Msix => {
             // Ярлык на ПРЯМОЙ exe пакета с флагом --proxy-server (как в launch)
@@ -733,7 +744,7 @@ pub fn create_shortcut(
                 .ok_or_else(|| "Не нашёл exe пакета для ярлыка".to_string())?;
             (
                 exe.to_string_lossy().to_string(),
-                format!("--proxy-server={proxy}"),
+                format!("--proxy-server={proxy} {WEBRTC_GUARD}"),
             )
         }
     };
