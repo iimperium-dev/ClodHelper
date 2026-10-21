@@ -122,32 +122,18 @@ pub fn clear() -> Result<(), String> {
 
 #[cfg(target_os = "windows")]
 mod backend {
-    /// ОДИН вызов PowerShell на все ключи: каждый спавн PS стоит ~0.5-1с, а
-    /// read() дёргается UI-поллингом каждые 5с. Читаем только UPPERCASE-имена
-    /// — реестр Windows регистронезависим, отдельный запрос lowercase вернул
-    /// бы ту же запись дублем.
+    /// User-переменные — прямо из HKCU\Environment (их хранилище): запуск
+    /// PowerShell стоил ~1–2 с, а read() дёргается при каждом обновлении
+    /// окна. Реестр регистронезависим — читаем только UPPERCASE-имена.
     pub fn read_values(keys: &[&str]) -> Vec<(String, String)> {
-        let script = keys
-            .iter()
-            .map(|k| {
-                format!(
-                    "Write-Output ('{k}=' + [Environment]::GetEnvironmentVariable('{k}', 'User'))"
-                )
+        let user = crate::win::hkcu();
+        keys.iter()
+            .filter_map(|k| {
+                let v = crate::win::string(&user, "Environment", k)?;
+                let v = v.trim();
+                (!v.is_empty()).then(|| (k.to_string(), v.to_string()))
             })
-            .collect::<Vec<_>>()
-            .join("; ");
-        let out = run_ps_capture(&script).unwrap_or_default();
-
-        let mut values = Vec::new();
-        for line in out.lines() {
-            if let Some((k, v)) = line.split_once('=') {
-                let (k, v) = (k.trim(), v.trim());
-                if !v.is_empty() && keys.iter().any(|rk| rk.eq_ignore_ascii_case(k)) {
-                    values.push((k.to_string(), v.to_string()));
-                }
-            }
-        }
-        values
+            .collect()
     }
 
     /// Записывает HKCU\Environment через [Environment]::SetEnvironmentVariable

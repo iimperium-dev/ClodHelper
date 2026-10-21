@@ -41,12 +41,22 @@ pub async fn apps_icons(paths: Vec<String>) -> Result<std::collections::HashMap<
         .map_err(|e| format!("Внутренняя ошибка: {e}"))
 }
 
-/// Поиск установленных программ по названию (Spotlight, macOS).
+/// Поиск установленных программ по названию (Spotlight / меню «Пуск»).
 #[tauri::command]
 pub async fn apps_search(query: String) -> Result<Vec<apps::FoundApp>, String> {
-    tokio::task::spawn_blocking(move || apps::search_installed(&query))
-        .await
-        .map_err(|e| format!("Внутренняя ошибка: {e}"))
+    tokio::task::spawn_blocking(move || {
+        // Убранные из списка (встроенные прячутся) — тоже находятся.
+        let hidden: Vec<(String, String)> = settings::load_with_presets()
+            .app_profiles
+            .into_iter()
+            .filter(|p| p.hidden)
+            .filter_map(|p| Some((apps::profile_file(&p)?, p)))
+            .map(|(path, p)| (p.name, path))
+            .collect();
+        apps::search_with_hidden(&query, &hidden)
+    })
+    .await
+    .map_err(|e| format!("Внутренняя ошибка: {e}"))
 }
 
 /// Настройки приложения: свой прокси (None — «Авто») и «весь трафик».
@@ -86,24 +96,28 @@ pub async fn apps_layout_set(layout: serde_json::Value) -> Result<(), String> {
 /// Открыть в браузере страницу расширения, перехватившего прокси.
 #[tauri::command]
 pub async fn apps_open_extension(id: String, ext_id: String) -> Result<(), String> {
-    let path = settings::load_with_presets()
+    let profile = settings::load_with_presets()
         .app_profiles
         .into_iter()
-        .find(|p| p.id == id)
-        .and_then(|p| p.exe_path)
+        .find(|p| p.id == id && p.exe_path.is_some())
         .ok_or_else(|| "Профиль не найден".to_string())?;
+    let path = profile.exe_path.clone().unwrap_or_default();
     #[cfg(not(target_os = "windows"))]
     return tokio::task::spawn_blocking(move || crate::browser_ext::open_extension_page(&path, &ext_id))
         .await
         .map_err(|e| format!("Внутренняя ошибка: {e}"))?;
+    // Windows: адрес chrome://extensions передаётся exe браузера — так же,
+    // как «Открыть», через мост (запущенный браузер просто откроет вкладку).
     #[cfg(target_os = "windows")]
-    {
-        let _ = (path, ext_id);
-        Err("Пока только для macOS".into())
-    }
+    return tokio::task::spawn_blocking(move || {
+        let url = crate::browser_ext::extension_page_url(&path, &ext_id)?;
+        apps::open_in_browser(&profile, &url)
+    })
+    .await
+    .map_err(|e| format!("Внутренняя ошибка: {e}"))?;
 }
 
-/// Через мост ли идёт каждое приложение — по живым соединениям (macOS).
+/// Через мост ли идёт каждое приложение — по живым соединениям.
 #[tauri::command]
 pub async fn apps_traffic() -> Result<Vec<crate::traffic::AppTraffic>, String> {
     tokio::task::spawn_blocking(|| {
@@ -136,11 +150,13 @@ pub async fn apps_add_custom(
     }
     let mut s = settings::load_with_presets();
     // Программа уже есть, но убрана из списка (в т.ч. встроенная) — вернуть.
-    if let Some(p) = s
-        .app_profiles
-        .iter_mut()
-        .find(|p| p.hidden && p.exe_path.as_deref() == Some(exe_path.as_str()))
-    {
+    // Путь сверяем с тем, где она стоит сейчас: поиск отдаёт путь из «Пуска»
+    // или реестра, у встроенной он мог быть сохранён иначе или не сохранён.
+    if let Some(p) = s.app_profiles.iter_mut().find(|p| {
+        p.hidden
+            && (p.exe_path.as_deref().is_some_and(|e| apps::same_path(e, &exe_path))
+                || apps::profile_file(p).is_some_and(|f| apps::same_path(&f, &exe_path)))
+    }) {
         p.hidden = false;
         let saved = settings::set_profiles(s.app_profiles)?;
         return Ok(apps::statuses(&saved.app_profiles));
@@ -271,7 +287,7 @@ pub async fn privacy_check() -> Result<crate::privacy::PrivacyReport, String> {
     })
     .await
     .map_err(|e| format!("Внутренняя ошибка: {e}"))?;
-    Ok(crate::privacy::check(leaking).await)
+    Ok(crate::privacy::check_within(leaking, std::time::Duration::from_secs(25)).await)
 }
 
 fn browser_domain_of(id: &str) -> Result<&'static str, String> {
@@ -294,7 +310,7 @@ pub async fn browser_policy_status(id: String) -> Result<Option<crate::browser_p
         .map_err(|e| format!("Внутренняя ошибка: {e}"))?
 }
 
-/// Включить/снять «всегда через мост» (пароль Mac). Вход — как у «Открыть».
+/// Включить/снять «всегда через мост» (пароль Mac / окно UAC). Вход — как у «Открыть».
 #[tauri::command]
 pub async fn browser_policy_set(id: String, enable: bool) -> Result<crate::browser_policy::BrowserPolicyStatus, String> {
     let domain = browser_domain_of(&id)?;

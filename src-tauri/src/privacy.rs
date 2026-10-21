@@ -94,9 +94,19 @@ pub async fn check(leaking_apps: Vec<String>) -> PrivacyReport {
         if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric()) {
             return None;
         }
-        // Имена резолвит сторона прокси — так bash.ws видит её DNS.
-        let pings = (1..=4).map(|i| proxied.get(format!("http://{i}.{id}.bash.ws")).send());
-        let _ = futures_join_all(pings).await;
+        // Имена резолвит сторона прокси — так bash.ws видит её DNS. Все
+        // четыре разом: по очереди зависший прокси растягивал проверку на минуту.
+        let pings: Vec<_> = (1..=4)
+            .map(|i| {
+                let req = proxied
+                    .get(format!("http://{i}.{id}.bash.ws"))
+                    .timeout(std::time::Duration::from_secs(6));
+                tokio::spawn(req.send())
+            })
+            .collect();
+        for ping in pings {
+            let _ = ping.await;
+        }
         let list: Vec<BashWsEntry> = proxied
             .get(format!("https://bash.ws/dnsleak/test/{id}?json"))
             .send()
@@ -131,14 +141,20 @@ pub async fn check(leaking_apps: Vec<String>) -> PrivacyReport {
     r
 }
 
-/// Простой join_all без зависимости от futures.
-async fn futures_join_all<F: std::future::Future>(futs: impl Iterator<Item = F>) -> Vec<F::Output> {
-    let handles: Vec<_> = futs.collect();
-    let mut out = Vec::with_capacity(handles.len());
-    for f in handles {
-        out.push(f.await);
+/// Проверка целиком не дольше `limit`: «Проверить» не должна крутиться
+/// бесконечно, даже если прокси принимает соединения и молчит.
+pub async fn check_within(leaking_apps: Vec<String>, limit: std::time::Duration) -> PrivacyReport {
+    match tokio::time::timeout(limit, check(leaking_apps.clone())).await {
+        Ok(report) => report,
+        Err(_) => PrivacyReport {
+            leaking_apps,
+            error: Some(format!(
+                "Проверка не уложилась в {} с — прокси отвечает слишком медленно",
+                limit.as_secs()
+            )),
+            ..Default::default()
+        },
     }
-    out
 }
 
 #[cfg(test)]

@@ -123,7 +123,7 @@ if ($Uninstall) {
         $ownershipKey = $policyBase.OpenSubKey('SOFTWARE\ClodHelper\ClaudeProxyPolicy')
         if (($policyKey -and $policyKey.GetValue('egressProxyUrl') -eq 'http://127.0.0.1:8890') -or
             ($ownershipKey -and $null -ne $ownershipKey.GetValue('State'))) {
-            throw 'Сначала откройте Clod Helper → Приложения → Вернуть прежние настройки. Затем повторите удаление моста.'
+            throw 'Сначала откройте Clod Helper → Приложения → Claude Desktop → «…» → «Отключить прокси Claude». Затем повторите удаление моста.'
         }
     } finally {
         if ($policyKey) { $policyKey.Dispose() }
@@ -272,8 +272,10 @@ if (-not $claudeInstallation) {
     $claudeExe = $claudeInstallation.exe_path
     $wsh = New-Object -ComObject WScript.Shell
     $sc = $wsh.CreateShortcut($DesktopShortcut)
-    $sc.TargetPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    $sc.Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$launcherPath`" -Port 8890 -ShowError"
+    # conhost --headless: Windows Terminal по умолчанию игнорирует -WindowStyle Hidden.
+    $sc.TargetPath = Join-Path $env:SystemRoot 'System32\conhost.exe'
+    $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $sc.Arguments = "--headless `"$powershellExe`" -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$launcherPath`" -Port 8890 -ShowError"
     $sc.WorkingDirectory = $InstallDir
     $sc.WindowStyle = 7
     $sc.IconLocation = "$claudeExe,0"
@@ -291,7 +293,7 @@ Write-Host "└─────────────────────�
 Write-Host ""
 Write-Host "  Что дальше:" -ForegroundColor White
 Write-Host ""
-Write-Host "  1. " -NoNewline; Write-Host "В Clod Helper открой Приложения → Настроить Claude." -ForegroundColor Yellow
+Write-Host "  1. " -NoNewline; Write-Host "В Clod Helper открой Приложения → Claude Desktop → «Подключить»." -ForegroundColor Yellow
 Write-Host "     Это включает штатный прокси для Claude и агента на порту 8890."
 Write-Host "     Затем полностью закрой Claude через трей и запусти через ярлык"
 Write-Host "     'Claude Desktop (proxy)' с рабочего стола."

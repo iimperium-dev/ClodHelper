@@ -46,7 +46,7 @@ pub async fn launch_claude_desktop() -> Result<(), String> {
         .map_err(|e| format!("Внутренняя ошибка: {e}"))?
 }
 
-/// Telegram через SOCKS-вход моста (macOS): статус по живым соединениям.
+/// Telegram через SOCKS-вход моста: статус по живым соединениям.
 #[tauri::command]
 pub async fn telegram_status() -> Result<crate::telegram::TelegramStatus, String> {
     tokio::task::spawn_blocking(crate::telegram::status)

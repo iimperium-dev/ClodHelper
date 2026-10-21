@@ -106,23 +106,26 @@ pub async fn proxies_ping() -> Vec<ProxyPing> {
                     Err(_) => return ProxyPing { url, host: String::new(), port: 0, ms: None },
                 };
                 let (h, p) = (host.clone(), port);
+                // Три попытки, лучшая из удачных: один замер врёт — прокси,
+                // на секунды переставший принимать новые соединения (бывает у
+                // провайдеров), иначе висел бы красным «нет связи», хотя
+                // мост через него работает. None — не ответил ни разу.
                 let probe = tokio::task::spawn_blocking(move || {
                     use std::net::{TcpStream, ToSocketAddrs};
-                    format!("{h}:{p}")
-                        .to_socket_addrs()
-                        .ok()
-                        .and_then(|mut a| a.next())
-                        .and_then(|addr| {
+                    let addr = format!("{h}:{p}").to_socket_addrs().ok()?.next()?;
+                    (0..3)
+                        .filter_map(|_| {
                             let t = std::time::Instant::now();
-                            TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(4))
+                            TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(2500))
                                 .ok()
                                 .map(|_| t.elapsed().as_millis() as u64)
                         })
+                        .min()
                 });
                 // DNS-резолв внутри блокирующей задачи своего таймаута не имеет —
                 // ограничиваем всё целиком, иначе зависший резолвер держит
                 // «пинг» в UI десятки секунд.
-                let ms = match tokio::time::timeout(std::time::Duration::from_secs(6), probe).await {
+                let ms = match tokio::time::timeout(std::time::Duration::from_secs(9), probe).await {
                     Ok(Ok(ms)) => ms,
                     _ => None,
                 };

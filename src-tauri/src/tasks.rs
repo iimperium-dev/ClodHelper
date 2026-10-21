@@ -176,8 +176,58 @@ fn upstream_pool(proxy_url: &str) -> Vec<String> {
     }
 }
 
+/// Задача — по её ключу в кэше Планировщика (HKLM): сам ключ закрыт для
+/// чтения, но «нет доступа» ≠ «нет ключа», а этого достаточно. Без
+/// PowerShell: Get-ScheduledTask стоил ~2 с, а проверка нужна при каждом
+/// запуске моста. Состояние — по файлу задачи и живому процессу моста.
 #[cfg(target_os = "windows")]
 pub fn status() -> BridgeTaskStatus {
+    let tree = format!(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tree\{TASK_NAME}");
+    let registered = match crate::win::hklm().open_subkey(&tree) {
+        Ok(_) => Some(true),
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => Some(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(false),
+        Err(_) => None,
+    };
+    match registered {
+        Some(false) => BridgeTaskStatus { registered: false, state: None },
+        Some(true) => BridgeTaskStatus {
+            registered: true,
+            state: Some(
+                if task_disabled() {
+                    "Disabled"
+                } else if shim::status().running {
+                    "Running"
+                } else {
+                    "Ready"
+                }
+                .into(),
+            ),
+        },
+        None => status_via_powershell(),
+    }
+}
+
+/// Задача выключена в Планировщике: `<Enabled>false</Enabled>` в её XML
+/// (файл задачи пользователя читается без прав администратора).
+#[cfg(target_os = "windows")]
+fn task_disabled() -> bool {
+    let path = std::env::var_os("SystemRoot")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("C:\\Windows"))
+        .join("System32")
+        .join("Tasks")
+        .join(TASK_NAME);
+    let Ok(bytes) = std::fs::read(path) else { return false };
+    let words: Vec<u16> = bytes.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    String::from_utf16_lossy(&words)
+        .split("<Settings>")
+        .nth(1)
+        .is_some_and(|settings| settings.contains("<Enabled>false</Enabled>"))
+}
+
+#[cfg(target_os = "windows")]
+fn status_via_powershell() -> BridgeTaskStatus {
     let script = format!(
         "$t = Get-ScheduledTask -TaskName '{TASK_NAME}' -ErrorAction SilentlyContinue; \
          if ($t) {{ Write-Output ('TASK_STATE:' + $t.State) }} else {{ Write-Output 'TASK_MISSING' }}"
@@ -475,9 +525,14 @@ pub fn register(proxy_url: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Запустить задачу (мост поднимется скрыто через runner-vbs).
+/// Запустить задачу (мост поднимется скрыто). schtasks — десятки
+/// миллисекунд против ~2 с у Start-ScheduledTask; при отказе — PowerShell
+/// ради понятного текста ошибки.
 #[cfg(target_os = "windows")]
 pub fn start() -> Result<(), String> {
+    if schtasks(&["/Run", "/TN", TASK_NAME]) {
+        return Ok(());
+    }
     let script = format!(
         "Start-ScheduledTask -TaskName '{TASK_NAME}'; Write-Output 'TASK_STARTED'"
     );
@@ -490,6 +545,19 @@ pub fn start() -> Result<(), String> {
     }
 }
 
+/// schtasks.exe без окна; true — код выхода 0.
+#[cfg(target_os = "windows")]
+fn schtasks(args: &[&str]) -> bool {
+    use std::os::windows::process::CommandExt;
+    std::process::Command::new("schtasks")
+        .args(args)
+        .creation_flags(0x0800_0000)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
 /// Остановить задачу. ОБЯЗАТЕЛЬНО вызывать ПЕРЕД kill процессов моста:
 /// runner-супервизор перезапустил бы убитый мост через 5с, и «Остановить»
 /// в UI не работало бы. Stop-ScheduledTask убивает супервизор (wscript) —
@@ -497,10 +565,8 @@ pub fn start() -> Result<(), String> {
 /// не быть на легаси-установке).
 #[cfg(target_os = "windows")]
 pub fn stop_ignore_errors() {
-    let _ = run_ps(&format!(
-        "Stop-ScheduledTask -TaskName '{TASK_NAME}' -ErrorAction SilentlyContinue; \
-         Write-Output 'DONE'"
-    ));
+    // Не запущена / нет задачи — ненулевой код, это нормально.
+    let _ = schtasks(&["/End", "/TN", TASK_NAME]);
 }
 
 /// Миграция старой установки: есть легаси .vbs в Startup, задачи ещё нет,

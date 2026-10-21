@@ -344,9 +344,21 @@ fn port_listening() -> bool {
 }
 
 /// GET /healthz мини-клиентом на std::net (монитор — обычный поток, не tokio).
+/// Счётчики соединений — по всему мосту (см. merge_listener).
 fn fetch_healthz() -> Option<(Health, serde_json::Value)> {
-    let addr: SocketAddr = format!("127.0.0.1:{LISTEN_PORT}").parse().ok()?;
-    let mut s = TcpStream::connect_timeout(&addr, Duration::from_millis(800)).ok()?;
+    let mut raw = fetch_healthz_port(LISTEN_PORT, Duration::from_millis(800))?;
+    for port in other_health_ports() {
+        if let Some(other) = fetch_healthz_port(port, Duration::from_millis(300)) {
+            merge_listener(&mut raw, &other);
+        }
+    }
+    let h = serde_json::from_value::<Health>(raw.clone()).ok()?;
+    Some((h, raw))
+}
+
+fn fetch_healthz_port(port: u16, connect: Duration) -> Option<serde_json::Value> {
+    let addr: SocketAddr = format!("127.0.0.1:{port}").parse().ok()?;
+    let mut s = TcpStream::connect_timeout(&addr, connect).ok()?;
     s.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
     s.set_write_timeout(Some(Duration::from_secs(2))).ok()?;
     s.write_all(b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
@@ -355,9 +367,39 @@ fn fetch_healthz() -> Option<(Health, serde_json::Value)> {
     let _ = s.read_to_end(&mut buf);
     let text = String::from_utf8_lossy(&buf);
     let body = text.split("\r\n\r\n").nth(1)?;
-    let raw: serde_json::Value = serde_json::from_str(body.trim()).ok()?;
-    let h = serde_json::from_value::<Health>(raw.clone()).ok()?;
-    Some((h, raw))
+    serde_json::from_str(body.trim()).ok()
+}
+
+/// Остальные HTTP-входы моста со своими счётчиками: строгий вход Claude и
+/// закреплённые за прокси пула (по одному на прокси). SOCKS-вход Telegram
+/// (8891) не HTTP — его статистики в /healthz нет.
+pub(crate) fn other_health_ports() -> Vec<u16> {
+    let pool = crate::settings::effective_proxies(&crate::settings::load()).len() as u16;
+    std::iter::once(crate::claude_desktop::PROXY_PORT)
+        .chain((0..pool.min(5)).map(|i| crate::tasks::PIN_PORT_BASE + i))
+        .collect()
+}
+
+/// Добавить к /healthz общего входа счётчики другого входа моста: у каждого
+/// входа они свои (upstream'ы — общие), а «Обзор» и трей показывают трафик
+/// всего моста — Claude Desktop, например, ходит только через свой вход
+/// 8890, и по общему его трафика не было видно вовсе.
+pub(crate) fn merge_listener(main: &mut serde_json::Value, other: &serde_json::Value) {
+    if other["service"] != "clod-bridge" {
+        return;
+    }
+    for key in ["total", "active", "via_upstream", "via_direct", "errors"] {
+        let sum = main[key].as_u64().unwrap_or(0) + other[key].as_u64().unwrap_or(0);
+        main[key] = sum.into();
+    }
+    // Журналы сбоев — на общей шкале времени (все входы в одном процессе).
+    if let Some(theirs) = other["last_errors"].as_array().filter(|a| !a.is_empty()) {
+        let mut all: Vec<serde_json::Value> = main["last_errors"].as_array().cloned().unwrap_or_default();
+        all.extend(theirs.iter().cloned());
+        all.sort_by_key(|e| e["t"].as_u64().unwrap_or(0));
+        let keep = all.split_off(all.len().saturating_sub(20));
+        main["last_errors"] = keep.into();
+    }
 }
 
 /// host:port из masked-URL upstream'а ("http://user:****@host:port" | "http://host:port").
@@ -395,4 +437,28 @@ fn measure_connect_ms(addr: &str) -> Option<u128> {
     let start = Instant::now();
     TcpStream::connect_timeout(&sock, Duration::from_secs(4)).ok()?;
     Some(start.elapsed().as_millis())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::merge_listener;
+    use serde_json::json;
+
+    #[test]
+    fn overview_counts_every_bridge_listener() {
+        let mut main = json!({"service": "clod-bridge", "total": 2, "active": 0, "via_upstream": 0, "via_direct": 2,
+            "errors": 1, "last_errors": [{"t": 50, "msg": "a"}], "upstreams": [{"url": "u", "healthy": true}]});
+        let claude = json!({"service": "clod-bridge", "total": 3441, "active": 28, "via_upstream": 3439, "via_direct": 0,
+            "errors": 2, "last_errors": [{"t": 10, "msg": "b"}, {"t": 90, "msg": "c"}]});
+        merge_listener(&mut main, &claude);
+        assert_eq!((main["total"].as_u64(), main["active"].as_u64()), (Some(3443), Some(28)));
+        assert_eq!((main["via_upstream"].as_u64(), main["via_direct"].as_u64()), (Some(3439), Some(2)));
+        assert_eq!(main["errors"].as_u64(), Some(3));
+        let order: Vec<u64> = main["last_errors"].as_array().unwrap().iter().map(|e| e["t"].as_u64().unwrap()).collect();
+        assert_eq!(order, vec![10, 50, 90], "журнал сбоев — по времени");
+        assert_eq!(main["upstreams"].as_array().unwrap().len(), 1, "upstream-ы общие, не дублируются");
+        // Чужой сервис на порту моста не примешиваем.
+        merge_listener(&mut main, &json!({"service": "nginx", "total": 100}));
+        assert_eq!(main["total"].as_u64(), Some(3443));
+    }
 }

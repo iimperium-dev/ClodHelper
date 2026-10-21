@@ -10,9 +10,7 @@ import {
   MoreHorizontal,
   Play,
 } from "lucide-react";
-import { Toggle } from "./Toggle";
 import { Button } from "./Button";
-import { isMac } from "../lib/platform";
 import { AppIcon, IconWithGear } from "./AppTile";
 import { cn } from "../lib/cn";
 import type { AppProfileStatus } from "../lib/types";
@@ -32,22 +30,20 @@ export interface RowAction {
 
 interface Props {
   app: AppProfileStatus;
-  /** null — статуса нет (Windows / ещё не узнали): тихая подпись типа. */
+  /** null — статуса нет (ещё не узнали): тихая подпись типа. */
   status: RowStatus | null;
   /** Главная кнопка, когда нужно действие («Подключить»). Иначе — «Открыть». */
   action?: RowAction | null;
   /** Пункты меню «…» (ярлыки, отключение, удаление). */
   menu: RowAction[];
   onLaunch: () => Promise<void>;
-  /** Настоящая иконка программы (macOS). */
+  /** Настоящая иконка программы. */
   icon?: string;
   /** Режим упорядочивания: «−» слева, ручка справа, без кнопок. */
   editing?: boolean;
   onRemove?: () => void;
   /** Открыть настройки приложения (шестерёнка при наведении). */
   onSettings?: () => void;
-  /** Тумблер — только Windows (там он управляет killswitch). */
-  onToggle?: (enabled: boolean) => void;
 }
 
 /*
@@ -62,7 +58,6 @@ export function AppRow({
   action,
   menu,
   onLaunch,
-  onToggle,
   icon,
   editing,
   onRemove,
@@ -225,15 +220,6 @@ export function AppRow({
               </div>
             )}
           </div>
-        )}
-
-        {!isMac && onToggle && !editing && (
-          <Toggle
-            checked={app.enabled}
-            onChange={onToggle}
-            disabled={!app.installed}
-            label={`Проксировать ${app.name}`}
-          />
         )}
       </div>
 

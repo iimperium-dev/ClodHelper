@@ -1,10 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
-import { FolderOpen, LayoutGrid, List, Loader2, Plus } from "lucide-react";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { motion } from "framer-motion";
+import { LayoutGrid, List, Loader2, Plus } from "lucide-react";
 import { Button } from "../components/Button";
 import { type RowAction, type RowStatus } from "../components/AppRow";
-import { ClaudeProxyControl } from "../components/ClaudeProxyControl";
 import { AppSearchAdd } from "../components/AppSearchAdd";
 import { AppsBoard } from "../components/AppsBoard";
 import { AppSettingsModal } from "../components/AppSettingsModal";
@@ -21,7 +19,6 @@ import {
   appsList,
   appsRelaunch,
   appsRemove,
-  appsSet,
   appsTraffic,
   claudeProxyDisable,
   claudeProxyEnable,
@@ -46,6 +43,10 @@ const FAST_TICKS = 20;
 
 const CLAUDE_ID = "claude-desktop";
 const TELEGRAM_ID = "telegram";
+/** Как полностью перезапустить Claude Desktop, чтобы он перечитал прокси. */
+const RESTART_CLAUDE = isMac
+  ? "Перезапустите Claude Desktop (Cmd+Q и открыть снова)."
+  : "Перезапустите Claude Desktop (закройте его через значок в трее и откройте снова).";
 
 const n = (k: number) => `${k} ${k % 10 === 1 && k % 100 !== 11 ? "соединение" : k % 10 >= 2 && k % 10 <= 4 && (k % 100 < 10 || k % 100 >= 20) ? "соединения" : "соединений"}`;
 
@@ -62,16 +63,12 @@ function trafficStatus(t: AppTraffic | undefined, idle: string): RowStatus {
   Приложения: один список одинаковых строк. У каждой — статус по ЖИВЫМ
   соединениям (через мост / мимо моста) и одна кнопка, если что-то не так.
   Claude Desktop и Telegram — такие же строки; их настройка — та же кнопка
-  «Подключить», а не отдельные панели. На Windows статусы те же (netstat),
-  плюс тумблер killswitch и прежняя панель «Прокси Claude».
+  «Подключить», а не отдельные панели. macOS и Windows — одна логика:
+  соединения считаются по lsof / netstat.
 */
 export function Apps() {
   const [apps, setApps] = useState<AppProfileStatus[] | null>(null);
   const [adding, setAdding] = useState(false);
-  const [customName, setCustomName] = useState("");
-  const [customPath, setCustomPath] = useState("");
-  const [addBusy, setAddBusy] = useState(false);
-  const [addError, setAddError] = useState<string | null>(null);
 
   const [traffic, setTraffic] = useState<Record<string, AppTraffic>>({});
   const [claude, setClaude] = useState<ClaudeProxyStatus | null>(null);
@@ -113,7 +110,7 @@ export function Apps() {
   // пустой — повторный запрос по изменению icons зациклил бы опрос.
   const askedIcons = useRef(new Set<string>());
   useEffect(() => {
-    if (!isMac || !apps) return;
+    if (!apps) return;
     const need = apps
       .map((a) => a.location)
       .filter((l): l is string => !!l && !askedIcons.current.has(l));
@@ -131,8 +128,7 @@ export function Apps() {
 
   const loadSetup = useCallback(async () => {
     await Promise.all([
-      // Windows: прокси Claude настраивается блоком ниже, здесь только статус.
-      isMac ? claudeProxyStatus().then(setClaude).catch(() => {}) : Promise.resolve(),
+      claudeProxyStatus().then(setClaude).catch(() => {}),
       telegramStatus().then(setTelegram).catch(() => {}),
     ]);
   }, []);
@@ -176,7 +172,7 @@ export function Apps() {
     },
   ];
 
-  /** Статус, главная кнопка и меню строки (macOS — по соединениям). */
+  /** Статус, главная кнопка и меню строки — по соединениям. */
   /** Строка + «Убрать из списка» у любого приложения (встроенные прячутся,
       вернуть — через «Добавить»). */
   const describe = (
@@ -203,16 +199,12 @@ export function Apps() {
       label: "Перезапустить через мост",
       run: () => after(appsRelaunch(app.id)),
     };
-    // Windows: Claude настраивается блоком «Прокси Claude» ниже — в строке
-    // только факт по соединениям.
-    if (!isMac && app.id === CLAUDE_ID) {
-      return { status: trafficStatus(t, "Не запущен"), action: null, menu: shortcutMenu(app) };
-    }
-
     if (app.id === CLAUDE_ID) {
       const policy = claude?.policy;
       const menu = shortcutMenu(app);
-      if (policy?.configured && policy.auto_restore === false) {
+      // macOS стирает управляемые настройки — их возвращает служба; политику
+      // HKLM на Windows система не трогает, служба не нужна.
+      if (isMac && policy?.configured && policy.auto_restore === false) {
         menu.push({
           label: "Включить автовосстановление",
           run: () => after(claudeProxyEnable()).then((r) => r.policy.notice ?? "Автовосстановление включено"),
@@ -235,9 +227,7 @@ export function Apps() {
             label: "Подключить",
             run: () =>
               after(claudeProxyEnable()).then(
-                (r) =>
-                  r.policy.notice ??
-                  "Готово, защита от утечек включена. Перезапустите Claude Desktop (Cmd+Q и открыть снова).",
+                (r) => r.policy.notice ?? `Готово, защита от утечек включена. ${RESTART_CLAUDE}`,
               ),
           },
           menu,
@@ -257,6 +247,10 @@ export function Apps() {
       const menu: RowAction[] = [{ label: "Открыть окно прокси в Telegram", run: connect.run }];
       if (telegram && !telegram.socks_ready) {
         return { status: { tone: "warn", text: "Мосту нужно обновление — «Обновить» в Обзоре" }, action: null, menu: [] };
+      }
+      // Свой локальный прокси (tg-ws-proxy и т.п.) ведёт Telegram мимо моста.
+      if (t?.running && t.via_bridge === 0 && t.direct === 0 && t.other_proxy) {
+        return { status: { tone: "warn", text: "Через другой прокси, мимо моста" }, action: connect, menu };
       }
       const st = trafficStatus(t, "Не запущен");
       return { status: st, action: st.tone === "warn" ? connect : null, menu };
@@ -281,74 +275,11 @@ export function Apps() {
     return { status: st, action: st.tone === "warn" ? relaunch : null, menu: [...shortcutMenu(app), ...remove] };
   };
 
-  const toggleApp = async (id: string, enabled: boolean) => {
-    if (!apps) return;
-    const next = apps.map((a) => (a.id === id ? { ...a, enabled } : a));
-    setApps(next);
-    try {
-      const saved = await appsSet(
-        next.map((a) => ({
-          id: a.id,
-          name: a.name,
-          kind: a.kind,
-          // Пути/AppID не шлём: location — runtime-снимок, он пустеет, когда
-          // exe временно недоступен (отключённый диск), и затирал бы
-          // сохранённый путь навсегда. Бэкенд бережёт сохранённые значения.
-          exe_path: undefined,
-          app_id: undefined,
-          process_names: a.process_names,
-          enabled: a.enabled,
-          builtin: a.builtin,
-          hidden: a.hidden,
-        })),
-      );
-      setApps(saved);
-    } catch {
-      await load();
-    }
-  };
-
   const removeApp = async (id: string) => {
     try {
       setApps(await appsRemove(id));
     } catch {
       await load();
-    }
-  };
-
-  const pickExe = async () => {
-    const selected = await openDialog({
-      multiple: false,
-      // macOS: .app — это папка-бандл, но диалог выбирает её как файл.
-      filters: [{ name: "Программа", extensions: [isMac ? "app" : "exe"] }],
-      defaultPath: isMac ? "/Applications" : undefined,
-    });
-    if (typeof selected === "string") {
-      setCustomPath(selected);
-      if (!customName) {
-        const base =
-          selected
-            .replace(/[\\/]+$/, "")
-            .split(/[\\/]/)
-            .pop()
-            ?.replace(/\.(exe|app)$/i, "") ?? "";
-        setCustomName(base);
-      }
-    }
-  };
-
-  const handleAdd = async () => {
-    setAddBusy(true);
-    setAddError(null);
-    try {
-      setApps(await appsAddCustom(customName.trim(), customPath.trim()));
-      setCustomName("");
-      setCustomPath("");
-      setAdding(false);
-    } catch (e) {
-      setAddError(String(e));
-    } finally {
-      setAddBusy(false);
     }
   };
 
@@ -388,10 +319,10 @@ export function Apps() {
         </div>
       </motion.header>
 
-      {/* macOS: умный поиск среди установленных программ */}
-      {isMac && adding && (
+      {/* Умный поиск среди установленных программ (Spotlight / меню «Пуск») */}
+      {adding && (
         <AppSearchAdd
-          existing={(apps ?? []).map((a) => a.location ?? "").filter(Boolean)}
+          existing={visible.map((a) => a.location ?? "").filter(Boolean)}
           onAdd={async (name, path) => {
             setApps(await appsAddCustom(name, path));
             setAdding(false);
@@ -400,67 +331,6 @@ export function Apps() {
           onClose={() => setAdding(false)}
         />
       )}
-
-      {/* Windows: форма добавления — inline-раскрытие, не модалка */}
-      <AnimatePresence>
-        {!isMac && adding && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            exit={{ opacity: 0, height: 0 }}
-            transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
-            className="overflow-hidden"
-          >
-            <div className="surface-card mt-4 p-4">
-              <div className="space-y-2.5">
-                <input
-                  type="text"
-                  value={customName}
-                  onChange={(e) => setCustomName(e.target.value)}
-                  placeholder="Название (например, WebStorm)"
-                  className="w-full rounded-lg border border-vb-border bg-vb-surface-2 px-3 py-2 text-[13px] text-vb-fg outline-none transition-colors focus:border-vb-emerald/60"
-                  autoFocus
-                />
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={customPath}
-                    onChange={(e) => setCustomPath(e.target.value)}
-                    placeholder={isMac ? "Путь к .app" : "Путь к .exe"}
-                    className="min-w-0 flex-1 truncate rounded-lg border border-vb-border bg-vb-surface-2 px-3 py-2 font-mono text-[12px] text-vb-fg outline-none transition-colors focus:border-vb-emerald/60"
-                  />
-                  <Button variant="secondary" size="sm" onClick={pickExe}>
-                    <FolderOpen className="h-3.5 w-3.5" />
-                    Выбрать
-                  </Button>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    onClick={handleAdd}
-                    disabled={addBusy || !customName.trim() || !customPath.trim()}
-                  >
-                    {addBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-                    Добавить
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      setAdding(false);
-                      setAddError(null);
-                    }}
-                  >
-                    Отмена
-                  </Button>
-                </div>
-                {addError && <p className="text-[12px] text-vb-loss">{addError}</p>}
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
       {/* Список — одна поверхность, hairline-разделители */}
       <motion.section variants={fadeInUp} className="mt-5">
@@ -484,7 +354,6 @@ export function Apps() {
             icons={icons}
             onLaunch={(id) => after(appsLaunch(id))}
             onRemove={(id) => void removeApp(id)}
-            onToggle={isMac ? undefined : toggleApp}
             onSettings={setSettingsId}
           />
         )}
@@ -512,9 +381,6 @@ export function Apps() {
           />
         );
       })()}
-
-      {/* macOS: Claude настраивается из своей строки. Windows — прежняя панель. */}
-      {!isMac && <ClaudeProxyControl />}
     </motion.div>
   );
 }

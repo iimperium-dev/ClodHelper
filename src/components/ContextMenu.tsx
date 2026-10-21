@@ -34,12 +34,20 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
     if (!el) return;
     // offset*, а не getBoundingClientRect: в момент замера меню ещё уменьшено
     // анимацией появления — по нему оно «влезало» и обрезалось снизу.
-    const w = el.offsetWidth;
-    const h = el.offsetHeight;
-    setPos({
-      x: Math.max(8, Math.min(x, window.innerWidth - w - 8)),
-      y: Math.max(8, Math.min(y, window.innerHeight - h - 8)),
-    });
+    const place = () => {
+      const w = el.offsetWidth;
+      const h = el.offsetHeight;
+      setPos({
+        x: Math.max(8, Math.min(x, window.innerWidth - w - 8)),
+        y: Math.max(8, Math.min(y, window.innerHeight - h - 8)),
+      });
+    };
+    place();
+    // Меню может подрасти после первого замера: начертание шрифта для
+    // кириллицы грузится, только когда меню уже показано, — переставляем.
+    const grow = new ResizeObserver(place);
+    grow.observe(el);
+    return () => grow.disconnect();
   }, [x, y]);
 
   useEffect(() => {

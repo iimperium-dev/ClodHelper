@@ -28,8 +28,6 @@ pub struct Installation {
     pub kind: LaunchKind,
 }
 
-#[cfg(target_os = "windows")]
-const DETECT_ARGS: &str = "-DetectOnly";
 #[cfg(not(target_os = "windows"))]
 const DETECT_ARGS: &str = "--detect-only";
 
@@ -110,10 +108,67 @@ fn run_script(arguments: &str) -> Result<String, String> {
         .to_string())
 }
 
+#[cfg(not(target_os = "windows"))]
 pub fn detect_fresh() -> Result<Option<Installation>, String> {
     let json = run_script(DETECT_ARGS)?;
     serde_json::from_str(&json)
         .map_err(|e| format!("Не удалось определить установку Claude Desktop: {e}"))
+}
+
+/// Windows: та же логика, что Resolve-ClaudeDesktopInstallation в
+/// claude-desktop-launch.ps1, но без PowerShell (Get-AppxPackage — секунды
+/// на каждый опрос): пакет Store из реестра пакетов пользователя (новые
+/// версии первыми), иначе известные папки установщика.
+#[cfg(target_os = "windows")]
+pub fn detect_fresh() -> Result<Option<Installation>, String> {
+    let found = |path: PathBuf, app_id: Option<String>, kind: LaunchKind| {
+        Ok(Some(Installation { exe_path: path.to_string_lossy().to_string(), app_id, kind }))
+    };
+    // Современный пакет Store; старые сборки MSIX назывались «Claude».
+    for name in ["AnthropicPBC.Claude", "Claude"] {
+        for package in crate::win::store_packages(name) {
+            if let Some((exe, id)) = crate::win::manifest_app(&package.root, "Claude.exe") {
+                let path = package.root.join(&exe);
+                if path.is_file() {
+                    return found(path, Some(format!("{}!{id}", package.family())), LaunchKind::Msix);
+                }
+            }
+            // Повреждённый манифест не должен прятать рабочий exe.
+            for rel in ["app\\Claude.exe", "Claude.exe"] {
+                let path = package.root.join(rel);
+                if path.is_file() {
+                    return found(path, None, LaunchKind::Msix);
+                }
+            }
+        }
+    }
+    // Только известные папки установщика — Claude Code CLI из PATH не берём.
+    let Some(local) = dirs::data_local_dir() else { return Ok(None) };
+    for rel in ["AnthropicClaude", "Claude", "Programs\\claude-desktop", "Programs\\Claude", "Programs\\AnthropicClaude"] {
+        let root = local.join(rel);
+        let direct = root.join("Claude.exe");
+        if direct.is_file() {
+            return found(direct, None, LaunchKind::ExeFlag);
+        }
+        // Squirrel оставляет несколько app-* после обновлений — новейшая версия.
+        let mut versions: Vec<(Vec<u32>, PathBuf)> = std::fs::read_dir(&root)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| {
+                let dir = e.file_name().to_string_lossy().to_string();
+                let version = dir.strip_prefix("app-")?.split('-').next()?.to_string();
+                let key = version.split('.').map(|p| p.parse().unwrap_or(0)).collect();
+                Some((key, e.path().join("Claude.exe")))
+            })
+            .filter(|(_, exe)| exe.is_file())
+            .collect();
+        versions.sort();
+        if let Some((_, exe)) = versions.pop() {
+            return found(exe, None, LaunchKind::ExeFlag);
+        }
+    }
+    Ok(None)
 }
 
 pub fn detect() -> Option<Installation> {

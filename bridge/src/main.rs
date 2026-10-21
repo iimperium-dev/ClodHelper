@@ -1999,6 +1999,11 @@ mod tests {
         }
     }
 
+    /// Сколько ждём ответа моста в тестах. С запасом: на Windows коннект к
+    /// закрытому локальному порту («мёртвый» прокси) отклоняется не сразу, а
+    /// после повторов SYN — около 2 с на попытку, а попыток у моста две.
+    const IO_WAIT: Duration = Duration::from_secs(15);
+
     async fn single_request(state: Arc<State>, request: String) -> Vec<u8> {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -2010,11 +2015,11 @@ mod tests {
         client.write_all(request.as_bytes()).await.unwrap();
         client.shutdown().await.unwrap();
         let mut response = Vec::new();
-        timeout(Duration::from_secs(3), client.read_to_end(&mut response))
+        timeout(IO_WAIT, client.read_to_end(&mut response))
             .await
             .unwrap()
             .unwrap();
-        timeout(Duration::from_secs(3), server)
+        timeout(IO_WAIT, server)
             .await
             .unwrap()
             .unwrap();
@@ -2605,10 +2610,10 @@ mod tests {
         let mut client = TcpStream::connect(addr).await.unwrap();
         client.write_all(&script).await.unwrap();
         let mut out = Vec::new();
-        timeout(Duration::from_secs(3), client.read_to_end(&mut out)).await.unwrap().unwrap();
+        timeout(IO_WAIT, client.read_to_end(&mut out)).await.unwrap().unwrap();
         // Туннель живёт, пока открыты обе стороны — закрываем клиентскую.
         drop(client);
-        timeout(Duration::from_secs(3), server).await.unwrap().unwrap();
+        timeout(IO_WAIT, server).await.unwrap().unwrap();
         out
     }
 

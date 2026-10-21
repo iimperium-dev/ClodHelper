@@ -147,7 +147,8 @@ pub async fn update_check() -> Result<Option<crate::updater::UpdateInfo>, String
 #[tauri::command]
 pub async fn update_install(app: AppHandle, info: crate::updater::UpdateInfo) -> Result<(), String> {
     crate::updater::install(&info).await?;
-    // Новую версию поставит и запустит фоновый скрипт, когда мы выйдем.
+    // Новую версию поставит и запустит фоновый скрипт (macOS) или тихий
+    // установщик (Windows), когда мы выйдем.
     app.exit(0);
     Ok(())
 }

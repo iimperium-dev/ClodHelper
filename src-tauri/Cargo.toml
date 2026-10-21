@@ -37,6 +37,23 @@ sysinfo = "0.32"
 dirs = "5"
 tauri-plugin-dialog = "2.7.1"
 
+# Windows: быстрые статусы без PowerShell — реестр (политики, правила
+# брандмауэра, пакеты Store), таблица TCP-соединений, иконки exe в PNG.
+# Все три крейта уже приходят с Tauri — сборка не тяжелеет.
+[target.'cfg(target_os = "windows")'.dependencies]
+winreg = "0.56"
+png = "0.18"
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Globalization",
+  "Win32_Graphics_Gdi",
+  "Win32_NetworkManagement_IpHelper",
+  "Win32_Networking_WinSock",
+  "Win32_Storage_FileSystem",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
 # Автозапуск на macOS: SMAppService (13+) — штатные «Объекты входа» с
 # иконкой и именем приложения вместо LaunchAgent «Clod Helper.plist».
 [target.'cfg(target_os = "macos")'.dependencies]

@@ -6,20 +6,26 @@ import { appsIcons, appsSearch } from "../lib/api";
 import type { FoundApp } from "../lib/types";
 import { appBrand, BrandTile } from "./BrandLogos";
 import { cn } from "../lib/cn";
+import { isMac } from "../lib/platform";
 
 interface Props {
-  /** Пути уже добавленных приложений — их не предлагаем. */
+  /** Пути приложений, уже видных в списке, — их не предлагаем. Убранные
+   *  (в том числе встроенные) находятся: выбор возвращает их в список. */
   existing: string[];
   onAdd: (name: string, path: string) => Promise<void>;
   onClose: () => void;
 }
 
 /*
-  Добавление приложения (macOS): пишете название — Spotlight ищет среди
-  всех установленных программ (в т.ч. русские имена и транслит: «телег» →
-  Telegram). Выбор подсказки сразу добавляет. Папка справа — ручной выбор
-  .app, если программы нет в индексе. Клавиатура: ↑/↓, Enter, Esc.
+  Добавление приложения: пишете название — поиск среди установленных
+  программ (macOS — Spotlight, Windows — меню «Пуск» и «Приложения и
+  возможности»; русские имена и транслит: «телег» → Telegram). Выбор подсказки сразу добавляет. Папка
+  справа — ручной выбор .app / .exe, если программы нет в поиске.
+  Клавиатура: ↑/↓, Enter, Esc.
 */
+/** Ключ сравнения путей: на Windows регистр и «/» против «\» не важны. */
+const pathKey = (p: string) => (isMac ? p : p.replace(/\//g, "\\").toLowerCase());
+
 export function AppSearchAdd({ existing, onAdd, onClose }: Props) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<FoundApp[]>([]);
@@ -29,12 +35,17 @@ export function AppSearchAdd({ existing, onAdd, onClose }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [icons, setIcons] = useState<Record<string, string>>({});
   const seq = useRef(0);
+  // Список приложений перерисовывается от опросов статуса — в зависимости
+  // эффекта поиска его не берём, иначе поиск перезапускался бы сам.
+  const known = useRef(new Set<string>());
+  known.current = new Set(existing.map(pathKey));
   /** Пути, за иконками которых уже ходили (удачно или нет) — не повторяем. */
   const asked = useRef(new Set<string>());
 
-  // Настоящие иконки найденных программ (подгружаются после подсказок).
+  // Настоящие иконки найденных программ: на Windows приходят в самом ответе,
+  // на macOS — подгружаются после подсказок.
   useEffect(() => {
-    const need = results.map((r) => r.path).filter((p) => !asked.current.has(p));
+    const need = results.filter((r) => !r.icon).map((r) => r.path).filter((p) => !asked.current.has(p));
     if (need.length === 0) return;
     need.forEach((p) => asked.current.add(p));
     appsIcons(need)
@@ -53,12 +64,12 @@ export function AppSearchAdd({ existing, onAdd, onClose }: Props) {
     const t = window.setTimeout(async () => {
       const found = await appsSearch(q).catch(() => [] as FoundApp[]);
       if (id !== seq.current) return; // ответ на устаревший запрос
-      setResults(found.filter((f) => !existing.includes(f.path)));
+      setResults(found.filter((f) => !known.current.has(pathKey(f.path))));
       setActive(0);
       setSearching(false);
     }, 140);
     return () => window.clearTimeout(t);
-  }, [query, existing]);
+  }, [query]);
 
   const add = async (name: string, path: string) => {
     setBusy(true);
@@ -75,11 +86,17 @@ export function AppSearchAdd({ existing, onAdd, onClose }: Props) {
   const pickManually = async () => {
     const selected = await openDialog({
       multiple: false,
-      filters: [{ name: "Программа", extensions: ["app"] }],
-      defaultPath: "/Applications",
+      // macOS: .app — это папка-бандл, но диалог выбирает её как файл.
+      filters: [{ name: "Программа", extensions: [isMac ? "app" : "exe"] }],
+      defaultPath: isMac ? "/Applications" : undefined,
     });
     if (typeof selected === "string") {
-      const name = selected.replace(/\/+$/, "").split("/").pop()?.replace(/\.app$/i, "") ?? "";
+      const name =
+        selected
+          .replace(/[\\/]+$/, "")
+          .split(/[\\/]/)
+          .pop()
+          ?.replace(/\.(app|exe)$/i, "") ?? "";
       await add(name, selected);
     }
   };
@@ -151,6 +168,7 @@ export function AppSearchAdd({ existing, onAdd, onClose }: Props) {
             ) : (
               results.map((r, i) => {
                 const brand = appBrand(r.name);
+                const icon = r.icon ?? icons[r.path];
                 return (
                   <li key={r.path} role="option" aria-selected={i === active}>
                     <button
@@ -163,8 +181,8 @@ export function AppSearchAdd({ existing, onAdd, onClose }: Props) {
                         i === active ? "bg-vb-surface-2" : "hover:bg-vb-surface-2/60",
                       )}
                     >
-                      {icons[r.path] ? (
-                        <img src={icons[r.path]} alt="" className="h-8 w-8 shrink-0" draggable={false} />
+                      {icon ? (
+                        <img src={icon} alt="" className="h-8 w-8 shrink-0" draggable={false} />
                       ) : brand ? (
                         <BrandTile glow={brand.glow}>{brand.glyph}</BrandTile>
                       ) : (
@@ -175,7 +193,7 @@ export function AppSearchAdd({ existing, onAdd, onClose }: Props) {
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-[13px] font-medium text-vb-fg">{r.name}</span>
                         <span className="block truncate text-[11px] text-vb-silver-faint">
-                          {r.path.replace(/\/[^/]+$/, "") || "/"}
+                          {r.path.replace(/[\\/][^\\/]+$/, "") || "/"}
                         </span>
                       </span>
                       {i === active && <span className="text-[11px] text-vb-silver-faint">↵</span>}

@@ -11,7 +11,7 @@
 //! версионированный путь меняется при каждом апдейте из Store, и правило по
 //! пути отвалилось бы. Имя (`ChatGPT.exe`) переживает апдейты.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde::{Deserialize, Serialize};
@@ -225,14 +225,123 @@ pub fn builtin_presets() -> Vec<AppProfile> {
     ]
 }
 
-/// Telegram Desktop на Windows: обычная установка — в %APPDATA%.
+/// Telegram Desktop на Windows. Сначала дешёвое: запись установщика (своя
+/// папка вроде D:\Telegram Desktop), обычные папки, обработчик ссылок tg://;
+/// затем «Приложения и возможности» и запущенный Telegram.exe (переносная
+/// копия). Обработчик tg:// перезаписывает каждый запущенный Telegram, и при
+/// втором аккаунте (копия exe под другим именем) он указывает на копию —
+/// поэтому от него берём только Telegram.exe. Кэш 30 с: детект идёт при
+/// каждом чтении настроек.
 #[cfg(target_os = "windows")]
 pub fn find_telegram_exe() -> Option<PathBuf> {
-    [dirs::config_dir(), dirs::data_local_dir().map(|d| d.join("Programs"))]
-        .into_iter()
-        .flatten()
-        .map(|d| d.join("Telegram Desktop").join("Telegram.exe"))
-        .find(|p| p.exists())
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    static CACHE: Mutex<Option<(Instant, Option<PathBuf>)>> = Mutex::new(None);
+    if let Some((t, found)) = CACHE.lock().ok().and_then(|c| c.clone()) {
+        if t.elapsed() < Duration::from_secs(30) {
+            return found;
+        }
+    }
+    let found = telegram_installer_entry()
+        .or_else(|| {
+            [dirs::config_dir(), dirs::data_local_dir().map(|d| d.join("Programs"))]
+                .into_iter()
+                .flatten()
+                .map(|d| d.join("Telegram Desktop").join("Telegram.exe"))
+                .find(|p| p.is_file())
+        })
+        .or_else(|| telegram_link_handler().filter(|p| is_telegram_exe_name(p)))
+        .or_else(|| {
+            crate::win::uninstall_entries()
+                .into_iter()
+                .filter(|(name, _)| name.starts_with("Telegram Desktop"))
+                .filter_map(|(_, icon)| icon_exe(&icon).map(PathBuf::from))
+                .find(|p| is_telegram_exe_name(p) && p.is_file())
+        })
+        .or_else(|| running_exes(|name, _| name.eq_ignore_ascii_case("Telegram.exe")).into_iter().next());
+    if let Ok(mut c) = CACHE.lock() {
+        *c = Some((Instant::now(), found.clone()));
+    }
+    found
+}
+
+/// Telegram.exe по записи его установщика (Inno Setup, AppId Telegram
+/// Desktop) — прямое чтение одного ключа реестра.
+#[cfg(target_os = "windows")]
+fn telegram_installer_entry() -> Option<PathBuf> {
+    const KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{53F49750-6209-4FBF-9CA8-7A333C87D1ED}_is1";
+    const KEY_32: &str =
+        r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\{53F49750-6209-4FBF-9CA8-7A333C87D1ED}_is1";
+    use crate::win::{hkcu, hklm, string};
+    [(hkcu(), KEY), (hklm(), KEY), (hklm(), KEY_32)].iter().find_map(|(root, key)| {
+        string(root, key, "InstallLocation")
+            .map(|dir| PathBuf::from(dir).join("Telegram.exe"))
+            .or_else(|| string(root, key, "DisplayIcon").and_then(|i| icon_exe(&i)).map(PathBuf::from))
+            .filter(|p| p.is_file())
+    })
+}
+
+/// Exe обработчика ссылок tg:// (HKCU) — чтение реестра, микросекунды.
+/// Им может быть и копия Telegram под другим именем.
+#[cfg(target_os = "windows")]
+fn telegram_link_handler() -> Option<PathBuf> {
+    let command = crate::win::string(&crate::win::hkcu(), r"Software\Classes\tg\shell\open\command", "")?;
+    link_handler_exe(&command).filter(|p| p.is_file())
+}
+
+/// Пути exe запущенных процессов, подходящих под условие (имя образа, путь).
+#[cfg(target_os = "windows")]
+fn running_exes(matches: impl Fn(&str, &Path) -> bool) -> Vec<PathBuf> {
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::new().with_exe(UpdateKind::OnlyIfNotSet),
+    );
+    let mut out: Vec<PathBuf> = Vec::new();
+    for proc in sys.processes().values() {
+        let Some(exe) = proc.exe() else { continue };
+        if !out.iter().any(|p| p == exe) && matches(&proc.name().to_string_lossy(), exe) {
+            out.push(exe.to_path_buf());
+        }
+    }
+    out
+}
+
+/// Другие запущенные Telegram Desktop, кроме `main`: копии под своим именем
+/// (второй аккаунт — «Vtoroy-Acc.exe» в отдельной папке) и другие установки.
+/// Узнаём по описанию файла, а не по имени; читаем его только у тех, рядом с
+/// кем лежит папка данных Telegram «tdata» (у копии она своя), — чтение
+/// версий всех процессов заняло бы секунду.
+#[cfg(target_os = "windows")]
+pub fn other_running_telegrams(main: &str) -> Vec<PathBuf> {
+    running_exes(|name, exe| {
+        if same_path(&exe.to_string_lossy(), main) {
+            return false;
+        }
+        name.eq_ignore_ascii_case("Telegram.exe")
+            || (exe.parent().is_some_and(|d| d.join("tdata").is_dir())
+                && crate::win::file_description(exe).as_deref() == Some("Telegram Desktop"))
+    })
+}
+
+/// Exe из команды обработчика ссылок: «"D:\…\Telegram.exe" -- "%1"».
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn link_handler_exe(command: &str) -> Option<PathBuf> {
+    let c = command.trim();
+    let exe = match c.strip_prefix('"') {
+        Some(rest) => rest.split('"').next()?,
+        None => c.split_whitespace().next()?,
+    };
+    exe.to_lowercase().ends_with(".exe").then(|| PathBuf::from(exe))
+}
+
+/// Сам Telegram.exe, а не копия или чужая программа со ссылками tg://.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn is_telegram_exe_name(p: &Path) -> bool {
+    let path = p.to_string_lossy();
+    path.rsplit(['\\', '/']).next().is_some_and(|n| n.eq_ignore_ascii_case("Telegram.exe"))
 }
 
 // ─── Детект приложений ───────────────────────────────────────────
@@ -259,53 +368,21 @@ pub fn find_vscode_exe() -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.exists())
 }
 
-/// Кэш AppUserModelID Codex: Get-AppxPackage стоит СЕКУНДЫ, а статус профилей
-/// поллится UI каждые 5с (двумя вызовами: builtin_presets + profile_installed).
-/// TTL 60с достаточно — установка/удаление Codex случается редко.
-static CODEX_APP_ID_CACHE: std::sync::Mutex<
-    Option<(std::time::Instant, Option<String>)>,
-> = std::sync::Mutex::new(None);
-
-/// Найти AppUserModelID установленного Codex через PowerShell Get-AppxPackage.
-/// Возвращаем в форме `<PackageFamilyName>!App` — этим запускается MSIX.
-pub fn find_codex_app_id() -> Option<String> {
-    if let Ok(guard) = CODEX_APP_ID_CACHE.lock() {
-        if let Some((t, cached)) = guard.as_ref() {
-            if t.elapsed() < std::time::Duration::from_secs(60) {
-                return cached.clone();
-            }
-        }
-    }
-    let result = find_codex_app_id_uncached();
-    if let Ok(mut guard) = CODEX_APP_ID_CACHE.lock() {
-        *guard = Some((std::time::Instant::now(), result.clone()));
-    }
-    result
-}
-
+/// AppUserModelID установленного Codex в форме `<PackageFamilyName>!App` —
+/// этим запускается MSIX. Пакет — из реестра пакетов пользователя (не
+/// Get-AppxPackage: тот стоит секунды, а статусы опрашиваются постоянно).
 #[cfg(not(target_os = "windows"))]
-fn find_codex_app_id_uncached() -> Option<String> {
+pub fn find_codex_app_id() -> Option<String> {
     None
 }
 
 #[cfg(target_os = "windows")]
-fn find_codex_app_id_uncached() -> Option<String> {
-    // Известный PackageFamilyName Codex стабилен между версиями (меняется только
-    // версия в PackageFullName). Проверяем что пакет установлен через Get-AppxPackage.
-    let out = run_silent(
-        "powershell.exe",
-        &[
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "$p = Get-AppxPackage | Where-Object { $_.Name -eq 'OpenAI.Codex' } | Select-Object -First 1; if ($p) { $p.PackageFamilyName } else { '' }",
-        ],
-    )?;
-    let pfn = out.trim();
-    if pfn.is_empty() {
-        return None;
-    }
-    Some(format!("{pfn}!App"))
+pub fn find_codex_app_id() -> Option<String> {
+    // PackageFamilyName Codex стабилен между версиями (меняется только версия
+    // в PackageFullName).
+    crate::win::store_packages("OpenAI.Codex")
+        .first()
+        .map(|p| format!("{}!App", p.family()))
 }
 
 /// Проверить, установлен ли профиль на этом ПК прямо сейчас.
@@ -342,6 +419,25 @@ fn profile_installed(p: &AppProfile) -> (bool, Option<String>) {
             });
             (id.is_some(), id)
         }
+    }
+}
+
+/// Файл программы профиля на этом ПК (exe или .app): сохранённый путь или
+/// найденный детектом. None — не найдена или известна только как AppID.
+pub fn profile_file(p: &AppProfile) -> Option<String> {
+    let exists = |s: &String| Path::new(s).exists();
+    p.exe_path.clone().filter(exists).or_else(|| {
+        let (installed, location) = profile_installed(p);
+        location.filter(|l| installed && exists(l))
+    })
+}
+
+/// Один ли это файл: на Windows регистр и «/» против «\» не важны.
+pub fn same_path(a: &str, b: &str) -> bool {
+    if cfg!(target_os = "windows") {
+        a.replace('/', "\\").to_lowercase() == b.replace('/', "\\").to_lowercase()
+    } else {
+        a == b
     }
 }
 
@@ -499,58 +595,107 @@ pub fn relaunch(p: &AppProfile) -> Result<(), String> {
     launch(p)
 }
 
-/// Windows: закрыть штатно (taskkill без /F — как крестик окна, с вопросами
-/// о несохранённом), дождаться выхода и запустить через мост.
+/// Windows: закрыть так же, как Windows закрывает программы для обновления
+/// (win::end_session — программа сохраняет состояние и выходит), дождаться
+/// выхода и запустить через мост. Кто после этого не вышел сам (Electron
+/// ждёт, что его завершит система), — завершаем: состояние уже сохранено.
+/// Трогаем только главный процесс программы (по пути к exe): не node.exe
+/// Codex и не claude.exe Claude Code в терминалах.
 #[cfg(target_os = "windows")]
 pub fn relaunch(p: &AppProfile) -> Result<(), String> {
-    use std::os::windows::process::CommandExt;
-    let images: Vec<String> = p
-        .process_names
-        .iter()
-        .map(|n| if n.to_lowercase().ends_with(".exe") { n.clone() } else { format!("{n}.exe") })
-        .collect();
-    if images.is_empty() {
+    use std::time::{Duration, Instant};
+    let Some(image) = p.process_names.first().map(|n| {
+        let n = n.to_lowercase();
+        if n.ends_with(".exe") { n } else { format!("{n}.exe") }
+    }) else {
+        return launch(p);
+    };
+    // Claude Desktop из Store: в профиле — AppID, путь к exe — из детекта.
+    let exe = if p.id == crate::claude_desktop::PROFILE_ID {
+        crate::claude_desktop::detect().map(|i| i.exe_path)
+    } else {
+        profile_installed(p).1
+    }
+    .filter(|l| l.to_lowercase().ends_with(".exe") && l.contains('\\'));
+    let pids = || main_pids(&image, exe.as_deref());
+    let wait = |secs: u64| {
+        let deadline = Instant::now() + Duration::from_secs(secs);
+        while !pids().is_empty() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        pids().is_empty()
+    };
+    let not_closed = || format!("{} не закрылся — закройте его и нажмите «Открыть»", p.name);
+    let running = pids();
+    if running.is_empty() {
         return launch(p);
     }
-    let running = || {
-        Command::new("tasklist")
-            .args(["/FO", "CSV", "/NH"])
-            .creation_flags(0x0800_0000)
-            .output()
-            .map(|o| {
-                let out = String::from_utf8_lossy(&o.stdout).to_lowercase();
-                images.iter().any(|i| out.contains(&format!("\"{}\"", i.to_lowercase())))
-            })
-            .unwrap_or(false)
-    };
-    if running() {
-        for i in &images {
-            let _ = Command::new("taskkill").args(["/IM", i]).creation_flags(0x0800_0000).status();
+    if !crate::win::end_session(&running) {
+        return Err(not_closed());
+    }
+    if !wait(5) {
+        kill_pids(&pids());
+        if !wait(5) {
+            return Err(not_closed());
         }
-        for _ in 0..40 {
-            if !running() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(500));
-        }
-        if running() {
-            return Err(format!("{} не закрылся — закройте его и нажмите «Открыть»", p.name));
-        }
+    }
+    // Браузер на Chromium: вернуть все окна и вкладки, как его собственный
+    // перезапуск (chrome://restart), что бы ни стояло в «При запуске».
+    let restore = exe.as_deref().and_then(crate::browser_policy::policy_domain).is_some();
+    if restore && matches!(p.kind, LaunchKind::ExeFlag | LaunchKind::Custom) {
+        return launch_exe(p, &["--restore-last-session"]);
     }
     launch(p)
 }
 
+/// PID главного процесса программы: имя образа и, если известен, путь к exe.
+#[cfg(target_os = "windows")]
+fn main_pids(image: &str, exe: Option<&str>) -> Vec<u32> {
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::new().with_exe(UpdateKind::OnlyIfNotSet),
+    );
+    sys.processes()
+        .iter()
+        .filter(|(_, proc)| proc.name().to_string_lossy().eq_ignore_ascii_case(image))
+        .filter(|(_, proc)| match exe {
+            Some(path) => proc.exe().is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case(path)),
+            None => true,
+        })
+        .map(|(pid, _)| pid.as_u32())
+        .collect()
+}
+
+#[cfg(target_os = "windows")]
+fn kill_pids(pids: &[u32]) {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::new());
+    for pid in pids {
+        if let Some(proc) = sys.process(Pid::from_u32(*pid)) {
+            proc.kill();
+        }
+    }
+}
+
 pub fn launch(p: &AppProfile) -> Result<(), String> {
+    // Уже запущенная программа на «Открыть» выводит своё окно вперёд.
+    #[cfg(target_os = "windows")]
+    crate::win::allow_foreground();
     if p.id == crate::claude_desktop::PROFILE_ID {
         return crate::claude_desktop::launch();
     }
     match p.kind {
-        LaunchKind::ExeFlag | LaunchKind::Custom => launch_exe(p),
+        LaunchKind::ExeFlag | LaunchKind::Custom => launch_exe(p, &[]),
         LaunchKind::Msix => launch_msix(p),
     }
 }
 
-fn launch_exe(p: &AppProfile) -> Result<(), String> {
+/// `extra` — дополнительные флаги запуска (например, восстановить сессию).
+fn launch_exe(p: &AppProfile, extra: &[&str]) -> Result<(), String> {
     let (installed, location) = profile_installed(p);
     if !installed {
         return Err(format!("{} не найден на этом ПК", p.name));
@@ -595,6 +740,7 @@ fn launch_exe(p: &AppProfile) -> Result<(), String> {
     let mut cmd = Command::new(&exe);
     cmd.arg(format!("--proxy-server={proxy}"));
     cmd.arg(WEBRTC_GUARD);
+    cmd.args(extra);
     // env для дочерних процессов (терминал → Claude Code → bash/node/git).
     cmd.env("HTTP_PROXY", &proxy);
     cmd.env("HTTPS_PROXY", &proxy);
@@ -605,6 +751,26 @@ fn launch_exe(p: &AppProfile) -> Result<(), String> {
     apply_no_window(&mut cmd);
     cmd.spawn()
         .map_err(|e| format!("Не удалось запустить {}: {e}", p.name))?;
+    Ok(())
+}
+
+/// Windows: открыть адрес в браузере с теми же флагами, что и «Открыть».
+/// Уже запущенный браузер флаги игнорирует и открывает адрес вкладкой; не
+/// запущенный — стартует сразу через мост, а не мимо него.
+#[cfg(target_os = "windows")]
+pub fn open_in_browser(p: &AppProfile, url: &str) -> Result<(), String> {
+    let (installed, location) = profile_installed(p);
+    let exe = location
+        .filter(|_| installed)
+        .ok_or_else(|| format!("{} не найден на этом ПК", p.name))?;
+    crate::win::allow_foreground();
+    let mut cmd = Command::new(&exe);
+    cmd.arg(format!("--proxy-server={}", launch_proxy_url(p)));
+    cmd.arg(WEBRTC_GUARD);
+    cmd.arg(url);
+    apply_no_window(&mut cmd);
+    cmd.spawn()
+        .map_err(|e| format!("Не удалось открыть {}: {e}", p.name))?;
     Ok(())
 }
 
@@ -706,27 +872,20 @@ fn msix_main_exe(p: &AppProfile) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// InstallLocation MSIX-пакета по PackageFamilyName.
+/// Папка установленного MSIX-пакета по PackageFamilyName (Имя_Издатель).
+#[cfg(target_os = "windows")]
 fn appx_install_location(family: &str) -> Option<PathBuf> {
-    let out = run_silent(
-        "powershell.exe",
-        &[
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            &format!(
-                "$p = Get-AppxPackage | Where-Object {{ $_.PackageFamilyName -eq '{}' }} | Select-Object -First 1; if ($p) {{ $p.InstallLocation }} else {{ '' }}",
-                family.replace('\'', "''"),
-            ),
-        ],
-    )?;
-    let loc = out.trim();
-    if loc.is_empty() {
-        None
-    } else {
-        let path = PathBuf::from(loc);
-        path.exists().then_some(path)
-    }
+    let name = family.split('_').next()?;
+    crate::win::store_packages(name)
+        .into_iter()
+        .find(|p| p.family().eq_ignore_ascii_case(family))
+        .map(|p| p.root)
+        .filter(|root| root.exists())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn appx_install_location(_family: &str) -> Option<PathBuf> {
+    None
 }
 
 // ─── Ярлык (Desktop / Taskbar) ───────────────────────────────────
@@ -804,16 +963,20 @@ pub fn create_shortcut(
         let installation = crate::claude_desktop::detect_fresh()?
             .ok_or_else(|| "Claude Desktop не найден — сначала установите приложение".to_string())?;
         let launcher = crate::claude_desktop::install_launcher()?;
-        let powershell = std::env::var("SystemRoot")
-            .map(|root| PathBuf::from(root).join("System32/WindowsPowerShell/v1.0/powershell.exe"))
+        let system32 = std::env::var("SystemRoot")
+            .map(|root| PathBuf::from(root).join("System32"))
             .map_err(|_| "Не найдена папка Windows".to_string())?;
+        // conhost --headless: когда консоль по умолчанию — Windows Terminal,
+        // -WindowStyle Hidden не прячет его вкладку; headless-conhost окна не создаёт.
+        let conhost = system32.join("conhost.exe");
+        let powershell = system32.join("WindowsPowerShell/v1.0/powershell.exe");
         let arguments = format!(
-            "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File \"{}\" -Port {} -ShowError",
-            launcher.display(), crate::claude_desktop::PROXY_PORT
+            "--headless \"{}\" -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File \"{}\" -Port {} -ShowError",
+            powershell.display(), launcher.display(), crate::claude_desktop::PROXY_PORT
         );
         return run_create_shortcut_ps(
             &format!("{} (proxy)", p.name),
-            &powershell.to_string_lossy(),
+            &conhost.to_string_lossy(),
             &arguments,
             &installation.exe_path,
             target,
@@ -1008,26 +1171,17 @@ pub fn resolve_process_paths(enabled_profiles: &[AppProfile]) -> Vec<String> {
 }
 
 /// Корень установленного MSIX-пакета Codex (версионированный путь).
+#[cfg(target_os = "windows")]
 fn codex_install_root() -> Option<PathBuf> {
-    let out = run_silent(
-        "powershell.exe",
-        &[
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "$p = Get-AppxPackage | Where-Object { $_.Name -eq 'OpenAI.Codex' } | Select-Object -First 1; if ($p) { $p.InstallLocation } else { '' }",
-        ],
-    )?;
-    let loc = out.trim();
-    if loc.is_empty() {
-        return None;
-    }
-    let path = PathBuf::from(loc);
-    if path.exists() {
-        Some(path)
-    } else {
-        None
-    }
+    crate::win::store_packages("OpenAI.Codex")
+        .into_iter()
+        .map(|p| p.root)
+        .find(|root| root.exists())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn codex_install_root() -> Option<PathBuf> {
+    None
 }
 
 /// Найти все файлы с именем `name` рекурсивно в `dir` (для MSIX-рантаймов).
@@ -1108,13 +1262,18 @@ fn run_silent(program: &str, args: &[&str]) -> Option<String> {
     }
 }
 
-// ─── Поиск установленных приложений (macOS) ─────────────────────
+// ─── Поиск установленных приложений ─────────────────────────────
 
-/// Найденное приложение для «Добавить»: имя как в Finder и путь к бандлу.
+/// Найденное приложение для «Добавить»: имя как в Finder / меню «Пуск» и
+/// путь к бандлу / exe.
 #[derive(Debug, Clone, serde::Serialize, PartialEq)]
 pub struct FoundApp {
     pub name: String,
     pub path: String,
+    /// Иконка (data-URL PNG) сразу с ответом — чтобы подсказка не
+    /// «допрыгивала» иконкой следом (Windows; на macOS — отдельным запросом).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
 }
 
 /// Кириллица → латиница: «телег» находит Telegram, «хром» — Chrome.
@@ -1162,6 +1321,7 @@ fn match_score(name: &str, needles: &[String]) -> Option<u32> {
 }
 
 /// Отбор и сортировка ответа Spotlight (`путь   kMDItemDisplayName = Имя`).
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 fn rank_found(mdfind_out: &str, query: &str, home: &str) -> Vec<FoundApp> {
     let needles = vec![query.trim().to_lowercase(), translit(query.trim())];
     let mut found: Vec<(u32, FoundApp)> = Vec::new();
@@ -1195,7 +1355,7 @@ fn rank_found(mdfind_out: &str, query: &str, home: &str) -> Vec<FoundApp> {
         if found.iter().any(|(_, f)| f.path == path) {
             continue;
         }
-        found.push((score, FoundApp { name, path: path.to_string() }));
+        found.push((score, FoundApp { name, path: path.to_string(), icon: None }));
     }
     found.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.name.len().cmp(&b.1.name.len())));
     found.into_iter().take(6).map(|(_, f)| f).collect()
@@ -1236,14 +1396,349 @@ pub fn search_installed(query: &str) -> Vec<FoundApp> {
     rank_found(&out, q, &home)
 }
 
+/// Windows: ярлыки меню «Пуск» (общие и пользователя) и «Приложения и
+/// возможности» — то, что человек видит как установленные программы
+/// (Telegram в своей папке без ярлыка в «Пуске» — тоже). Ярлыки разбираем
+/// сами (lnk.rs, без PowerShell): ответ на каждую букву мгновенный.
 #[cfg(target_os = "windows")]
-pub fn search_installed(_query: &str) -> Vec<FoundApp> {
-    Vec::new()
+pub fn search_installed(query: &str) -> Vec<FoundApp> {
+    let q = query.trim();
+    if q.chars().count() < 2 {
+        return Vec::new();
+    }
+    let mut out: Vec<FoundApp> = Vec::new();
+    for (name, exe) in rank_shortcuts(&installed_apps(), q) {
+        if out.iter().any(|f| f.path.eq_ignore_ascii_case(&exe)) {
+            continue;
+        }
+        out.push(FoundApp { name, path: exe, icon: None });
+        if out.len() == 6 {
+            break;
+        }
+    }
+    with_icons(out)
+}
+
+/// Windows: иконки — в том же ответе (миллисекунды; потом из кэша).
+#[cfg(target_os = "windows")]
+fn with_icons(mut found: Vec<FoundApp>) -> Vec<FoundApp> {
+    let paths: Vec<String> = found.iter().filter(|f| f.icon.is_none()).map(|f| f.path.clone()).collect();
+    let mut icons = icons(&paths);
+    for f in found.iter_mut().filter(|f| f.icon.is_none()) {
+        f.icon = icons.remove(&f.path);
+    }
+    found
+}
+
+/// macOS: иконки подгружает окно поиска отдельным запросом.
+#[cfg(not(target_os = "windows"))]
+fn with_icons(found: Vec<FoundApp>) -> Vec<FoundApp> {
+    found
+}
+
+/// Поиск с учётом убранных из списка: встроенные приложения не удаляются, а
+/// прячутся, и находятся всегда — выбор вернёт их на место, даже если
+/// программы нет ни в «Пуске», ни в Spotlight. `hidden` — (имя, путь к exe).
+pub fn search_with_hidden(query: &str, hidden: &[(String, String)]) -> Vec<FoundApp> {
+    let mut found = search_installed(query);
+    let q = query.trim();
+    if q.chars().count() < 2 {
+        return found;
+    }
+    let needles = vec![q.to_lowercase(), translit(q)];
+    for (name, path) in hidden {
+        if match_score(name, &needles).is_some() && !found.iter().any(|f| same_path(&f.path, path)) {
+            found.insert(0, FoundApp { name: name.clone(), path: path.clone(), icon: None });
+        }
+    }
+    found.truncate(6);
+    with_icons(found)
+}
+
+/// Программы из ярлыков меню «Пуск» и «Приложений и возможностей»: (имя,
+/// exe); имя ярлыка главнее. Кэш 30 с — запрос идёт на каждую букву.
+#[cfg(target_os = "windows")]
+fn installed_apps() -> Vec<(String, String)> {
+    use std::sync::Mutex;
+    static CACHE: Mutex<Option<(std::time::Instant, Vec<(String, String)>)>> = Mutex::new(None);
+    if let Ok(c) = CACHE.lock() {
+        if let Some((t, v)) = c.as_ref() {
+            if t.elapsed() < std::time::Duration::from_secs(30) {
+                return v.clone();
+            }
+        }
+    }
+    let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into());
+    let mut shortcuts = Vec::new();
+    for root in [std::env::var_os("ProgramData").map(PathBuf::from), dirs::data_dir()]
+        .into_iter()
+        .flatten()
+    {
+        collect_shortcuts(&root.join("Microsoft\\Windows\\Start Menu\\Programs"), 0, &mut shortcuts);
+    }
+    let mut apps: Vec<(String, String)> = shortcuts
+        .into_iter()
+        .filter(|(name, _)| !is_service_shortcut(name))
+        .filter_map(|(name, s)| Some((name, shortcut_app(&s.target, &s.args, &system_root)?)))
+        .collect();
+    for (name, icon) in crate::win::uninstall_entries() {
+        let Some(exe) = icon_exe(&icon).and_then(|e| shortcut_app(&e, "", &system_root)) else {
+            continue;
+        };
+        if !is_service_shortcut(&name) && !apps.iter().any(|(_, known)| known.eq_ignore_ascii_case(&exe)) {
+            apps.push((clean_app_name(&name), exe));
+        }
+    }
+    if let Ok(mut c) = CACHE.lock() {
+        *c = Some((std::time::Instant::now(), apps.clone()));
+    }
+    apps
+}
+
+#[cfg(target_os = "windows")]
+fn collect_shortcuts(dir: &std::path::Path, depth: u32, out: &mut Vec<(String, crate::lnk::Shortcut)>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if depth < 4 {
+                collect_shortcuts(&path, depth + 1, out);
+            }
+        } else if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("lnk")) {
+            let parsed = std::fs::read(&path).ok().and_then(|d| crate::lnk::parse(&d, dir));
+            if let (Some(stem), Some(shortcut)) = (path.file_stem(), parsed) {
+                out.push((stem.to_string_lossy().to_string(), shortcut));
+            }
+        }
+    }
+}
+
+/// exe из DisplayIcon «Приложений и возможностей»: «"C:\…\x.exe",0» → C:\…\x.exe.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn icon_exe(display_icon: &str) -> Option<String> {
+    let s = display_icon.trim();
+    let s = match s.strip_prefix('"') {
+        Some(rest) => rest.split('"').next()?,
+        None => s
+            .rsplit_once(',')
+            .filter(|(_, index)| index.trim().parse::<i32>().is_ok())
+            .map_or(s, |(path, _)| path),
+    }
+    .trim();
+    s.to_lowercase().ends_with(".exe").then(|| s.to_string())
+}
+
+/// Имя из «Приложений и возможностей» без разрядности и версии:
+/// «7-Zip 23.01 (x64)» → «7-Zip»; «Telegram Desktop» — как есть.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn clean_app_name(name: &str) -> String {
+    let mut s = name.trim().to_string();
+    while s.ends_with(')') {
+        match s.rfind('(') {
+            Some(i) => s = s[..i].trim_end().to_string(),
+            None => break,
+        }
+    }
+    let version = |w: &str| {
+        let w = w.trim_start_matches(['v', 'V']);
+        w.chars().any(|c| c.is_ascii_digit()) && w.chars().all(|c| c.is_ascii_digit() || c == '.')
+    };
+    let mut words: Vec<&str> = s.split_whitespace().collect();
+    while words.len() > 1 && words.last().is_some_and(|w| version(w) || w.eq_ignore_ascii_case("version")) {
+        words.pop();
+    }
+    words.join(" ")
+}
+
+/// Служебные ярлыки (удаление, справка, сайт) и наши же «… (proxy)» — не
+/// программы, которые стоит добавлять.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn is_service_shortcut(name: &str) -> bool {
+    let n = name.to_lowercase();
+    n.ends_with("(proxy)")
+        || [
+            "uninstall", "удалить", "удаление", "readme", "read me", "help", "справка",
+            "documentation", "license", "website", "release notes", "what's new",
+        ]
+        .iter()
+        .any(|w| n.contains(w))
+}
+
+/// Подходящие по имени ярлыки — лучшие сначала, не больше 12.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn rank_shortcuts<T: Clone>(items: &[(String, T)], query: &str) -> Vec<(String, T)> {
+    let needles = vec![query.trim().to_lowercase(), translit(query.trim())];
+    let mut found: Vec<(u32, &(String, T))> = items
+        .iter()
+        .filter(|(name, _)| !is_service_shortcut(name))
+        .filter_map(|s| Some((match_score(&s.0, &needles)?, s)))
+        .collect();
+    found.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1 .0.len().cmp(&b.1 .0.len())));
+    found.into_iter().take(12).map(|(_, s)| s.clone()).collect()
+}
+
+/// Программа, которую запускает ярлык: существующий .exe, не системная
+/// утилита, не деинсталлятор и не версионная папка Store (WindowsApps —
+/// путь меняется с каждым обновлением). Squirrel-приложения (Discord,
+/// Slack…) запускаются через Update.exe --processStart X.exe — берём X.exe.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn shortcut_app(target: &str, args: &str, system_root: &str) -> Option<String> {
+    let path = std::path::Path::new(target);
+    let file = path.file_name()?.to_string_lossy().to_lowercase();
+    if !file.ends_with(".exe") || file.starts_with("unins") || file.contains("uninstall") {
+        return None;
+    }
+    let lower = target.to_lowercase();
+    if lower.starts_with(&format!("{}\\", system_root.trim_end_matches('\\').to_lowercase()))
+        || lower.contains("\\windowsapps\\")
+    {
+        return None;
+    }
+    let exe = if file == "update.exe" {
+        squirrel_app(path, args)?
+    } else {
+        path.to_path_buf()
+    };
+    exe.is_file().then(|| exe.to_string_lossy().to_string())
+}
+
+/// Squirrel: «Update.exe --processStart X.exe» → постоянная заглушка X.exe
+/// рядом с Update.exe (переживает обновления), иначе X.exe в новейшей app-*.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn squirrel_app(update: &std::path::Path, args: &str) -> Option<PathBuf> {
+    let mut tokens = args.split_whitespace();
+    tokens.find(|t| t.eq_ignore_ascii_case("--processStart"))?;
+    let name = tokens.next()?.trim_matches('"');
+    let root = update.parent()?;
+    let stub = root.join(name);
+    if stub.is_file() {
+        return Some(stub);
+    }
+    let mut versions: Vec<(Vec<u32>, PathBuf)> = std::fs::read_dir(root)
+        .ok()?
+        .flatten()
+        .filter_map(|e| {
+            let dir = e.file_name().to_string_lossy().to_string();
+            let version = dir.strip_prefix("app-")?;
+            let key = version.split(['.', '-']).map(|p| p.parse().unwrap_or(0)).collect();
+            Some((key, e.path().join(name)))
+        })
+        .filter(|(_, exe)| exe.is_file())
+        .collect();
+    versions.sort();
+    versions.pop().map(|(_, exe)| exe)
 }
 
 #[cfg(test)]
 mod search_tests {
     use super::*;
+
+    #[test]
+    fn same_path_as_the_os_sees_it() {
+        assert!(same_path("D:\\Telegram Desktop\\Telegram.exe", "D:\\Telegram Desktop\\Telegram.exe"));
+        assert!(!same_path("D:\\Telegram Desktop\\Telegram.exe", "D:\\Telegram Desktop\\Updater.exe"));
+        // Путь VS Code в настройках — со смешанными слэшами.
+        assert_eq!(
+            same_path(
+                "C:\\Users\\u\\AppData\\Local\\Programs/Microsoft VS Code/Code.exe",
+                "c:\\users\\u\\appdata\\local\\programs\\microsoft vs code\\code.exe"
+            ),
+            cfg!(windows)
+        );
+        assert_eq!(same_path("D:\\Мессенджеры\\Telegram.exe", "d:\\мессенджеры\\telegram.exe"), cfg!(windows));
+    }
+
+    #[test]
+    fn telegram_from_link_handler_command() {
+        assert_eq!(
+            link_handler_exe("\"D:\\Telegram Desktop\\Telegram.exe\"  -- \"%1\""),
+            Some(PathBuf::from("D:\\Telegram Desktop\\Telegram.exe"))
+        );
+        assert_eq!(
+            link_handler_exe("C:\\Apps\\TG\\telegram.EXE -- %1"),
+            Some(PathBuf::from("C:\\Apps\\TG\\telegram.EXE"))
+        );
+        assert_eq!(link_handler_exe(""), None);
+        // Обработчиком бывает копия Telegram (второй аккаунт) или другая
+        // программа: путь отдаём, но основным Telegram считаем только Telegram.exe.
+        let copy = link_handler_exe("\"E:\\Telegram\\Second Acc\\Vtoroy-Acc.exe\"  -- \"%1\"").unwrap();
+        assert_eq!(copy, PathBuf::from("E:\\Telegram\\Second Acc\\Vtoroy-Acc.exe"));
+        assert!(!is_telegram_exe_name(&copy));
+        assert!(is_telegram_exe_name(Path::new("D:\\Telegram Desktop\\Telegram.exe")));
+        assert!(is_telegram_exe_name(Path::new("C:\\Apps\\TG\\telegram.EXE")));
+    }
+
+    #[test]
+    fn apps_and_features_entries() {
+        assert_eq!(icon_exe("\"D:\\Telegram Desktop\\Telegram.exe\",0").as_deref(), Some("D:\\Telegram Desktop\\Telegram.exe"));
+        assert_eq!(icon_exe("C:\\Program Files\\7-Zip\\7zFM.exe,1").as_deref(), Some("C:\\Program Files\\7-Zip\\7zFM.exe"));
+        assert_eq!(icon_exe("C:\\Apps\\a,b\\App.exe").as_deref(), Some("C:\\Apps\\a,b\\App.exe"), "запятая в пути — не номер иконки");
+        assert_eq!(icon_exe("C:\\Program Files\\App\\app.ico"), None);
+        assert_eq!(icon_exe(""), None);
+        assert_eq!(clean_app_name("Telegram Desktop"), "Telegram Desktop");
+        assert_eq!(clean_app_name("7-Zip 23.01 (x64)"), "7-Zip");
+        assert_eq!(clean_app_name("Notepad++ (64-bit x64)"), "Notepad++");
+        assert_eq!(clean_app_name("Mozilla Firefox (x64 ru)"), "Mozilla Firefox");
+        assert_eq!(clean_app_name("Telegram Desktop version 5.6.3"), "Telegram Desktop");
+        assert_eq!(clean_app_name("Python 3.12.1"), "Python");
+        assert_eq!(clean_app_name("Office 365"), "Office", "версия-число в конце уходит");
+        assert_eq!(clean_app_name("1Password"), "1Password");
+    }
+
+    #[test]
+    fn ranks_start_menu_shortcuts() {
+        let s = |n: &str| (n.to_string(), format!("C:\\Start\\{n}.lnk"));
+        let shortcuts = vec![
+            s("Telegram"),
+            s("Uninstall Telegram"),
+            s("Удалить Telegram"),
+            s("Google Chrome"),
+            s("Visual Studio Code"),
+            s("VS Code (proxy)"),
+            s("WebTelegram"),
+        ];
+        let names = |q: &str| rank_shortcuts(&shortcuts, q).into_iter().map(|(n, _)| n).collect::<Vec<_>>();
+        assert_eq!(names("телег"), vec!["Telegram", "WebTelegram"]);
+        // Свой ярлык Clod Helper «… (proxy)» — не программа для добавления.
+        assert_eq!(names("vs"), vec!["Visual Studio Code"]);
+        assert_eq!(names("vsc"), vec!["Visual Studio Code"]);
+        assert_eq!(names("хром"), vec!["Google Chrome"], "транслит: hrom внутри chrome");
+        assert_eq!(names("chr"), vec!["Google Chrome"]);
+    }
+
+    #[test]
+    fn shortcut_targets_are_real_programs() {
+        let dir = std::env::temp_dir().join(format!("clod-squirrel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("app-1.0.9").join("sub")).unwrap();
+        std::fs::create_dir_all(dir.join("app-1.0.10")).unwrap();
+        std::fs::write(dir.join("Update.exe"), b"").unwrap();
+        std::fs::write(dir.join("app-1.0.9").join("Discord.exe"), b"").unwrap();
+        std::fs::write(dir.join("app-1.0.10").join("Discord.exe"), b"").unwrap();
+        std::fs::write(dir.join("unins000.exe"), b"").unwrap();
+        let update = dir.join("Update.exe").to_string_lossy().to_string();
+        let root = "C:\\Windows";
+        // Новейшая app-* по номеру версии (1.0.10 > 1.0.9), не по алфавиту.
+        assert_eq!(
+            shortcut_app(&update, "--processStart Discord.exe", root),
+            Some(dir.join("app-1.0.10").join("Discord.exe").to_string_lossy().to_string())
+        );
+        // Постоянная заглушка рядом с Update.exe важнее версионной папки.
+        std::fs::write(dir.join("Discord.exe"), b"").unwrap();
+        assert_eq!(
+            shortcut_app(&update, "--processStart \"Discord.exe\"", root),
+            Some(dir.join("Discord.exe").to_string_lossy().to_string())
+        );
+        assert_eq!(shortcut_app(&update, "", root), None);
+        assert_eq!(shortcut_app(&dir.join("unins000.exe").to_string_lossy(), "", root), None);
+        assert_eq!(shortcut_app("C:\\Windows\\System32\\cmd.exe", "", root), None);
+        assert_eq!(
+            shortcut_app("C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.9_x64__2p2\\app\\ChatGPT.exe", "", root),
+            None
+        );
+        assert_eq!(shortcut_app(&dir.join("readme.txt").to_string_lossy(), "", root), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn ranks_and_filters_spotlight_results() {
@@ -1265,36 +1760,41 @@ mod search_tests {
     /// Живой поиск на этой машине: cargo test live_search -- --ignored --nocapture
     #[test]
     #[ignore]
-    #[cfg(target_os = "macos")]
     fn live_search() {
         for q in ["телег", "vs", "vsc", "терм", "chat", "хром", "ватс"] {
-            println!("{q} → {:?}", search_installed(q).iter().map(|f| &f.name).collect::<Vec<_>>());
+            println!("{q} → {:?}", search_installed(q).iter().map(|f| (&f.name, &f.path)).collect::<Vec<_>>());
         }
-        let icons = icons(&["/System/Applications/Utilities/Terminal.app".to_string()]);
+        let probe = if cfg!(target_os = "windows") {
+            search_installed("chrome").first().map(|f| f.path.clone()).unwrap_or_default()
+        } else {
+            "/System/Applications/Utilities/Terminal.app".to_string()
+        };
+        let icons = icons(&[probe]);
         println!("icon → {}", icons.values().next().map(|v| &v[..40]).unwrap_or("нет"));
     }
 }
 
-// ─── Иконки программ (macOS) ────────────────────────────────────
+// ─── Иконки программ ────────────────────────────────────────────
 
 #[cfg(not(target_os = "windows"))]
 const ICON_SCRIPT: &str = include_str!("../resources/app-icons.js");
 
-/// Иконки программ как data-URL PNG 64×64 (для подсказок поиска и строк
-/// своих приложений). Кэш в памяти: иконки не меняются за время работы.
-#[cfg(not(target_os = "windows"))]
+/// Иконки программ как data-URL PNG (для подсказок поиска и строк
+/// приложений). Кэш в памяти и на диске: иконка не меняется, пока не
+/// обновится программа — ключ включает дату её файла.
 pub fn icons(paths: &[String]) -> std::collections::HashMap<String, String> {
+    use base64::Engine;
     use std::collections::HashMap;
-    use std::io::Write;
     use std::sync::{Mutex, OnceLock};
     static CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let b64 = base64::engine::general_purpose::STANDARD;
 
-    // Дисковый кэш (~/Library/Caches/…/icons): иконка не меняется, пока не
-    // обновится бандл — ключ включает mtime Info.plist.
-    let disk_dir = dirs::cache_dir().map(|d| d.join("ru.iimperium.clodhelper/icons"));
+    // Дисковый кэш (…/ru.iimperium.clodhelper/icons): ключ — путь и дата
+    // файла программы (Info.plist бандла / сам exe).
+    let disk_dir = dirs::cache_dir().map(|d| d.join("ru.iimperium.clodhelper").join(ICON_CACHE_DIR));
     let disk_key = |p: &str| -> Option<PathBuf> {
-        let m = std::fs::metadata(std::path::Path::new(p).join("Contents/Info.plist"))
+        let m = std::fs::metadata(icon_stamp(p))
             .and_then(|m| m.modified())
             .ok()?
             .duration_since(std::time::UNIX_EPOCH)
@@ -1311,9 +1811,7 @@ pub fn icons(paths: &[String]) -> std::collections::HashMap<String, String> {
                 continue;
             }
             if let Some(bytes) = disk_key(p).and_then(|f| std::fs::read(f).ok()) {
-                use base64::Engine;
-                let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
-                c.insert(p.clone(), format!("data:image/png;base64,{b64}"));
+                c.insert(p.clone(), format!("data:image/png;base64,{}", b64.encode(bytes)));
             }
         }
     }
@@ -1322,41 +1820,21 @@ pub fn icons(paths: &[String]) -> std::collections::HashMap<String, String> {
         let c = cache.lock().map(|c| c.clone()).unwrap_or_default();
         paths
             .iter()
-            .filter(|p| !c.contains_key(*p) && p.ends_with(".app") && std::path::Path::new(p).exists())
+            .filter(|p| !c.contains_key(*p) && has_icon(p))
             .take(24)
             .collect()
     };
     if !missing.is_empty() {
-        let child = Command::new("/usr/bin/osascript")
-            .args(["-l", "JavaScript", "-"])
-            .args(missing.iter().map(|p| p.as_str()))
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn();
-        if let Ok(mut child) = child {
-            if let Some(mut stdin) = child.stdin.take() {
-                let _ = stdin.write_all(ICON_SCRIPT.as_bytes());
-            }
-            if let Ok(out) = child.wait_with_output() {
-                if let Ok(map) =
-                    serde_json::from_slice::<HashMap<String, String>>(&out.stdout)
-                {
-                    if let Ok(mut c) = cache.lock() {
-                        for (k, v) in map {
-                            if let Some(f) = disk_key(&k) {
-                                use base64::Engine;
-                                if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&v) {
-                                    if let Some(dir) = f.parent() {
-                                        let _ = std::fs::create_dir_all(dir);
-                                    }
-                                    let _ = std::fs::write(&f, bytes);
-                                }
-                            }
-                            c.insert(k, format!("data:image/png;base64,{v}"));
-                        }
+        let found = extract_icons(&missing);
+        if let Ok(mut c) = cache.lock() {
+            for (k, v) in found {
+                if let (Some(f), Ok(bytes)) = (disk_key(&k), b64.decode(&v)) {
+                    if let Some(dir) = f.parent() {
+                        let _ = std::fs::create_dir_all(dir);
                     }
+                    let _ = std::fs::write(&f, bytes);
                 }
+                c.insert(k, format!("data:image/png;base64,{v}"));
             }
         }
     }
@@ -1367,7 +1845,59 @@ pub fn icons(paths: &[String]) -> std::collections::HashMap<String, String> {
         .collect()
 }
 
+/// Папка дискового кэша иконок (на Windows — новые 64 px вместо прежних 32).
+#[cfg(not(target_os = "windows"))]
+const ICON_CACHE_DIR: &str = "icons";
 #[cfg(target_os = "windows")]
-pub fn icons(_paths: &[String]) -> std::collections::HashMap<String, String> {
-    std::collections::HashMap::new()
+const ICON_CACHE_DIR: &str = "icons64";
+
+/// Файл, по дате которого видно, что программа обновилась.
+#[cfg(not(target_os = "windows"))]
+fn icon_stamp(p: &str) -> PathBuf {
+    std::path::Path::new(p).join("Contents/Info.plist")
+}
+#[cfg(target_os = "windows")]
+fn icon_stamp(p: &str) -> PathBuf {
+    PathBuf::from(p)
+}
+
+/// У пути есть иконка программы: бандл .app (macOS) / файл .exe (Windows).
+fn has_icon(p: &str) -> bool {
+    let ext = if cfg!(target_os = "windows") { ".exe" } else { ".app" };
+    p.to_ascii_lowercase().ends_with(ext) && std::path::Path::new(p).exists()
+}
+
+/// macOS: PNG 64×64 иконок бандлов (JXA, NSWorkspace): путь → base64.
+#[cfg(not(target_os = "windows"))]
+fn extract_icons(paths: &[&String]) -> std::collections::HashMap<String, String> {
+    use std::io::Write;
+    let child = Command::new("/usr/bin/osascript")
+        .args(["-l", "JavaScript", "-"])
+        .args(paths.iter().map(|p| p.as_str()))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    let Ok(mut child) = child else { return Default::default() };
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(ICON_SCRIPT.as_bytes());
+    }
+    child
+        .wait_with_output()
+        .ok()
+        .and_then(|out| serde_json::from_slice(&out.stdout).ok())
+        .unwrap_or_default()
+}
+
+/// Windows: иконка из ресурсов exe, 64×64 в PNG — нативно, миллисекунды.
+#[cfg(target_os = "windows")]
+fn extract_icons(paths: &[&String]) -> std::collections::HashMap<String, String> {
+    use base64::Engine;
+    paths
+        .iter()
+        .filter_map(|p| {
+            let png = crate::win::exe_icon_png(p, 64)?;
+            Some((p.to_string(), base64::engine::general_purpose::STANDARD.encode(png)))
+        })
+        .collect()
 }

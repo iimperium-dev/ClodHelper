@@ -207,10 +207,10 @@ function Invoke-ClaudeDesktopProxy {
         throw 'Claude Desktop уже запущен. Полностью закройте его через значок в трее Windows (Quit / Выход), затем снова запустите через Clod Helper или ярлык Claude Desktop (proxy). Это нужно, чтобы приложение применило прокси.'
     }
     if (-not (Test-ClaudeDesktopBridge -Port $Port)) {
-        throw "Мост Claude на 127.0.0.1:$Port не подтвердил работу без DIRECT. Откройте Clod Helper → Приложения → Настроить Claude."
+        throw "Мост Claude на 127.0.0.1:$Port не подтвердил работу без DIRECT. Откройте Clod Helper → Приложения → Claude Desktop → «Подключить»."
     }
     if (-not (Test-ClaudeDesktopProxyPolicy -Port $Port)) {
-        throw 'Штатный прокси Claude ещё не настроен или изменён другой программой. Откройте Clod Helper → Приложения → Настроить Claude.'
+        throw 'Штатный прокси Claude ещё не настроен или изменён другой программой. Откройте Clod Helper → Приложения → Claude Desktop → «Подключить».'
     }
     $startInfo = New-ClaudeDesktopStartInfo -Installation $installation -Port $Port
     $process = Start-ClaudeDesktopProcess -StartInfo $startInfo -Port $Port

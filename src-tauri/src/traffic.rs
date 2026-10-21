@@ -25,6 +25,9 @@ pub struct AppTraffic {
     pub direct: u32,
     /// Браузер: включённое расширение, перехватившее прокси (FoxyProxy…).
     pub proxy_extension: Option<crate::browser_ext::ProxyExtension>,
+    /// Telegram: адрес чужого локального прокси, через который он ходит
+    /// («127.0.0.1:1442» — tg-ws-proxy и т.п.); такой трафик идёт мимо моста.
+    pub other_proxy: Option<String>,
 }
 
 /// Имена процессов, по которым узнаём приложение (префикс: «Claude» ловит и
@@ -65,6 +68,7 @@ fn matches(command: &str, names: &[String]) -> bool {
 
 /// Разобрать `lsof -Fcn`: «c<команда>» задаёт процесс, «n<лок>-><удал>» —
 /// его соединения. Возвращает (команда, удалённый адрес).
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 fn parse_lsof(out: &str) -> Vec<(String, String)> {
     let mut cmd = String::new();
     let mut conns = Vec::new();
@@ -164,6 +168,10 @@ fn summarize(
                 }
                 if is_bridge(remote) {
                     t.via_bridge += 1;
+                } else if telegram && is_loopback(remote) {
+                    // К localhost Telegram ходит только к прокси: чужой
+                    // локальный прокси — «открыт, без соединений» было неправдой.
+                    t.other_proxy.get_or_insert_with(|| remote.clone());
                 } else if !is_loopback(remote)
                     && !is_dns_resolver(remote)
                     && (!telegram || is_telegram_dc(remote))
@@ -178,7 +186,6 @@ fn summarize(
 
 /// Включена ли у браузера политика «всегда через мост» (кэш 30 с: статус —
 /// это запуск скрипта).
-#[cfg(not(target_os = "windows"))]
 fn browser_policy_on(app_path: &str) -> bool {
     use std::collections::HashMap;
     use std::sync::Mutex;
@@ -244,27 +251,32 @@ fn snapshot_uncached(profiles: &[AppProfile]) -> Vec<AppTraffic> {
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
     let mut t = summarize(profiles, &running, &parse_lsof(&out));
-    for (traffic, p) in t.iter_mut().zip(profiles) {
-        if let Some(path) = p.exe_path.as_deref() {
-            // Политика «всегда через мост» главнее расширений — тогда
-            // FoxyProxy и т.п. уже ничего не перехватывают.
-            if !browser_policy_on(path) {
-                traffic.proxy_extension = crate::browser_ext::proxy_extensions(path).into_iter().next();
-            }
-        }
-    }
+    mark_proxy_extensions(&mut t, profiles);
     t
 }
 
-/// Windows: те же правила, источник — `netstat -ano` (соединения с PID) и
-/// `tasklist` (PID → имя образа). Кэш 3 с, как на macOS.
+/// Браузеры: включённое расширение, перехватившее прокси (FoxyProxy…).
+fn mark_proxy_extensions(t: &mut [AppTraffic], profiles: &[AppProfile]) {
+    for (traffic, p) in t.iter_mut().zip(profiles) {
+        let Some(path) = p.exe_path.as_deref() else { continue };
+        let Some(ext) = crate::browser_ext::proxy_extensions(path).into_iter().next() else {
+            continue;
+        };
+        // Политика «всегда через мост» главнее расширений — тогда FoxyProxy
+        // и т.п. уже ничего не перехватывают (проверяем, только если есть кого).
+        if !browser_policy_on(path) {
+            traffic.proxy_extension = Some(ext);
+        }
+    }
+}
+
+/// Windows: те же правила; соединения с PID — из таблицы TCP системы
+/// (GetExtendedTcpTable), имена процессов — sysinfo. Без tasklist/netstat:
+/// те стоили секунды на каждый опрос. Кэш 3 с, как на macOS.
 #[cfg(target_os = "windows")]
 pub fn snapshot(profiles: &[AppProfile]) -> Vec<AppTraffic> {
-    use std::os::windows::process::CommandExt;
-    use std::process::Command;
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     static CACHE: Mutex<Option<(Instant, Vec<String>, Vec<AppTraffic>)>> = Mutex::new(None);
     let ids: Vec<String> = profiles.iter().map(|p| p.id.clone()).collect();
     if let Ok(c) = CACHE.lock() {
@@ -274,50 +286,29 @@ pub fn snapshot(profiles: &[AppProfile]) -> Vec<AppTraffic> {
             }
         }
     }
-    let run = |cmd: &str, args: &[&str]| {
-        Command::new(cmd)
-            .args(args)
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-            .unwrap_or_default()
-    };
-    let names = parse_tasklist(&run("tasklist", &["/FO", "CSV", "/NH"]));
+    let names = process_names();
     let running: Vec<String> = names.values().cloned().collect();
-    let conns: Vec<(String, String)> = parse_netstat(&run("netstat", &["-ano", "-p", "TCP"]))
+    let conns: Vec<(String, String)> = crate::win::established_tcp()
         .into_iter()
         .filter_map(|(pid, remote)| names.get(&pid).map(|n| (n.clone(), remote)))
         .collect();
-    let fresh = summarize(profiles, &running, &conns);
+    let mut fresh = summarize(profiles, &running, &conns);
+    mark_proxy_extensions(&mut fresh, profiles);
     if let Ok(mut c) = CACHE.lock() {
         *c = Some((Instant::now(), ids, fresh.clone()));
     }
     fresh
 }
 
-/// `tasklist /FO CSV /NH` → PID → имя образа.
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-fn parse_tasklist(out: &str) -> std::collections::HashMap<u32, String> {
-    out.lines()
-        .filter_map(|l| {
-            let mut f = l.split("\",\"");
-            let name = f.next()?.trim_start_matches('"').to_string();
-            let pid = f.next()?.trim_matches('"').parse().ok()?;
-            Some((pid, name))
-        })
-        .collect()
-}
-
-/// `netstat -ano -p TCP` → (PID, удалённый адрес) для ESTABLISHED.
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-fn parse_netstat(out: &str) -> Vec<(u32, String)> {
-    out.lines()
-        .filter_map(|l| {
-            let f: Vec<&str> = l.split_whitespace().collect();
-            (f.len() == 5 && f[0] == "TCP" && f[3] == "ESTABLISHED")
-                .then(|| Some((f[4].parse().ok()?, f[2].to_string())))
-                .flatten()
-        })
+/// PID → имя образа («chrome.exe»): один системный снимок процессов.
+#[cfg(target_os = "windows")]
+fn process_names() -> std::collections::HashMap<u32, String> {
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::new());
+    sys.processes()
+        .iter()
+        .map(|(pid, p)| (pid.as_u32(), p.name().to_string_lossy().to_string()))
         .collect()
 }
 
@@ -354,24 +345,31 @@ mod tests {
         assert!(!is_dns_resolver("104.18.32.47:443"));
     }
 
+    /// Windows: имена образов «Claude.exe», адреса из таблицы TCP — в том
+    /// числе IPv6 «[…]:порт».
     #[test]
-    fn windows_netstat_and_tasklist() {
-        let tl = "\"Claude.exe\",\"4120\",\"Console\",\"1\",\"150 000 K\"\r\n\"chrome.exe\",\"77\",\"Console\",\"1\",\"9 K\"\r\n";
-        let ns = "\r\nActive Connections\r\n\r\n  Proto  Local Address          Foreign Address        State           PID\r\n  \
-                  TCP    127.0.0.1:50001        127.0.0.1:8890         ESTABLISHED     4120\r\n  \
-                  TCP    192.168.0.5:50002      142.250.1.1:443        ESTABLISHED     77\r\n  \
-                  TCP    0.0.0.0:135            0.0.0.0:0              LISTENING       900\r\n";
-        let names = parse_tasklist(tl);
-        assert_eq!(names.get(&4120).map(String::as_str), Some("Claude.exe"));
-        let conns: Vec<(String, String)> = parse_netstat(ns)
-            .into_iter()
-            .filter_map(|(pid, r)| names.get(&pid).map(|n| (n.clone(), r)))
-            .collect();
-        let profiles = vec![profile("claude-desktop", None), profile("custom-1", Some("C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"))];
-        let running: Vec<String> = names.values().cloned().collect();
+    fn windows_processes_and_tcp_table() {
+        let conns: Vec<(String, String)> = [
+            ("Claude.exe", "127.0.0.1:8890"),
+            ("Claude.exe", "[::1]:8890"),
+            ("chrome.exe", "142.250.1.1:443"),
+            ("chrome.exe", "[2a00:1450:4010::64]:443"),
+            ("Telegram.exe", "127.0.0.1:8891"),
+            ("Telegram.exe", "[2001:b28:f23d:f001::a]:443"),
+        ]
+        .iter()
+        .map(|(n, r)| (n.to_string(), r.to_string()))
+        .collect();
+        let profiles = vec![
+            profile("claude-desktop", None),
+            profile("custom-1", Some("C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe")),
+            profile("telegram", None),
+        ];
+        let running = vec!["Claude.exe".to_string(), "chrome.exe".to_string(), "Telegram.exe".to_string()];
         let t = summarize(&profiles, &running, &conns);
-        assert_eq!((t[0].running, t[0].via_bridge, t[0].direct), (true, 1, 0));
-        assert_eq!((t[1].running, t[1].via_bridge, t[1].direct), (true, 0, 1));
+        assert_eq!((t[0].running, t[0].via_bridge, t[0].direct), (true, 2, 0));
+        assert_eq!((t[1].running, t[1].via_bridge, t[1].direct), (true, 0, 2));
+        assert_eq!((t[2].running, t[2].via_bridge, t[2].direct), (true, 1, 1));
     }
 
     #[test]
@@ -409,5 +407,19 @@ mod tests {
         // Локальный dev-сервер (127.0.0.1:3000) — не «мимо моста».
         assert_eq!((t[2].running, t[2].via_bridge, t[2].direct), (true, 1, 0));
         assert_eq!((t[3].running, t[3].via_bridge, t[3].direct), (false, 0, 0));
+        // Чужой локальный прокси отмечается только у Telegram.
+        assert_eq!(t[1].other_proxy, None);
+        assert_eq!(t[2].other_proxy, None);
+    }
+
+    #[test]
+    fn telegram_through_another_local_proxy() {
+        // Оба аккаунта Telegram ходят через tg-ws-proxy на 127.0.0.1:1442.
+        let lsof = "p1\ncTelegram\nf9\nn127.0.0.1:5002->127.0.0.1:1442\n\
+                    f10\nn127.0.0.1:5003->127.0.0.1:1442\n";
+        let profiles = vec![profile("telegram", None)];
+        let t = summarize(&profiles, &["Telegram".to_string()], &parse_lsof(lsof));
+        assert_eq!((t[0].running, t[0].via_bridge, t[0].direct), (true, 0, 0));
+        assert_eq!(t[0].other_proxy.as_deref(), Some("127.0.0.1:1442"));
     }
 }

@@ -1,13 +1,17 @@
-//! «Защита от утечек» (macOS): брандмауэр pf запрещает прямой выход к сетям
-//! Claude (Anthropic) и Telegram (resources/leak-guard.sh). Мост ходит к ним
-//! через прокси и не задет; программа, пошедшая мимо моста, получает отказ
-//! вместо утечки IP. Правила — в своём якоре, служба возвращает их после
-//! перезагрузки. Включение/снятие — одно системное окно пароля.
+//! «Защита от утечек»: брандмауэр запрещает прямой выход к сетям Claude
+//! (Anthropic) и Telegram. Мост ходит к ним через прокси и не задет;
+//! программа, пошедшая мимо моста, получает отказ вместо утечки IP.
+//!   - macOS: pf, правила в своём якоре (resources/leak-guard.sh), служба
+//!     возвращает их после перезагрузки; одно системное окно пароля.
+//!   - Windows: исходящие правила брандмауэра Windows в своей группе
+//!     (resources/leak-guard.ps1) — постоянные сами по себе; одно окно UAC.
 
 use serde::{Deserialize, Serialize};
 
 #[cfg(not(target_os = "windows"))]
-const SCRIPT: &str = include_str!("../resources/leak-guard.sh");
+pub(crate) const SCRIPT: &str = include_str!("../resources/leak-guard.sh");
+#[cfg(target_os = "windows")]
+pub(crate) const SCRIPT: &str = include_str!("../resources/leak-guard.ps1");
 
 /// Сервисы, которые умеет закрывать защита.
 pub const SERVICES: [&str; 2] = ["claude", "telegram"];
@@ -86,17 +90,54 @@ pub fn shell_enable(services: &str) -> String {
 }
 
 /// Действительно ли прямой выход к Anthropic закрыт: pf отвечает отказом
-/// (block return) мгновенно, без защиты — соединение устанавливается.
+/// (block return) мгновенно, брандмауэр Windows — запретом доступа (WSAEACCES),
+/// без защиты — соединение устанавливается.
 pub fn probe_claude_blocked() -> Option<bool> {
     use std::net::{SocketAddr, TcpStream};
     use std::time::Duration;
     let addr: SocketAddr = "160.79.104.10:443".parse().ok()?;
-    match TcpStream::connect_timeout(&addr, Duration::from_secs(4)) {
-        Ok(_) => Some(false),
-        Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => Some(true),
+    probe_verdict(TcpStream::connect_timeout(&addr, Duration::from_secs(4)).map(|_| ()))
+}
+
+fn probe_verdict(connect: std::io::Result<()>) -> Option<bool> {
+    use std::io::ErrorKind;
+    match connect {
+        Ok(()) => Some(false),
+        Err(e) if matches!(e.kind(), ErrorKind::ConnectionRefused | ErrorKind::PermissionDenied) => Some(true),
         // Таймаут/нет сети — по этой проверке не понять.
         Err(_) => None,
     }
+}
+
+/// Живая проверка — только когда защита закрывает Claude.
+fn probed(mut st: LeakGuardStatus) -> LeakGuardStatus {
+    if st.enabled && st.services.split(',').any(|s| s == "claude") {
+        st.verified = probe_claude_blocked();
+    }
+    st
+}
+
+/// Не верим выводу привилегированного процесса: состояние перечитано, а для
+/// Claude ещё и проверено вживую.
+fn confirm(services: &str, real: LeakGuardStatus) -> Result<LeakGuardStatus, String> {
+    if services.is_empty() {
+        return if real.enabled {
+            Err("Не удалось снять защиту от утечек".into())
+        } else {
+            Ok(real)
+        };
+    }
+    if !real.enabled || real.services != services {
+        return Err("Не удалось подтвердить правила брандмауэра".into());
+    }
+    if real.verified == Some(false) {
+        return Err(if cfg!(target_os = "windows") {
+            "Правила добавлены, но прямое соединение с Claude не блокируется — проверьте, что брандмауэр Windows включён".into()
+        } else {
+            "Не удалось подтвердить правила брандмауэра".into()
+        });
+    }
+    Ok(real)
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -113,11 +154,7 @@ pub fn status() -> Result<LeakGuardStatus, String> {
         let _ = stdin.write_all(SCRIPT.as_bytes());
     }
     let out = child.wait_with_output().map_err(|e| format!("Защита от утечек: {e}"))?;
-    let mut st = parse(&String::from_utf8_lossy(&out.stdout))?;
-    if st.enabled && st.services.contains("claude") {
-        st.verified = probe_claude_blocked();
-    }
-    Ok(st)
+    Ok(probed(parse(&String::from_utf8_lossy(&out.stdout))?))
 }
 
 /// Включить для `services` ("claude,telegram") или снять (пустая строка).
@@ -144,25 +181,68 @@ pub fn set(services: &str) -> Result<LeakGuardStatus, String> {
         return Err("Запрос пароля отменён".into());
     }
     parse(&String::from_utf8_lossy(&out.stdout))?;
-    // Не верим выводу root-процесса — перечитываем и проверяем вживую.
-    let real = status()?;
-    if !services.is_empty() && (!real.enabled || real.verified == Some(false)) {
-        return Err("Не удалось подтвердить правила брандмауэра".into());
-    }
-    if services.is_empty() && real.enabled {
-        return Err("Не удалось снять защиту от утечек".into());
-    }
-    Ok(real)
+    confirm(services, status()?)
 }
 
+/// Имя (InstanceID) правила брандмауэра — как Get-LeakGuardRuleName в скрипте.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn rule_name(service: &str) -> String {
+    format!("ClodHelper-LeakGuard-{service}")
+}
+
+/// Правило из хранилища брандмауэра («v2.33|Action=Block|Active=TRUE|Dir=Out|…»)
+/// действует: включено, исходящее, «Блокировать».
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn rule_blocks(rule: &str) -> bool {
+    let fields: Vec<&str> = rule.split('|').collect();
+    ["Action=Block", "Active=TRUE", "Dir=Out"].iter().all(|f| fields.contains(f))
+}
+
+/// Windows: правила брандмауэра читаются без прав администратора — прямо из
+/// его хранилища в реестре (Get-NetFirewallRule через PowerShell — секунды).
 #[cfg(target_os = "windows")]
 pub fn status() -> Result<LeakGuardStatus, String> {
-    Ok(LeakGuardStatus::default())
+    let mut on = Vec::new();
+    for service in SERVICES {
+        match crate::win::firewall_rule(&rule_name(service)) {
+            Ok(Some(rule)) if rule_blocks(&rule) => on.push(service),
+            Ok(_) => {}
+            // Хранилище закрыто для чтения — спросим сам брандмауэр.
+            Err(_) => {
+                let payload = crate::elevate::read_status(SCRIPT, "-Action Status")
+                    .map_err(|e| format!("Защита от утечек: {e}"))?;
+                return Ok(probed(parse(&payload)?));
+            }
+        }
+    }
+    let services = on.join(",");
+    Ok(probed(LeakGuardStatus {
+        enabled: !services.is_empty(),
+        auto_restore: !services.is_empty(),
+        services,
+        verified: None,
+    }))
 }
 
+/// Windows: включить для `services` ("claude,telegram") или снять (пустая
+/// строка) — одно окно UAC. Правила постоянные: служба не нужна.
 #[cfg(target_os = "windows")]
-pub fn set(_services: &str) -> Result<LeakGuardStatus, String> {
-    Err("Защита от утечек пока есть только в версии для macOS".into())
+pub fn set(services: &str) -> Result<LeakGuardStatus, String> {
+    // services уже проверен normalize(): только claude/telegram и запятая.
+    let arguments = if services.is_empty() {
+        "-Action Disable".to_string()
+    } else {
+        format!("-Action Enable -Services {services}")
+    };
+    let outcome = crate::elevate::run("leak-guard", &[("leak-guard.ps1", SCRIPT)], &arguments)?;
+    if outcome.cancelled {
+        return Err("Запрос прав администратора отменён".into());
+    }
+    let payload = outcome
+        .result
+        .ok_or_else(|| "Не удалось изменить правила брандмауэра с правами администратора".to_string())?;
+    parse(&payload)?;
+    confirm(services, status()?)
 }
 
 #[cfg(test)]
@@ -185,10 +265,76 @@ mod tests {
         assert_eq!(with_service(&LeakGuardStatus::default(), "claude", true).unwrap(), "claude");
     }
 
+    #[test]
+    fn probe_counts_refusal_and_firewall_denial_as_blocked() {
+        use std::io::{Error, ErrorKind};
+        assert_eq!(probe_verdict(Ok(())), Some(false));
+        // pf (block return) — отказ; брандмауэр Windows — WSAEACCES.
+        assert_eq!(probe_verdict(Err(Error::from(ErrorKind::ConnectionRefused))), Some(true));
+        assert_eq!(probe_verdict(Err(Error::from_raw_os_error(if cfg!(windows) { 10013 } else { 13 }))), Some(true));
+        assert_eq!(probe_verdict(Err(Error::from(ErrorKind::TimedOut))), None);
+    }
+
+    #[test]
+    fn confirm_trusts_only_the_reread_state() {
+        let st = |enabled: bool, services: &str, verified| LeakGuardStatus {
+            enabled,
+            services: services.into(),
+            auto_restore: enabled,
+            verified,
+        };
+        assert!(confirm("claude", st(true, "claude", Some(true))).is_ok());
+        assert!(confirm("telegram", st(true, "telegram", None)).is_ok());
+        assert!(confirm("claude,telegram", st(true, "claude", Some(true))).is_err(), "Telegram не встал");
+        assert!(confirm("claude", st(false, "", None)).is_err());
+        assert!(confirm("claude", st(true, "claude", Some(false))).is_err(), "правило есть, но не блокирует");
+        assert!(confirm("", st(false, "", None)).is_ok());
+        assert!(confirm("", st(true, "telegram", None)).is_err());
+    }
+
+    #[test]
+    fn firewall_store_rules() {
+        assert!(rule_blocks("v2.33|Action=Block|Active=TRUE|Dir=Out|RA4=160.79.104.0/255.255.248.0|Name=x|EmbedCtxt=ClodHelper LeakGuard|"));
+        assert!(!rule_blocks("v2.33|Action=Block|Active=FALSE|Dir=Out|"), "выключенное правило не защищает");
+        assert!(!rule_blocks("v2.33|Action=Allow|Active=TRUE|Dir=Out|"));
+        assert!(!rule_blocks("v2.33|Action=Block|Active=TRUE|Dir=In|"));
+        // Имя правила — то же, что создаёт скрипт Windows.
+        let ps = include_str!("../resources/leak-guard.ps1");
+        assert!(ps.contains("\"ClodHelper-LeakGuard-$Service\""));
+        assert_eq!(rule_name("claude"), "ClodHelper-LeakGuard-claude");
+    }
+
+    /// Сети одинаковы в pf-скрипте macOS и в правилах брандмауэра Windows.
+    #[test]
+    fn mac_and_windows_block_the_same_networks() {
+        let sh = include_str!("../resources/leak-guard.sh");
+        let ps = include_str!("../resources/leak-guard.ps1");
+        for service in SERVICES {
+            let sh_line = sh
+                .lines()
+                .find(|l| l.contains(&format!("*,{service},*)")))
+                .expect("сети сервиса в leak-guard.sh");
+            let ps_line = ps
+                .lines()
+                .find(|l| l.trim_start().starts_with(&format!("{service} = @(")))
+                .expect("сети сервиса в leak-guard.ps1");
+            let nets = |l: &str| {
+                let mut v: Vec<String> = l
+                    .split(|c: char| !(c.is_ascii_hexdigit() || matches!(c, '.' | ':' | '/')))
+                    .filter(|t| t.contains('/') && (t.contains('.') || t.contains(':')))
+                    .map(String::from)
+                    .collect();
+                v.sort();
+                v
+            };
+            assert!(!nets(sh_line).is_empty());
+            assert_eq!(nets(sh_line), nets(ps_line), "сети {service}");
+        }
+    }
+
     /// Живой статус: cargo test live_leak_guard -- --ignored --nocapture
     #[test]
     #[ignore]
-    #[cfg(target_os = "macos")]
     fn live_leak_guard() {
         println!("leak guard → {:?}", status());
     }

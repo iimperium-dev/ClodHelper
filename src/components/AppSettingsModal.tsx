@@ -33,7 +33,7 @@ const CODE_MODES: { id: CodeMode; title: string; sub: string }[] = [
   { id: "off", title: "Выключено", sub: "Claude Code в терминале — напрямую, без Clod Helper" },
 ];
 
-/** Сервис защиты от утечек (pf) по id приложения. */
+/** Сервис защиты от утечек (брандмауэр: pf на macOS, Windows) по id приложения. */
 const GUARD_OF: Record<string, { id: string; sub: string }> = {
   "claude-desktop": {
     id: "claude",
@@ -93,11 +93,13 @@ export function AppSettingsModal({
   const [note, setNote] = useState<string | null>(null);
   const [policy, setPolicy] = useState<BrowserPolicyStatus | null>(null);
   const [guard, setGuard] = useState<LeakGuardStatus | null>(null);
+  // Тело прокручено — под закреплённой шапкой появляется линия.
+  const [scrolled, setScrolled] = useState(false);
   // Системные переменные прокси (Claude Code в терминале) — общее состояние.
   const { env, setEnv, health, refresh } = useStatus();
   const envOn = !!env?.present && !!env.points_to_bridge;
   const envForeign = !!env?.present && !env.points_to_bridge;
-  const guardOf = app && isMac ? GUARD_OF[app.id] : undefined;
+  const guardOf = app ? GUARD_OF[app.id] : undefined;
 
   // Загрузка — только при открытии другого приложения (по id): родитель
   // перерисовывается после каждого действия, и по ссылке на app/onClose окно
@@ -106,12 +108,13 @@ export function AppSettingsModal({
   useEffect(() => {
     if (!appId) return;
     setNote(null);
+    setScrolled(false);
     void Promise.all([
       proxiesGet().then(setPool).catch(() => {}),
       proxyLabelsGet().then(setLabels).catch(() => {}),
       proxyAssignmentsGet().then(setAssign).catch(() => {}),
       browserPolicyStatus(appId).then(setPolicy).catch(() => setPolicy(null)),
-      isMac && GUARD_OF[appId] ? leakGuardStatus().then(setGuard).catch(() => setGuard(null)) : Promise.resolve(),
+      GUARD_OF[appId] ? leakGuardStatus().then(setGuard).catch(() => setGuard(null)) : Promise.resolve(),
     ]);
   }, [appId]);
   const closeRef = useRef(onClose);
@@ -205,7 +208,9 @@ export function AppSettingsModal({
           exit={{ opacity: 0 }}
           transition={{ duration: 0.18 }}
           onMouseDown={onClose}
-          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 p-6 backdrop-blur-[6px]"
+          // Под заголовком окна: шторка не залезает на него, окно можно
+          // свернуть, перетащить, закрыть.
+          className="fixed inset-x-0 bottom-0 top-9 z-[70] flex items-center justify-center bg-black/45 p-5 backdrop-blur-[6px]"
         >
           <motion.div
             initial={{ opacity: 0, scale: 0.94, y: 12 }}
@@ -215,10 +220,15 @@ export function AppSettingsModal({
             onMouseDown={(e) => e.stopPropagation()}
             role="dialog"
             aria-label={`Настройки ${app.name}`}
-            className="max-h-full w-full max-w-[400px] overflow-y-auto rounded-2xl border border-vb-border bg-vb-surface shadow-[0_24px_64px_rgba(0,0,0,0.6)]"
+            className="flex max-h-full w-full max-w-[400px] flex-col overflow-hidden rounded-2xl border border-vb-border bg-vb-surface shadow-[0_24px_64px_rgba(0,0,0,0.6)]"
           >
-            {/* Шапка */}
-            <div className="flex items-center gap-3 p-4 pb-3">
+            {/* Шапка — закреплена, листается только тело */}
+            <div
+              className={cn(
+                "flex shrink-0 items-center gap-3 border-b p-4 pb-3 transition-colors",
+                scrolled ? "border-vb-border/70" : "border-transparent",
+              )}
+            >
               <AppIcon name={app.name} icon={icon} size={44} dim={!app.installed} />
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[16px] font-semibold text-vb-fg">{app.name}</div>
@@ -245,59 +255,25 @@ export function AppSettingsModal({
               </button>
             </div>
 
-            {/* Прокси */}
-            <Section title="Прокси">
-              {options.map((o) => (
-                <button
-                  key={o.v}
-                  type="button"
-                  disabled={busy}
-                  onClick={() => pickProxy(o.v)}
-                  className="flex w-full items-center gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-vb-surface-2/60"
-                >
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[13px] text-vb-fg">{o.title}</span>
-                    <span className="block truncate text-[11px] text-vb-silver-faint">{o.sub}</span>
-                  </span>
-                  {o.v === current &&
-                    (busy ? (
-                      <Loader2 className="h-4 w-4 animate-spin text-vb-silver-faint" />
-                    ) : (
-                      <Check className="h-4 w-4 text-vb-emerald" />
-                    ))}
-                </button>
-              ))}
-            </Section>
-
-            {/* Защита от утечек (pf): Claude и Telegram — включается при подключении */}
-            {guardOf && guard && (
-              <Section>
-                <div className="flex items-center justify-between gap-3 px-3.5 py-2.5">
-                  <span className="min-w-0">
-                    <span className="block text-[13px] text-vb-fg">Не пускать мимо прокси</span>
-                    <span className="block text-[11px] leading-snug text-vb-silver-faint">{guardOf.sub}</span>
-                  </span>
-                  <Toggle checked={guardOn} disabled={busy} onChange={toggleGuard} label="Не пускать мимо прокси" />
-                </div>
-              </Section>
-            )}
-
-            {/* Claude: Claude Code вне приложения — системные переменные + режим моста */}
-            {app.id === "claude-desktop" && env && (
-              <Section title="Claude Code в терминале и VS Code">
-                {CODE_MODES.map((o) => (
+            <div
+              className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+              onScroll={(e) => setScrolled(e.currentTarget.scrollTop > 0)}
+            >
+              {/* Прокси */}
+              <Section title="Прокси">
+                {options.map((o) => (
                   <button
-                    key={o.id}
+                    key={o.v}
                     type="button"
-                    disabled={busy || (o.id !== "off" && !health)}
-                    onClick={() => pickCodeMode(o.id)}
+                    disabled={busy}
+                    onClick={() => pickProxy(o.v)}
                     className="flex w-full items-center gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-vb-surface-2/60"
                   >
                     <span className="min-w-0 flex-1">
-                      <span className="block text-[13px] text-vb-fg">{o.title}</span>
-                      <span className="block text-[11px] leading-snug text-vb-silver-faint">{o.sub}</span>
+                      <span className="block truncate text-[13px] text-vb-fg">{o.title}</span>
+                      <span className="block truncate text-[11px] text-vb-silver-faint">{o.sub}</span>
                     </span>
-                    {o.id === codeMode &&
+                    {o.v === current &&
                       (busy ? (
                         <Loader2 className="h-4 w-4 animate-spin text-vb-silver-faint" />
                       ) : (
@@ -305,112 +281,154 @@ export function AppSettingsModal({
                       ))}
                   </button>
                 ))}
-                {envForeign && (
-                  <p className="px-3.5 py-2 text-[11px] leading-snug text-vb-warn">
-                    В системе задан чужой прокси — выбор режима заменит его на мост
-                  </p>
-                )}
               </Section>
-            )}
 
-            {/* Трафик — только для запускаемых с --proxy-server */}
-            {launchable && (
-              <Section>
-                <div className="flex items-center justify-between gap-3 px-3.5 py-2.5">
-                  <span className="min-w-0">
-                    <span className="block text-[13px] text-vb-fg">Весь трафик через прокси</span>
-                    <span className="block text-[11px] text-vb-silver-faint">
-                      {current >= 0 ? "С выбранным прокси — всегда весь" : "Иначе через прокси только AI-сайты"}
+              {/* Защита от утечек (брандмауэр): Claude и Telegram — включается при подключении */}
+              {guardOf && guard && (
+                <Section>
+                  <div className="flex items-center justify-between gap-3 px-3.5 py-2.5">
+                    <span className="min-w-0">
+                      <span className="block text-[13px] text-vb-fg">Не пускать мимо прокси</span>
+                      <span className="block text-[11px] leading-snug text-vb-silver-faint">{guardOf.sub}</span>
                     </span>
-                  </span>
-                  <Toggle
-                    checked={current >= 0 || app.full_proxy}
-                    disabled={busy || current >= 0}
-                    onChange={() =>
-                      void run(
-                        () => appsSettingsSet(app.id, current < 0 ? null : current, !app.full_proxy),
-                        "Сохранено",
-                      )
-                    }
-                    label="Весь трафик через прокси"
-                  />
-                </div>
-              </Section>
-            )}
+                    <Toggle checked={guardOn} disabled={busy} onChange={toggleGuard} label="Не пускать мимо прокси" />
+                  </div>
+                </Section>
+              )}
 
-            {/* Браузер: политика главнее Dock-запуска и расширений */}
-            {policy && (
-              <Section>
-                <div className="flex items-center justify-between gap-3 px-3.5 py-2.5">
-                  <span className="min-w-0">
-                    <span className="block text-[13px] text-vb-fg">Всегда через мост</span>
-                    <span className="block text-[11px] text-vb-silver-faint">
-                      {policy.conflict
-                        ? policy.conflict
-                        : "Даже из Dock, расширения не перебивают. Пароль Mac один раз"}
-                    </span>
-                  </span>
-                  <Toggle
-                    checked={policy.configured}
-                    disabled={busy || !!policy.conflict}
-                    onChange={() =>
-                      void run(async () => {
-                        const next = await browserPolicySet(app.id, !policy.configured);
-                        setPolicy(next);
-                        return null;
-                      }, policy.configured ? "Снято — перезапустите браузер" : "Готово — перезапустите браузер")
-                    }
-                    label="Всегда через мост"
-                  />
-                </div>
-              </Section>
-            )}
-
-            {/* Папка */}
-            {folders.length > 0 && (
-              <div className="px-4 pb-3">
-                <div className="mb-1.5 text-[11px] text-vb-silver-faint">Папка</div>
-                <div className="flex flex-wrap gap-1.5">
-                  {folders.map((f) => (
+              {/* Claude: Claude Code вне приложения — системные переменные + режим моста */}
+              {app.id === "claude-desktop" && env && (
+                <Section title="Claude Code в терминале и VS Code">
+                  {CODE_MODES.map((o) => (
                     <button
-                      key={f.id}
+                      key={o.id}
                       type="button"
-                      onClick={() => onMoveToFolder(f.id)}
-                      className={cn(
-                        "rounded-full border px-2.5 py-1 text-[12px] transition-colors",
-                        f.id === currentFolder
-                          ? "border-vb-emerald/50 bg-vb-emerald/10 text-vb-fg"
-                          : "border-vb-border text-vb-silver-dim hover:text-vb-silver",
-                      )}
+                      disabled={busy || (o.id !== "off" && !health)}
+                      onClick={() => pickCodeMode(o.id)}
+                      className="flex w-full items-center gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-vb-surface-2/60"
                     >
-                      {f.name}
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-[13px] text-vb-fg">{o.title}</span>
+                        <span className="block text-[11px] leading-snug text-vb-silver-faint">{o.sub}</span>
+                      </span>
+                      {o.id === codeMode &&
+                        (busy ? (
+                          <Loader2 className="h-4 w-4 animate-spin text-vb-silver-faint" />
+                        ) : (
+                          <Check className="h-4 w-4 text-vb-emerald" />
+                        ))}
                     </button>
                   ))}
+                  {envForeign && (
+                    <p className="px-3.5 py-2 text-[11px] leading-snug text-vb-warn">
+                      В системе задан чужой прокси — выбор режима заменит его на мост
+                    </p>
+                  )}
+                </Section>
+              )}
+
+              {/* Трафик — только для запускаемых с --proxy-server */}
+              {launchable && (
+                <Section>
+                  <div className="flex items-center justify-between gap-3 px-3.5 py-2.5">
+                    <span className="min-w-0">
+                      <span className="block text-[13px] text-vb-fg">Весь трафик через прокси</span>
+                      <span className="block text-[11px] text-vb-silver-faint">
+                        {current >= 0 ? "С выбранным прокси — всегда весь" : "Иначе через прокси только AI-сайты"}
+                      </span>
+                    </span>
+                    <Toggle
+                      checked={current >= 0 || app.full_proxy}
+                      disabled={busy || current >= 0}
+                      onChange={() =>
+                        void run(
+                          () => appsSettingsSet(app.id, current < 0 ? null : current, !app.full_proxy),
+                          "Сохранено",
+                        )
+                      }
+                      label="Весь трафик через прокси"
+                    />
+                  </div>
+                </Section>
+              )}
+
+              {/* Браузер: политика главнее Dock-запуска и расширений */}
+              {policy && (
+                <Section>
+                  <div className="flex items-center justify-between gap-3 px-3.5 py-2.5">
+                    <span className="min-w-0">
+                      <span className="block text-[13px] text-vb-fg">Всегда через мост</span>
+                      <span className="block text-[11px] text-vb-silver-faint">
+                        {policy.conflict
+                          ? policy.conflict
+                          : isMac
+                            ? "Даже из Dock, расширения не перебивают. Пароль Mac один раз"
+                            : "Даже из меню «Пуск», расширения не перебивают. Один запрос прав администратора"}
+                      </span>
+                    </span>
+                    <Toggle
+                      checked={policy.configured}
+                      disabled={busy || !!policy.conflict}
+                      onChange={() =>
+                        void run(async () => {
+                          const next = await browserPolicySet(app.id, !policy.configured);
+                          setPolicy(next);
+                          return null;
+                        }, policy.configured ? "Снято — перезапустите браузер" : "Готово — перезапустите браузер")
+                      }
+                      label="Всегда через мост"
+                    />
+                  </div>
+                </Section>
+              )}
+
+              {/* Папка */}
+              {folders.length > 0 && (
+                <div className="px-4 pb-3">
+                  <div className="mb-1.5 text-[11px] text-vb-silver-faint">Папка</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {folders.map((f) => (
+                      <button
+                        key={f.id}
+                        type="button"
+                        onClick={() => onMoveToFolder(f.id)}
+                        className={cn(
+                          "rounded-full border px-2.5 py-1 text-[12px] transition-colors",
+                          f.id === currentFolder
+                            ? "border-vb-emerald/50 bg-vb-emerald/10 text-vb-fg"
+                            : "border-vb-border text-vb-silver-dim hover:text-vb-silver",
+                        )}
+                      >
+                        {f.name}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            )}
-
-            {/* Действия */}
-            <Section>
-              {app.installed && launchable && (
-                <>
-                  <ActionRow label="Ярлык на рабочий стол" onClick={() => void run(() => appsCreateShortcut(app.id, "desktop"), "Ярлык на рабочем столе")} />
-                  <ActionRow label="Ярлык в «Программы»" onClick={() => void run(() => appsCreateShortcut(app.id, "start_menu"), "Ярлык в «Программах»")} />
-                </>
               )}
-              {app.installed && (
-                <ActionRow label="Перезапустить через мост" onClick={() => void run(onRelaunch, "Перезапущено")} />
-              )}
-              <ActionRow label="Убрать из списка" danger onClick={onRemove} />
-            </Section>
 
+              {/* Действия */}
+              <Section>
+                {app.installed && launchable && (
+                  <>
+                    <ActionRow label="Ярлык на рабочий стол" onClick={() => void run(() => appsCreateShortcut(app.id, "desktop"), "Ярлык на рабочем столе")} />
+                    <ActionRow label="Ярлык в «Программы»" onClick={() => void run(() => appsCreateShortcut(app.id, "start_menu"), "Ярлык в «Программах»")} />
+                  </>
+                )}
+                {app.installed && (
+                  <ActionRow label="Перезапустить через мост" onClick={() => void run(onRelaunch, "Перезапущено")} />
+                )}
+                <ActionRow label="Убрать из списка" danger onClick={onRemove} />
+              </Section>
+            </div>
+
+            {/* Итог действия — внизу окна, виден при любой прокрутке */}
             <AnimatePresence>
               {note && (
                 <motion.p
                   initial={{ opacity: 0, height: 0 }}
                   animate={{ opacity: 1, height: "auto" }}
                   exit={{ opacity: 0, height: 0 }}
-                  className="overflow-hidden px-4 pb-3 text-center text-[12px] text-vb-silver-dim"
+                  className="shrink-0 overflow-hidden border-t border-vb-border/70 px-4 py-2.5 text-center text-[12px] text-vb-silver-dim"
                 >
                   {note}
                 </motion.p>

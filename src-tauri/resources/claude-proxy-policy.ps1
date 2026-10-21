@@ -133,7 +133,7 @@ function Invoke-ClaudeProxyPolicy([string]$Operation) {
         if (-not $status.configured -or -not $status.managed -or $null -ne $status.conflict) {
             throw 'Не удалось подтвердить применение фиксированного прокси Claude. Резервная копия сохранена.'
         }
-        $status.notice = 'Перезапустите Claude Desktop и локальные сессии агента, чтобы применить политику. Эта настройка сама по себе не блокирует обход прокси.'
+        $status.notice = 'Готово. Перезапустите Claude Desktop (закройте его через значок в трее и откройте снова).'
         return $status
     }
     if ($Operation -ne 'Disable') { throw 'Неизвестная операция с политикой Claude.' }

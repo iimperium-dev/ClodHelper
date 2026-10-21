@@ -24,7 +24,6 @@ interface Props {
   icons: Record<string, string>;
   onLaunch: (id: string) => Promise<void>;
   onRemove: (id: string) => void;
-  onToggle?: (id: string, enabled: boolean) => void;
   onSettings: (id: string) => void;
 }
 
@@ -47,7 +46,6 @@ export function AppsBoard({
   icons,
   onLaunch,
   onRemove,
-  onToggle,
   onSettings,
 }: Props) {
   const reduced = useReducedMotion();
@@ -212,7 +210,6 @@ export function AppsBoard({
                           onRemove={() => onRemove(app.id)}
                           onSettings={() => onSettings(app.id)}
                           onLaunch={() => onLaunch(app.id)}
-                          onToggle={onToggle ? (en) => onToggle(app.id, en) : undefined}
                         />
                       )}
                     </BoardItem>

@@ -210,9 +210,11 @@ pub fn set_proxy_assignments(
 /// недостающие builtin-профили, сохраняя пользовательский `enabled` у уже
 /// существующих. Кастомные профили не трогает.
 pub fn load_with_presets() -> Settings {
+    // Поиск установленных приложений — до блокировки: остальные чтения
+    // настроек (опрос статусов, окна) не должны ждать детекта.
+    let presets = crate::apps::builtin_presets();
     let _g = SETTINGS_LOCK.lock().ok();
     let mut s = load();
-    let presets = crate::apps::builtin_presets();
     if merge_presets(&mut s.app_profiles, presets) {
         let _ = save(&s);
     }

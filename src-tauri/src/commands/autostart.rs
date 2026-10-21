@@ -61,9 +61,27 @@ pub async fn bridge_health() -> Result<BridgeHealth, String> {
         .send()
         .await
         .map_err(|e| format!("мост не отвечает: {e}"))?;
-    resp.json::<BridgeHealth>()
+    let mut raw: serde_json::Value = resp
+        .json()
         .await
-        .map_err(|e| format!("не удалось разобрать healthz: {e}"))
+        .map_err(|e| format!("не удалось разобрать healthz: {e}"))?;
+    // Счётчики соединений — по всем входам моста, как у монитора трея.
+    let ports = tokio::task::spawn_blocking(crate::monitor::other_health_ports)
+        .await
+        .unwrap_or_default();
+    for port in ports {
+        let other = client
+            .get(format!("http://127.0.0.1:{port}/healthz"))
+            .timeout(std::time::Duration::from_millis(800))
+            .send()
+            .await;
+        if let Ok(other) = other {
+            if let Ok(v) = other.json::<serde_json::Value>().await {
+                crate::monitor::merge_listener(&mut raw, &v);
+            }
+        }
+    }
+    serde_json::from_value::<BridgeHealth>(raw).map_err(|e| format!("не удалось разобрать healthz: {e}"))
 }
 
 /// Переключить режим маршрутизации моста ("smart" | "all"): сохранить в

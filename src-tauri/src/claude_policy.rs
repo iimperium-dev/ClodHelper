@@ -1,14 +1,12 @@
 //! Claude's native fixed proxy policy. This routes cooperating clients; it is
 //! not a network boundary or a claim that all Claude traffic is protected.
 
+#[cfg(not(target_os = "windows"))]
 use std::process::Command;
-#[cfg(target_os = "windows")]
-use std::{
-    path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
-};
 
 use serde::{Deserialize, Serialize};
+
+use crate::regval::RegValue;
 
 pub const PROXY_URL: &str = "http://127.0.0.1:8890";
 #[cfg(target_os = "windows")]
@@ -40,29 +38,76 @@ struct PolicyResult {
     error: Option<String>,
 }
 
-/// Reads the 64-bit machine policy and ownership record, without elevation.
+/// Ключ политики и запись владения Helper (HKLM, как в claude-proxy-policy.ps1).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+const POLICY_KEY: &str = r"SOFTWARE\Policies\Claude";
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+const OWNER_KEY: &str = r"SOFTWARE\ClodHelper\ClaudeProxyPolicy";
+
+/// Reads the 64-bit machine policy and ownership record, without elevation —
+/// straight from the registry: PowerShell costs seconds on every poll.
 #[cfg(target_os = "windows")]
 pub fn status() -> Result<ClaudePolicyStatus, String> {
-    let mut command = powershell();
-    command.arg("-Command").arg(format!(
-        "& {{\n{}\n}} -Action Status",
-        POLICY_SCRIPT.trim_start_matches('\u{feff}')
-    ));
-    let output = command
-        .output()
-        .map_err(|e| format!("Не удалось прочитать политику Claude: {e}"))?;
-    let payload = String::from_utf8_lossy(&output.stdout);
-    if payload.trim().is_empty() {
-        return Err(format!(
-            "Не удалось прочитать политику Claude: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
+    use crate::win::{hklm, value};
+    let root = hklm();
+    status_from(
+        &value(&root, POLICY_KEY, "egressProxyUrl"),
+        &value(&root, POLICY_KEY, "egressProxyPacUrl"),
+        &value(&root, OWNER_KEY, "State"),
+    )
+    .map_err(|e| format!("Политика Claude: {e}"))
+}
+
+/// The same rules as Get-ClaudePolicyStatus in claude-proxy-policy.ps1 (the
+/// script still does the elevated writes); messages are identical.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn status_from(fixed: &RegValue, pac: &RegValue, owner: &RegValue) -> Result<ClaudePolicyStatus, String> {
+    let original = owned_original(owner)?;
+    // PAC has precedence; even an empty value is a conflict.
+    let pac_active = pac.exists();
+    let ours = fixed.is_str(PROXY_URL);
+    let conflict = if pac_active {
+        Some("У Claude уже задана PAC-политика с приоритетом над фиксированным прокси. Она сохранена без изменений.")
+    } else if original.as_ref().is_some_and(|o| !ours && fixed != o) {
+        Some("Политика прокси Claude изменена вне Helper. Она сохранена без изменений.")
+    } else if original.is_none() && fixed.exists() && !fixed.is_str("") {
+        Some("У Claude уже задан фиксированный прокси, который не принадлежит Helper. Он сохранён без изменений.")
+    } else {
+        None
+    };
+    Ok(ClaudePolicyStatus {
+        configured: ours && !pac_active,
+        managed: original.is_some(),
+        conflict: conflict.map(String::from),
+        proxy_url: ours.then(|| PROXY_URL.to_string()),
+        pac_configured: pac_active,
+        notice: None,
+        auto_restore: false,
+    })
+}
+
+/// Original value from Helper's ownership record; None — no record. Only an
+/// absent or empty original is valid: a damaged record is never trusted.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn owned_original(owner: &RegValue) -> Result<Option<RegValue>, String> {
+    let json = match owner {
+        RegValue::Absent => return Ok(None),
+        RegValue::Other(_) => {
+            return Err("Запись владения политикой Claude имеет неподдерживаемый тип реестра.".into())
+        }
+        RegValue::Str(s) => s,
+    };
+    let damaged = || "Запись владения политикой Claude повреждена; политика не изменена.".to_string();
+    let state: serde_json::Value = serde_json::from_str(json).map_err(|_| damaged())?;
+    let original = RegValue::from_backup(&state["original"]).ok_or_else(damaged)?;
+    if state["owner"] != "ClodHelper"
+        || state["version"].as_i64() != Some(1)
+        || state["proxy_url"] != PROXY_URL
+        || !(original == RegValue::Absent || original.is_str(""))
+    {
+        return Err(damaged());
     }
-    let result = parse_result(&payload)?;
-    if !output.status.success() {
-        return Err("Проверка политики Claude завершилась с ошибкой".into());
-    }
-    Ok(result)
+    Ok(Some(original))
 }
 
 /// Explicit user action only: this can present a Windows UAC prompt.
@@ -111,24 +156,46 @@ fn mutate(action: &str) -> Result<ClaudePolicyStatus, String> {
 }
 
 /// Run the policy operation with administrator rights (one UAC prompt).
+/// Enable включает в том же окне UAC и защиту от утечек для Claude (как на
+/// Mac): из России Claude напрямую не работает, прямой выход только выдаёт IP.
 #[cfg(target_os = "windows")]
 fn elevate(action: &str) -> Result<ClaudePolicyStatus, String> {
-    let files = OperationFiles::create()?;
-    // Windows PowerShell 5.1 reads UTF-8 script files reliably with a BOM.
-    std::fs::write(
-        &files.script,
-        format!("\u{feff}{}", POLICY_SCRIPT.trim_start_matches('\u{feff}')),
+    let arguments = format!("-Action {action}");
+    let guard = (action == "Enable")
+        .then(crate::leak_guard::status)
+        .and_then(Result::ok)
+        .and_then(|st| {
+            let list = crate::leak_guard::with_service(&st, "claude", true).ok()?;
+            // Уже включена с тем же набором — второй раз правила не трогаем.
+            (!st.enabled || st.services != list).then_some(list)
+        });
+    let outcome = match guard {
+        Some(list) => crate::elevate::run(
+            "claude-policy",
+            &[
+                ("operation.ps1", &enable_with_guard(&list)),
+                ("policy.ps1", POLICY_SCRIPT),
+                ("leak-guard.ps1", crate::leak_guard::SCRIPT),
+            ],
+            &arguments,
+        )?,
+        None => crate::elevate::run("claude-policy", &[("policy.ps1", POLICY_SCRIPT)], &arguments)?,
+    };
+    parse_elevated_result(&outcome)
+}
+
+/// Главный скрипт «Подключить»: сначала защита от утечек (молча — её сбой не
+/// мешает политике), затем политика: её итог и код выхода — итог операции.
+/// `services` уже проверен leak_guard::normalize: только claude/telegram.
+#[cfg(target_os = "windows")]
+fn enable_with_guard(services: &str) -> String {
+    format!(
+        "param([string]$Action, [string]$ResultPath)\n\
+         try {{ & (Join-Path $PSScriptRoot 'leak-guard.ps1') -Action Enable -Services '{services}' \
+         -ResultPath (Join-Path $PSScriptRoot 'guard.json') *> $null }} catch {{ }}\n\
+         & (Join-Path $PSScriptRoot 'policy.ps1') -Action $Action -ResultPath $ResultPath\n\
+         exit $LASTEXITCODE\n"
     )
-    .map_err(|e| format!("Не удалось подготовить политику Claude: {e}"))?;
-    let wrapper = elevation_wrapper(action, &files.script, &files.result);
-    let output = powershell()
-        .arg("-Command")
-        .arg(wrapper)
-        .output()
-        .map_err(|e| format!("Не удалось запросить права администратора: {e}"))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let result = std::fs::read_to_string(&files.result).ok();
-    parse_elevated_result(output.status.success(), &stdout, result.as_deref())
 }
 
 /// macOS: the shell script reads Managed Preferences without elevation.
@@ -216,120 +283,22 @@ fn parse_result(payload: &str) -> Result<ClaudePolicyStatus, String> {
 }
 
 #[cfg(target_os = "windows")]
-fn parse_elevated_result(
-    successful_exit: bool,
-    stdout: &str,
-    payload: Option<&str>,
-) -> Result<ClaudePolicyStatus, String> {
-    if stdout
-        .lines()
-        .any(|line| line.trim() == "CLOD_POLICY_UAC_CANCELLED")
-    {
+fn parse_elevated_result(outcome: &crate::elevate::Outcome) -> Result<ClaudePolicyStatus, String> {
+    if outcome.cancelled {
         return Err("Запрос прав администратора для политики Claude отменён".into());
     }
     // Error details from the operation remain useful even for a nonzero exit.
-    if let Some(payload) = payload {
+    if let Some(payload) = outcome.result.as_deref() {
         let status = parse_result(payload)?;
-        if successful_exit {
+        if outcome.success {
             return Ok(status);
         }
     }
-    Err(if successful_exit {
+    Err(if outcome.success {
         "Изменение политики Claude не вернуло подтверждение; состояние не подтверждено".into()
     } else {
         "Не удалось выполнить изменение политики Claude с правами администратора".into()
     })
-}
-
-#[cfg(target_os = "windows")]
-fn elevation_wrapper(action: &str, script: &Path, result: &Path) -> String {
-    // Windows paths cannot contain a quote. Quote paths inside the command line
-    // and escape apostrophes for the surrounding PowerShell literal.
-    let arguments = format!(
-        "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{}\" -Action {} -ResultPath \"{}\"",
-        script.to_string_lossy(),
-        action,
-        result.to_string_lossy()
-    )
-    .replace('\'', "''");
-    format!(
-        "$ErrorActionPreference='Stop'; \
-         try {{ \
-           $p = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') \
-             -Verb RunAs -WindowStyle Hidden -PassThru -Wait -ArgumentList '{arguments}'; \
-           exit $p.ExitCode \
-         }} catch {{ \
-           $e = $_.Exception; \
-           while ($null -ne $e) {{ \
-             if ($e -is [System.ComponentModel.Win32Exception] -and $e.NativeErrorCode -eq 1223) {{ \
-               Write-Output 'CLOD_POLICY_UAC_CANCELLED'; exit 1 \
-             }}; \
-             $e = $e.InnerException \
-           }}; \
-           Write-Output 'CLOD_POLICY_ELEVATION_FAILED'; exit 1 \
-         }}"
-    )
-}
-
-#[cfg(target_os = "windows")]
-fn powershell() -> Command {
-    let executable = std::env::var_os("SystemRoot")
-        .map(PathBuf::from)
-        .map(|root| root.join("System32/WindowsPowerShell/v1.0/powershell.exe"))
-        .unwrap_or_else(|| PathBuf::from("powershell.exe"));
-    let mut command = Command::new(executable);
-    command.args([
-        "-NoProfile",
-        "-NonInteractive",
-        "-ExecutionPolicy",
-        "Bypass",
-    ]);
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000);
-    }
-    command
-}
-
-#[cfg(target_os = "windows")]
-struct OperationFiles {
-    directory: PathBuf,
-    script: PathBuf,
-    result: PathBuf,
-}
-
-#[cfg(target_os = "windows")]
-impl OperationFiles {
-    fn create() -> Result<Self, String> {
-        let parent = dirs::config_dir()
-            .ok_or_else(|| "Не найдена папка настроек Helper".to_string())?
-            .join("Clod Helper");
-        std::fs::create_dir_all(&parent)
-            .map_err(|e| format!("Не удалось создать папку операции: {e}"))?;
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|e| e.to_string())?
-            .as_nanos();
-        let directory = parent.join(format!("claude-policy-{}-{nonce}", std::process::id()));
-        // Never reuse a stale script or result from an earlier operation.
-        std::fs::create_dir(&directory)
-            .map_err(|e| format!("Не удалось создать папку операции: {e}"))?;
-        Ok(Self {
-            script: directory.join("policy.ps1"),
-            result: directory.join("result.json"),
-            directory,
-        })
-    }
-}
-
-#[cfg(target_os = "windows")]
-impl Drop for OperationFiles {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.script);
-        let _ = std::fs::remove_file(&self.result);
-        let _ = std::fs::remove_dir(&self.directory);
-    }
 }
 
 #[cfg(test)]
@@ -351,35 +320,87 @@ mod tests {
             .contains("PAC policy exists"));
     }
 
+    /// Статус из реестра — те же случаи, что в tests/claude-proxy-policy.Tests.ps1.
     #[test]
-    #[cfg(target_os = "windows")]
-    fn elevation_denial_missing_result_and_failed_exit_never_report_success() {
-        assert!(
-            parse_elevated_result(false, "CLOD_POLICY_UAC_CANCELLED\r\n", None)
-                .unwrap_err()
-                .contains("отменён")
-        );
-        assert!(parse_elevated_result(true, "", None).is_err());
-        assert!(parse_elevated_result(false, "", Some(SUCCESS)).is_err());
-        assert!(
-            parse_elevated_result(false, "", Some(r#"{"ok":false,"error":"write denied"}"#))
-                .unwrap_err()
-                .contains("write denied")
-        );
-        assert!(parse_elevated_result(true, "", Some(SUCCESS)).is_ok());
+    fn registry_status_matches_policy_script_rules() {
+        use RegValue::{Absent, Other, Str};
+        let s = |v: &str| Str(v.to_string());
+        let owner = |original: &str| {
+            s(&format!(
+                r#"{{"owner":"ClodHelper","version":1,"proxy_url":"{PROXY_URL}","original":{original}}}"#
+            ))
+        };
+        let absent = r#"{"exists":false,"kind":null,"data":null}"#;
+        let empty = r#"{"exists":true,"kind":"String","data":""}"#;
+
+        let st = status_from(&Absent, &Absent, &Absent).unwrap();
+        assert!(!st.configured && !st.managed && st.conflict.is_none() && st.proxy_url.is_none());
+
+        let st = status_from(&s(PROXY_URL), &Absent, &owner(absent)).unwrap();
+        assert!(st.configured && st.managed && st.conflict.is_none());
+        assert_eq!(st.proxy_url.as_deref(), Some(PROXY_URL));
+
+        // Наше значение без записи владения: скрипт Windows считает его чужим.
+        let st = status_from(&s(PROXY_URL), &Absent, &Absent).unwrap();
+        assert!(st.configured && !st.managed && st.conflict.is_some());
+
+        // Чужие прокси и PAC — конфликт; пустая строка — нет.
+        assert!(status_from(&s("http://corp:3128"), &Absent, &Absent).unwrap().conflict.unwrap().contains("не принадлежит Helper"));
+        assert!(status_from(&Other("DWord".into()), &Absent, &Absent).unwrap().conflict.is_some());
+        assert!(status_from(&s(""), &Absent, &Absent).unwrap().conflict.is_none());
+        let pac = status_from(&s(PROXY_URL), &s(""), &owner(absent)).unwrap();
+        assert!(pac.pac_configured && !pac.configured && pac.conflict.unwrap().contains("PAC"));
+
+        // Изменено вне Helper после включения — конфликт; откат к исходному — нет.
+        assert!(status_from(&s("http://other:1"), &Absent, &owner(absent)).unwrap().conflict.unwrap().contains("изменена вне"));
+        assert!(status_from(&Absent, &Absent, &owner(absent)).unwrap().conflict.is_none());
+        assert!(status_from(&s(""), &Absent, &owner(empty)).unwrap().conflict.is_none());
+
+        // Повреждённая запись владения никогда не принимается.
+        for bad in [
+            s("not json"),
+            s(r#"{"owner":"Someone","version":1,"proxy_url":"http://127.0.0.1:8890","original":{"exists":false}}"#),
+            owner(r#"{"exists":true,"kind":"String","data":"http://corp:3128"}"#),
+            owner(r#"{"exists":"yes"}"#),
+            s(r#"{"owner":"ClodHelper","version":1,"proxy_url":"http://127.0.0.1:8890"}"#),
+        ] {
+            assert!(status_from(&Absent, &Absent, &bad).unwrap_err().contains("повреждена"));
+        }
+        assert!(status_from(&Absent, &Absent, &Other("DWord".into())).unwrap_err().contains("неподдерживаемый тип"));
     }
 
     #[test]
     #[cfg(target_os = "windows")]
-    fn uac_wrapper_quotes_paths_and_hides_child_window() {
-        let wrapper = elevation_wrapper(
-            "Enable",
-            Path::new("C:\\O'Brien\\policy.ps1"),
-            Path::new("C:\\A B\\result.json"),
+    fn elevation_denial_missing_result_and_failed_exit_never_report_success() {
+        use crate::elevate::Outcome;
+        let out = |cancelled, success, result: Option<&str>| Outcome {
+            cancelled,
+            success,
+            result: result.map(String::from),
+        };
+        assert!(parse_elevated_result(&out(true, false, None))
+            .unwrap_err()
+            .contains("отменён"));
+        assert!(parse_elevated_result(&out(false, true, None)).is_err());
+        assert!(parse_elevated_result(&out(false, false, Some(SUCCESS))).is_err());
+        assert!(
+            parse_elevated_result(&out(false, false, Some(r#"{"ok":false,"error":"write denied"}"#)))
+                .unwrap_err()
+                .contains("write denied")
         );
-        assert!(wrapper.contains("-Verb RunAs -WindowStyle Hidden"));
-        assert!(wrapper.contains("-File \"C:\\O''Brien\\policy.ps1\""));
-        assert!(wrapper.contains("-ResultPath \"C:\\A B\\result.json\""));
-        assert!(wrapper.contains("NativeErrorCode -eq 1223"));
+        assert!(parse_elevated_result(&out(false, true, Some(SUCCESS))).is_ok());
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn enable_runs_leak_guard_before_policy_in_one_operation() {
+        let op = enable_with_guard("claude,telegram");
+        let guard = op.find("leak-guard.ps1").unwrap();
+        let policy = op.find("'policy.ps1') -Action $Action").unwrap();
+        assert!(guard < policy, "сначала защита, потом политика");
+        assert!(op.contains("-Services 'claude,telegram'"));
+        // Итог операции — итог политики, а не защиты.
+        assert!(op.contains("-ResultPath $ResultPath"));
+        assert!(op.trim_end().ends_with("exit $LASTEXITCODE"));
     }
 }

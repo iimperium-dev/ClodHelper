@@ -4,6 +4,7 @@ import {
   ArrowUpDown,
   Check,
   ChevronDown,
+  Copy,
   Loader2,
   Pencil,
   Plus,
@@ -37,10 +38,8 @@ const SERVICES: { id: ServiceGroup; name: string; sub: string }[] = [
   { id: "openai", name: "ChatGPT", sub: "OpenAI · Codex" },
   { id: "google", name: "Gemini", sub: "Google AI" },
   { id: "other_ai", name: "Остальные AI", sub: "Copilot · Cursor · Grok…" },
-  // Telegram через SOCKS-вход моста есть только в версии для macOS.
-  ...(isMac
-    ? [{ id: "telegram" as const, name: "Telegram", sub: "Через мост · «Авто» = основной прокси" }]
-    : []),
+  // Telegram ходит через SOCKS-вход моста (macOS и Windows).
+  { id: "telegram", name: "Telegram", sub: "Через мост · «Авто» = основной прокси" },
 ];
 
 
@@ -54,6 +53,13 @@ const GEO_CACHE_KEY = "clod-proxy-geo-v2";
 function hostPort(url: string): string {
   const rest = url.includes("://") ? url.split("://")[1] : url;
   return rest.includes("@") ? rest.slice(rest.lastIndexOf("@") + 1) : rest;
+}
+
+/** Хост прокси без порта — так его показываем и копируем. */
+function hostOnly(url: string): string {
+  const hp = hostPort(url);
+  const colon = hp.lastIndexOf(":");
+  return colon > 0 ? hp.slice(0, colon) : hp;
 }
 
 function loadGeoCache(): Record<string, ProxyCheckResult> {
@@ -417,7 +423,7 @@ export function Proxies() {
                   setAddInput(e.target.value);
                   setSwapped(false);
                 }}
-                placeholder="Вставьте прокси в любом формате: ip:порт:логин:пароль…"
+                placeholder="Вставьте прокси в любом формате"
                 className="w-full rounded-lg border border-vb-border bg-vb-surface-2 px-3 py-2 font-mono text-[13px] text-vb-fg outline-none transition-colors focus:border-vb-emerald/60"
                 autoFocus
               />
@@ -541,6 +547,8 @@ export function Proxies() {
                       ? "bg-vb-warn"
                       : "bg-vb-emerald";
               const gkey = hostPort(url);
+              const host = hostOnly(url);
+              const shown = pool.filter((u) => hostOnly(u) === host).length > 1 ? gkey : host;
               const g = geo[gkey];
               const gBusy = geoBusy[gkey];
               const tag = labels[url];
@@ -550,7 +558,7 @@ export function Proxies() {
                 (s) => s.name,
               );
               return (
-                <div key={url} className="flex items-center gap-3 px-4 py-3">
+                <div key={url} className="group flex items-center gap-3 px-4 py-3">
                   <span className={cn("h-2 w-2 shrink-0 rounded-full", dot)} />
                   <div className="min-w-0 flex-1">
                     {editingTag === i ? (
@@ -568,49 +576,66 @@ export function Proxies() {
                         autoFocus
                       />
                     ) : (
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={cn(
-                            "truncate text-[13px] text-vb-fg",
-                            tag ? "font-semibold" : "font-mono",
-                          )}
-                        >
-                          {tag || hostPort(url)}
-                        </span>
-                        {i === 0 && (
-                          <span className="shrink-0 rounded-md border border-vb-emerald/30 bg-vb-emerald/[0.07] px-1.5 py-0.5 text-[10px] font-medium text-vb-emerald">
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        {/* Имя: карандаш — только при наведении на него */}
+                        {tag ? (
+                          <button
+                            type="button"
+                            onClick={() => startTagEdit(i, url)}
+                            title="Переименовать"
+                            className="group/name flex min-w-0 items-center rounded-md text-left"
+                          >
+                            <span className="truncate text-[13px] font-semibold text-vb-fg">{tag}</span>
+                            {/* В покое места не занимает — раскрывается при наведении */}
+                            <Pencil className="ml-0 h-3 w-0 shrink-0 text-vb-silver-faint opacity-0 transition-all group-hover/name:ml-1.5 group-hover/name:w-3 group-hover/name:opacity-100 group-focus-visible/name:ml-1.5 group-focus-visible/name:w-3 group-focus-visible/name:opacity-100" />
+                          </button>
+                        ) : (
+                          <>
+                            <CopyIp text={shown} copy={host} className="text-[13px] text-vb-fg" />
+                            <button
+                              type="button"
+                              onClick={() => startTagEdit(i, url)}
+                              title="Дать имя"
+                              aria-label="Дать имя"
+                              className="shrink-0 rounded-md p-0.5 text-vb-silver-faint opacity-0 transition-opacity hover:text-vb-silver focus-visible:opacity-100 group-hover:opacity-100"
+                            >
+                              <Pencil className="h-3 w-3" />
+                            </button>
+                          </>
+                        )}
+                        {/* «основной» — у основного; у остальных на его месте при
+                            наведении — «сделать основным» тем же бейджем */}
+                        {i === 0 ? (
+                          <span className="shrink-0 rounded-md border border-vb-emerald/30 bg-vb-emerald/[0.07] px-1.5 py-[3px] text-[10px] font-medium leading-none text-vb-emerald">
                             основной
                           </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleMakePrimary(i)}
+                            disabled={busy !== null}
+                            className="shrink-0 rounded-md border border-dashed border-vb-border px-1.5 py-[3px] text-[10px] font-medium leading-none text-vb-silver-dim opacity-0 transition-[opacity,color,border-color] hover:border-vb-emerald/40 hover:text-vb-emerald focus-visible:opacity-100 group-hover:opacity-100 disabled:pointer-events-none"
+                          >
+                            {busy === `primary:${i}` ? "…" : "сделать основным"}
+                          </button>
                         )}
-                        <button
-                          type="button"
-                          onClick={() => startTagEdit(i, url)}
-                          className="shrink-0 rounded-md p-1 text-vb-silver-faint opacity-60 transition-all hover:bg-vb-surface-2 hover:text-vb-silver hover:opacity-100"
-                          title={tag ? "Переименовать" : "Дать имя"}
-                        >
-                          <Pencil className="h-3 w-3" />
-                        </button>
                       </div>
                     )}
-                    <div className="tnum mt-px flex items-center gap-2 text-[11px] text-vb-silver-faint">
-                      {tag && <span className="font-mono">{hostPort(url)}</span>}
-                      <span>
-                        {ms === undefined ? "пинг…" : ms === null ? (
-                          <span className="text-vb-loss">не отвечает</span>
-                        ) : (
-                          `${ms} мс`
-                        )}
-                      </span>
-                      {/* Флаг + страна — видны ВСЕГДА (кэш гео) */}
-                      {gBusy && !g ? (
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                      ) : g?.country_code ? (
-                        <span className="inline-flex items-center gap-1">
-                          <CountryFlag code={g.country_code} />
-                          {g.country_name ?? g.country_code}
-                        </span>
-                      ) : null}
-                    </div>
+                    {/* Флаг и страна (видны всегда, кэш гео) · IP — копируется по клику */}
+                    {(tag || g?.country_code || gBusy) && (
+                      <div className="mt-1 flex min-w-0 items-center gap-1.5 whitespace-nowrap text-[11px] leading-none text-vb-silver-faint">
+                        {gBusy && !g ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : g?.country_code ? (
+                          <span className="inline-flex shrink-0 items-center gap-1.5">
+                            <CountryFlag code={g.country_code} />
+                            {g.country_name ?? g.country_code}
+                          </span>
+                        ) : null}
+                        {tag && (g?.country_code || gBusy) && <span aria-hidden="true">·</span>}
+                        {tag && <CopyIp text={shown} copy={host} />}
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex shrink-0 items-center gap-1">
@@ -640,48 +665,50 @@ export function Proxies() {
                       </div>
                     ) : (
                       <>
-                        {i !== 0 && (
+                        {/* Действия — при наведении на строку, в покое строка чистая */}
+                        <div className="flex items-center opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
                           <button
                             type="button"
-                            onClick={() => handleMakePrimary(i)}
-                            disabled={busy !== null}
-                            className="rounded-lg px-2.5 py-1.5 text-[12px] font-medium text-vb-silver-dim transition-colors hover:bg-vb-surface-2 hover:text-vb-silver active:scale-[0.97] disabled:opacity-35"
+                            onClick={() => void geoCheck(url)}
+                            disabled={busy !== null || gBusy}
+                            className="rounded-lg p-1.5 text-vb-silver-faint transition-colors hover:bg-vb-surface-2 hover:text-vb-silver active:scale-[0.97] disabled:opacity-35"
+                            title="Перепроверить гео и доступность"
                           >
-                            {busy === `primary:${i}` ? (
+                            {gBusy ? (
                               <Loader2 className="h-3.5 w-3.5 animate-spin" />
                             ) : (
-                              "Сделать основным"
+                              <RefreshCw className="h-3.5 w-3.5" />
                             )}
                           </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => void geoCheck(url)}
-                          disabled={busy !== null || gBusy}
-                          className="rounded-lg p-1.5 text-vb-silver-faint transition-colors hover:bg-vb-surface-2 hover:text-vb-silver active:scale-[0.97] disabled:opacity-35"
-                          title="Перепроверить гео и доступность"
-                        >
-                          {gBusy ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <RefreshCw className="h-3.5 w-3.5" />
+                          {pool.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => askDelete(i)}
+                              disabled={busy !== null}
+                              className="rounded-lg p-1.5 text-vb-silver-faint transition-colors hover:bg-vb-loss/10 hover:text-vb-loss active:scale-[0.97] disabled:opacity-35"
+                              title="Убрать из пула"
+                            >
+                              {busy === `del:${i}` ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-3.5 w-3.5" />
+                              )}
+                            </button>
                           )}
-                        </button>
-                        {pool.length > 1 && (
-                          <button
-                            type="button"
-                            onClick={() => askDelete(i)}
-                            disabled={busy !== null}
-                            className="rounded-lg p-1.5 text-vb-silver-faint transition-colors hover:bg-vb-loss/10 hover:text-vb-loss active:scale-[0.97] disabled:opacity-35"
-                            title="Убрать из пула"
-                          >
-                            {busy === `del:${i}` ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <Trash2 className="h-3.5 w-3.5" />
-                            )}
-                          </button>
-                        )}
+                        </div>
+                        {/* Пинг — своей колонкой справа, всегда в одну строку */}
+                        <span
+                          className={cn(
+                            "tnum min-w-[52px] whitespace-nowrap text-right font-mono text-[12px]",
+                            ms === null
+                              ? "text-vb-loss"
+                              : ms !== undefined && ms > 1500
+                                ? "text-vb-warn"
+                                : "text-vb-silver-dim",
+                          )}
+                        >
+                          {ms === undefined ? "" : ms === null ? "нет связи" : `${ms} мс`}
+                        </span>
                       </>
                     )}
                   </div>
@@ -690,10 +717,6 @@ export function Proxies() {
             })}
           </div>
         )}
-        <p className="mt-2 px-1 text-[11px] text-vb-silver-faint">
-          Изменение пула перезапускает мост (~2 секунды). Пинг обновляется
-          каждые 5 минут, гео — кнопкой.
-        </p>
       </motion.section>
 
       {/* ── Назначения по сервисам (Windows). На macOS прокси выбирается в
@@ -761,5 +784,37 @@ export function Proxies() {
       </motion.section>
       )}
     </motion.div>
+  );
+}
+
+/** IP прокси: при наведении — значок копирования, по клику — в буфер обмена. */
+function CopyIp({ text, copy, className }: { text: string; copy: string; className?: string }) {
+  const [copied, setCopied] = useState(false);
+  const onCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(copy);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      /* буфер обмена недоступен — молча */
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={() => void onCopy()}
+      title={copied ? "Скопировано" : "Скопировать IP"}
+      className={cn(
+        "group/ip inline-flex min-w-0 items-center gap-1 rounded font-mono transition-colors hover:text-vb-silver",
+        className,
+      )}
+    >
+      <span className="truncate">{text}</span>
+      {copied ? (
+        <Check className="h-3 w-3 shrink-0 text-vb-emerald" />
+      ) : (
+        <Copy className="h-3 w-3 shrink-0 opacity-0 transition-opacity group-hover/ip:opacity-100 group-focus-visible/ip:opacity-100" />
+      )}
+    </button>
   );
 }

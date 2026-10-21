@@ -105,6 +105,7 @@ export function Overview({ onOpenProxies }: Props) {
     history,
     poolPing,
     refresh,
+    refreshPoolPing,
   } = useStatus();
 
   const [busy, setBusy] = useState<"start" | "stop" | "restart" | "test" | null>(null);
@@ -155,7 +156,12 @@ export function Overview({ onOpenProxies }: Props) {
     setReport(null);
     setActionError(null);
     try {
-      const [t, r] = await Promise.all([shimTest(), privacyCheck().catch(() => null)]);
+      // Заодно — свежий пинг: рядом с выходным IP должна стоять актуальная цифра.
+      const [t, r] = await Promise.all([
+        shimTest(),
+        privacyCheck().catch(() => null),
+        refreshPoolPing(),
+      ]);
       setTestResult(t);
       setReport(r);
     } catch (e) {
@@ -192,7 +198,7 @@ export function Overview({ onOpenProxies }: Props) {
   };
 
   // Прокси, через который сейчас выходим: основной из пула. IP — ровно
-  // одно место на экране; после «Проверить» — реальный выходной IP и время.
+  // одно место на экране; после «Проверить» — реальный выходной IP.
   const primaryHost = poolPing[0]
     ? poolPing[0].host
     : health?.upstreams[0]
@@ -201,7 +207,11 @@ export function Overview({ onOpenProxies }: Props) {
   const primaryState = quality[0]?.state ?? (health?.upstreams[0]?.healthy === false ? "down" : "ok");
   const exitIp =
     report?.exit?.ip ?? (testResult?.ok && testResult.external_ip ? testResult.external_ip : primaryHost);
-  const exitMs = testResult?.ok ? testResult.latency_ms : (poolPing[0]?.ms ?? undefined);
+  // «мс» — всегда TCP-пинг прокси, как в «Прокси». Время запроса из
+  // «Проверить» (TLS до сайта через прокси + ответ сервиса, секунды) сюда
+  // не годится: рядом с IP его читали как пинг. Выход не совпал ни с одним
+  // прокси пула (у провайдера выходной IP другой) — пинг не показываем.
+  const exitMs = poolPing.find((p) => p.host === exitIp)?.ms ?? undefined;
   const spare = Math.max(0, (health?.upstreams.length ?? poolPing.length) - 1);
 
   return (

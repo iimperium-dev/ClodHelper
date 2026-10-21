@@ -71,12 +71,12 @@ for needle in '"service":"clod-bridge"' '"routing_policy":"upstream_only"' \
         *) ok=0 ;;
     esac
 done
-[ "$ok" = 1 ] || die "Мост Claude на 127.0.0.1:$PORT не подтвердил работу без DIRECT. Откройте Clod Helper → Приложения → Настроить Claude."
+[ "$ok" = 1 ] || die "Мост Claude на 127.0.0.1:$PORT не подтвердил работу без DIRECT. Откройте Clod Helper → Приложения → Claude Desktop → «Подключить»."
 
 PB=/usr/libexec/PlistBuddy
 if [ ! -f "$POLICY" ] || "$PB" -c "Print :egressProxyPacUrl" "$POLICY" >/dev/null 2>&1 ||
     [ "$("$PB" -c "Print :egressProxyUrl" "$POLICY" 2>/dev/null)" != "$URL" ]; then
-    die "Штатный прокси Claude ещё не настроен или изменён другой программой. Откройте Clod Helper → Приложения → Настроить Claude."
+    die "Штатный прокси Claude ещё не настроен или изменён другой программой. Откройте Clod Helper → Приложения → Claude Desktop → «Подключить»."
 fi
 
 /usr/bin/open -a "$APP" --args "--proxy-server=$URL" || die "macOS не удалось запустить Claude Desktop."

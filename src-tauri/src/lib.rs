@@ -4,6 +4,8 @@ mod claude_desktop;
 mod claude_policy;
 mod claude_proxy;
 mod commands;
+#[cfg(target_os = "windows")]
+mod elevate;
 mod env_proxy;
 #[cfg_attr(not(target_os = "windows"), path = "firewall_stub.rs")]
 mod firewall;
@@ -11,8 +13,12 @@ mod firewall;
 // юнит-тестами, а реальный прогон на macOS доступен только в CI.
 #[cfg(any(not(target_os = "windows"), test))]
 mod macos;
+// Разбор ярлыков .lnk: нужен на Windows, тесты — на любой ОС.
+#[cfg(any(target_os = "windows", test))]
+mod lnk;
 mod monitor;
 mod proxy;
+mod regval;
 mod settings;
 mod shim;
 mod system;
@@ -25,6 +31,8 @@ mod leak_guard;
 mod privacy;
 mod updater;
 mod vscode_config;
+#[cfg(target_os = "windows")]
+mod win;
 
 use tauri::{
     tray::{MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -242,9 +250,13 @@ pub fn run() {
 
 fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<monitor::TrayHandles> {
     // Нативного меню НЕТ намеренно: Windows не даёт его стилизовать, и оно
-    // выглядело «как у старых приложух». Любой клик (левый и правый) открывает
-    // фирменный попап — паттерн Cloudflare WARP. Вся функциональность меню
-    // (статус, тест, тумблеры, рестарт/стоп, выход) живёт в попапе.
+    // выглядело «как у старых приложух». Вместо него фирменный попап —
+    // паттерн Cloudflare WARP. Вся функциональность меню (статус, тест,
+    // тумблеры, рестарт/стоп, выход) живёт в попапе.
+    // Windows: правый щелчок — попап, двойной левый — главное окно (привычная
+    // схема трея). Одиночный левый ничего не делает: иначе перед главным
+    // окном мелькал бы попап от первого щелчка двойного.
+    // macOS: значок в строке меню — любой щелчок открывает попап.
     let builder = TrayIconBuilder::with_id("main-tray");
     // macOS: сразу монохромная template-иконка (цветная иконка приложения в
     // строке меню выглядит чужеродно); дальше её ведёт monitor.
@@ -256,16 +268,28 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<monitor::TrayHandles> {
     let builder = builder.icon(app.default_window_icon().unwrap().clone());
     let tray = builder
         .tooltip("Clod Helper")
-        .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click {
+        .on_tray_icon_event(|tray, event| match event {
+            #[cfg(target_os = "windows")]
+            TrayIconEvent::DoubleClick {
+                button: tauri::tray::MouseButton::Left,
+                ..
+            } => show_main_window(tray.app_handle()),
+            #[cfg(target_os = "windows")]
+            TrayIconEvent::Click {
+                button: tauri::tray::MouseButton::Right,
                 button_state: MouseButtonState::Up,
                 position,
                 rect,
                 ..
-            } = event
-            {
-                show_tray_popup(tray.app_handle(), position.x, position.y, rect);
-            }
+            } => show_tray_popup(tray.app_handle(), position.x, position.y, rect),
+            #[cfg(not(target_os = "windows"))]
+            TrayIconEvent::Click {
+                button_state: MouseButtonState::Up,
+                position,
+                rect,
+                ..
+            } => show_tray_popup(tray.app_handle(), position.x, position.y, rect),
+            _ => {}
         })
         .build(app)?;
 

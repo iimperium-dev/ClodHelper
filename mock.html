@@ -15,7 +15,8 @@
 -->
 <script>
   const params = new URLSearchParams(location.search);
-  if (params.get("platform") !== "win") {
+  const win = params.get("platform") === "win";
+  if (!win) {
     Object.defineProperty(navigator, "userAgent", {
       get: () => "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141 Safari/537.36",
     });
@@ -24,13 +25,22 @@
     id, name, kind, enabled: false, builtin, hidden: false, proxy: null,
     full_proxy: kind === "custom", installed: true, location, desktop_shortcut: false, process_names: [], ...extra,
   });
-  const apps = [
-    app("claude-desktop", "Claude Desktop", "exe_flag", true, "/Applications/Claude.app"),
-    app("vscode", "VS Code", "exe_flag", true, "/Applications/Visual Studio Code.app"),
-    app("codex", "ChatGPT Codex", "exe_flag", true, "/Applications/ChatGPT.app"),
-    app("telegram", "Telegram", "exe_flag", true, "/Applications/Telegram.app"),
-    app("custom-1", "Google Chrome", "custom", false, "/Applications/Google Chrome.app"),
-  ];
+  // Пути — как их отдаёт бэкенд своей ОС (Windows: exe и AppID магазина).
+  const apps = win
+    ? [
+        app("claude-desktop", "Claude Desktop", "msix", true, "AnthropicPBC.Claude_fnn82j28hfe8t!Claude"),
+        app("vscode", "VS Code", "exe_flag", true, "C:\\Users\\u\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe"),
+        app("codex", "ChatGPT Codex", "msix", true, "OpenAI.Codex_2p2nqsd0c76g0!App"),
+        app("telegram", "Telegram", "exe_flag", true, "C:\\Users\\u\\AppData\\Roaming\\Telegram Desktop\\Telegram.exe"),
+        app("custom-1", "Google Chrome", "custom", false, "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"),
+      ]
+    : [
+        app("claude-desktop", "Claude Desktop", "exe_flag", true, "/Applications/Claude.app"),
+        app("vscode", "VS Code", "exe_flag", true, "/Applications/Visual Studio Code.app"),
+        app("codex", "ChatGPT Codex", "exe_flag", true, "/Applications/ChatGPT.app"),
+        app("telegram", "Telegram", "exe_flag", true, "/Applications/Telegram.app"),
+        app("custom-1", "Google Chrome", "custom", false, "/Applications/Google Chrome.app"),
+      ];
   const health = {
     status: "ok", version: "1.8.0", uptime_sec: 28000, listen: "127.0.0.1:8889", mode: "smart",
     active: 3, total: 700, via_upstream: 412, via_direct: 288, errors: 6,
@@ -52,12 +62,18 @@
     bridge_exe_legacy: false,
     bridge_versions: { installed: "1.8.0", bundled: "1.8.0", outdated: false },
     global_proxy_env: { present: true, points_to_bridge: true, values: [] },
-    proxies_ping: [{ url: "http://185.68.187.138:8000", host: "185.68.187.138", port: 8000, ms: 74 }],
+    proxies_ping: [
+      { url: "http://u:p@185.68.187.138:8000", host: "185.68.187.138", port: 8000, ms: 74 },
+      { url: "socks5://u:p@93.1.2.3:1080", host: "93.1.2.3", port: 1080, ms: 131 },
+    ],
     apps_list: apps,
     apps_traffic: [
       { id: "claude-desktop", running: true, via_bridge: 6, direct: 0, proxy_extension: null },
       { id: "codex", running: true, via_bridge: 12, direct: 0, proxy_extension: null },
-      { id: "telegram", running: true, via_bridge: 4, direct: 0, proxy_extension: null },
+      // ?tg=other — Telegram ходит через чужой локальный прокси (tg-ws-proxy).
+      params.get("tg") === "other"
+        ? { id: "telegram", running: true, via_bridge: 0, direct: 0, proxy_extension: null, other_proxy: "127.0.0.1:1442" }
+        : { id: "telegram", running: true, via_bridge: 4, direct: 0, proxy_extension: null },
       { id: "custom-1", running: true, via_bridge: 0, direct: 9, proxy_extension: { id: "foxy", name: "FoxyProxy" } },
     ],
     apps_icons: {},
@@ -69,7 +85,7 @@
     proxies_get: ["http://u:p@185.68.187.138:8000", "socks5://u:p@93.1.2.3:1080"],
     proxy_labels_get: { "http://u:p@185.68.187.138:8000": "Claude main" },
     proxy_assignments_get: { anthropic: 0 },
-    apps_search: [{ name: "WeChat", path: "/Applications/WeChat.app" }],
+    apps_search: [{ name: "WeChat", path: win ? "C:\\Program Files\\Tencent\\Weixin\\Weixin.exe" : "/Applications/WeChat.app" }],
     check_proxy: { reachable: true, latency_ms: 74, status_code: 200, error: null, ip: "185.68.187.138", country_code: "FI", country_name: "Finland", isp: "Global Connectivity Solutions" },
     browser_policy_status: { configured: false, managed: false, conflict: null, auto_restore: false, server: "", notice: null },
     privacy_check: {
@@ -78,7 +94,7 @@
       dns: [{ ip: "172.253.11.22", country: "United States of America", org: "Google LLC" }],
       ip_hidden: true, dns_leak: false, leaking_apps: [], error: null,
     },
-    update_check: { version: "0.7.0", notes: "", dmg_url: "x", sums_url: "y" },
+    update_check: { version: "0.7.0", notes: "", url: "x", sums_url: "y" },
     "plugin:app|version": "0.6.0",
     "plugin:autostart|is_enabled": true,
   };
@@ -100,11 +116,31 @@
         return leak;
       }
       if (cmd === "leak_guard_status") return leak;
+      if (cmd === "claude_proxy_enable") {
+        // Как бэкенд: политика и защита от утечек для Claude — одним окном прав.
+        R.claude_proxy_status.policy = { ...R.claude_proxy_status.policy, configured: true, managed: true, proxy_url: "http://127.0.0.1:8890" };
+        const services = leak.enabled && leak.services.includes("telegram") ? "claude,telegram" : "claude";
+        leak = { enabled: true, services, auto_restore: true, verified: true };
+        return structuredClone(R.claude_proxy_status);
+      }
       if (cmd === "set_global_proxy_env") return (R.global_proxy_env = { present: true, points_to_bridge: true, values: [] });
       if (cmd === "clear_global_proxy_env") return (R.global_proxy_env = { present: false, points_to_bridge: false, values: [] });
       if (cmd === "bridge_set_route_mode") { health.mode = args.mode; return null; }
       if (cmd === "browser_policy_status") return args.id === "custom-1" ? structuredClone(R.browser_policy_status) : null;
       if (cmd === "apps_remove") { const a = apps.find((x) => x.id === args.id); if (a) a.hidden = true; return apps; }
+      // Как бэкенд: убранные из списка (и встроенные) тоже находятся, выбор
+      // возвращает их в список.
+      if (cmd === "apps_search") {
+        const q = String(args.query).toLowerCase();
+        const back = apps.filter((a) => a.hidden && a.name.toLowerCase().includes(q)).map((a) => ({ name: a.name, path: a.location }));
+        return [...back, ...R.apps_search.filter((f) => f.name.toLowerCase().includes(q))];
+      }
+      if (cmd === "apps_add_custom") {
+        const a = apps.find((x) => x.hidden && x.location === args.exePath);
+        if (a) a.hidden = false;
+        else apps.push(app(`custom-${apps.length + 1}`, args.name, "custom", false, args.exePath));
+        return structuredClone(apps);
+      }
       if (cmd.startsWith("plugin:event|")) return 1;
       if (cmd in R) return structuredClone(R[cmd]);
       (window.__mockMisses ||= []).push(cmd);

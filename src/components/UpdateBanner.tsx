@@ -4,9 +4,9 @@ import { Loader2 } from "lucide-react";
 import { Button } from "./Button";
 import { updateCheck, updateInstall } from "../lib/api";
 import type { UpdateInfo } from "../lib/types";
-import { isMac } from "../lib/platform";
 
 const SESSION_KEY = "clod.update.checked";
+const RELEASES = "https://github.com/iimperium-dev/Clod-Helper-v1/releases/latest";
 
 /** Одна проверка за сеанс приложения (GitHub API не дёргаем на каждый заход). */
 async function checkOnce(force: boolean): Promise<UpdateInfo | null> {
@@ -87,20 +87,11 @@ export function UpdateBanner({ compact }: { compact?: boolean }) {
                     : "Проверяю…"}
             </div>
           </div>
-          {info && isMac ? (
+          {info ? (
             <Button variant="primary" size="sm" onClick={install} disabled={busy !== null}>
               {busy === "install" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               Обновить
             </Button>
-          ) : info ? (
-            <a
-              href="https://github.com/iimperium-dev/Clod-Helper-v1/releases/latest"
-              target="_blank"
-              rel="noreferrer"
-              className="text-[12px] text-vb-emerald hover:underline"
-            >
-              Скачать
-            </a>
           ) : (
             !compact && (
               <Button variant="secondary" size="sm" onClick={check} disabled={busy !== null}>
@@ -110,7 +101,18 @@ export function UpdateBanner({ compact }: { compact?: boolean }) {
             )
           )}
         </div>
-        {error && <p className="mt-2 text-[12px] text-vb-loss">{error}</p>}
+        {error && (
+          <p className="mt-2 text-[12px] text-vb-loss">
+            {error}.{" "}
+            <button
+              type="button"
+              onClick={() => import("@tauri-apps/plugin-opener").then((m) => m.openUrl(RELEASES))}
+              className="text-vb-emerald hover:underline"
+            >
+              Скачать вручную
+            </button>
+          </p>
+        )}
       </motion.div>
     </AnimatePresence>
   );

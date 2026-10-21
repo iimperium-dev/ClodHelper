@@ -31,6 +31,8 @@ const POLL_INTERVAL_MS = 5_000;
 const HISTORY_LEN = 40;
 /** Пинг прокси-пула: раз в 5 минут (лёгкий TCP-connect, но не спамим). */
 const POOL_PING_INTERVAL_MS = 5 * 60_000;
+/** Не ответивший прокси переизмеряем раньше — через 20 с. */
+const POOL_RECHECK_MS = 20_000;
 /** Скан процессов (shimStatus) при живом /healthz — раз в N тиков (~30с):
     healthz и так доказывает, что мост жив, а скан — самый дорогой вызов. */
 const PROCESS_SCAN_EVERY_TICKS = 6;
@@ -113,13 +115,25 @@ export function StatusProvider({ children }: { children: ReactNode }) {
       иначе UI на 5с «откатывается» и sparkline рисует ложные всплески. */
   const gen = useRef(0);
 
+  /** Повторный замер, если какой-то прокси не ответил: короткий сбой у
+      провайдера не должен висеть красным «нет связи» до следующего круга. */
+  const recheck = useRef<number | null>(null);
   const refreshPoolPing = useCallback(async () => {
     try {
-      setPoolPing(await proxiesPing());
+      const list = await proxiesPing();
+      setPoolPing(list);
+      if (recheck.current !== null) window.clearTimeout(recheck.current);
+      recheck.current = list.some((p) => p.ms === null)
+        ? window.setTimeout(() => {
+            if (!document.hidden) void refreshPoolPingRef.current();
+          }, POOL_RECHECK_MS)
+        : null;
     } catch {
       /* пул может быть пуст / команда недоступна — не страшно */
     }
   }, []);
+  const refreshPoolPingRef = useRef(refreshPoolPing);
+  refreshPoolPingRef.current = refreshPoolPing;
 
   /** Пересчитать качество прокси по дельтам счётчиков /healthz. */
   const updateQuality = useCallback((h: BridgeHealth) => {

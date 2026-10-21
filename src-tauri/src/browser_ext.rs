@@ -1,4 +1,4 @@
-//! Расширения браузеров, перехватывающие прокси (macOS).
+//! Расширения браузеров, перехватывающие прокси (macOS и Windows).
 //!
 //! В Chromium-браузерах расширение с правом `proxy` (FoxyProxy,
 //! SwitchyOmega, VPN-расширения) ставит СВОЮ настройку прокси, и она главнее
@@ -23,9 +23,21 @@ pub struct ProxyExtension {
     pub name: String,
 }
 
-/// Папка данных браузера по имени бандла («Google Chrome.app» → Google/Chrome).
-fn data_dir(app_stem: &str) -> Option<PathBuf> {
-    let rel = match app_stem {
+/// Имя файла программы без пути и расширения («…/Google Chrome.app» →
+/// «Google Chrome», «C:\…\chrome.exe» → «chrome») — разбор без учёта ОС.
+fn app_stem(app_path: &str) -> Option<&str> {
+    let leaf = app_path.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next()?;
+    let stem = [".app", ".exe", ".EXE"]
+        .iter()
+        .find_map(|ext| leaf.strip_suffix(ext))
+        .unwrap_or(leaf);
+    (!stem.is_empty()).then_some(stem)
+}
+
+/// macOS: папка в ~/Library/Application Support по имени бандла.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
+fn mac_data_rel(stem: &str) -> Option<&'static str> {
+    Some(match stem {
         "Google Chrome" => "Google/Chrome",
         "Google Chrome Beta" => "Google/Chrome Beta",
         "Chromium" => "Chromium",
@@ -37,8 +49,33 @@ fn data_dir(app_stem: &str) -> Option<PathBuf> {
         "Arc" => "Arc/User Data",
         "Opera" => "com.operasoftware.Opera",
         _ => return None,
-    };
-    Some(dirs::home_dir()?.join("Library/Application Support").join(rel))
+    })
+}
+
+/// Windows: папка в %LOCALAPPDATA% по имени exe (chrome.exe — и у Google
+/// Chrome, и у Chromium: различаем по пути установки).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn windows_data_rel(stem: &str, app_path: &str) -> Option<&'static str> {
+    let path = app_path.to_ascii_lowercase();
+    Some(match stem.to_ascii_lowercase().as_str() {
+        "chrome" if path.contains("\\chromium\\") => "Chromium\\User Data",
+        "chrome" => "Google\\Chrome\\User Data",
+        "msedge" => "Microsoft\\Edge\\User Data",
+        "brave" => "BraveSoftware\\Brave-Browser\\User Data",
+        "browser" if path.contains("yandex") => "Yandex\\YandexBrowser\\User Data",
+        "vivaldi" => "Vivaldi\\User Data",
+        "comet" => "Perplexity\\Comet\\User Data",
+        _ => return None,
+    })
+}
+
+/// Папка данных браузера (профили Default, Profile N) по пути к нему.
+fn data_dir(app_path: &str) -> Option<PathBuf> {
+    let stem = app_stem(app_path)?;
+    #[cfg(not(target_os = "windows"))]
+    return Some(dirs::home_dir()?.join("Library/Application Support").join(mac_data_rel(stem)?));
+    #[cfg(target_os = "windows")]
+    return Some(dirs::data_local_dir()?.join(windows_data_rel(stem, app_path)?));
 }
 
 /// Имя расширения из манифеста; `__MSG_x__` — из _locales (ru → en → default).
@@ -121,14 +158,11 @@ fn scan(data: &Path) -> Vec<ProxyExtension> {
     out
 }
 
-/// Перехватчики прокси у браузера по пути к его .app. Кэш по mtime файла
-/// настроек: опрос статуса идёт раз в 5 секунд, а JSON профиля — мегабайты.
+/// Перехватчики прокси у браузера по пути к его .app / .exe. Кэш по mtime
+/// файла настроек: опрос статуса идёт раз в 5 секунд, а JSON профиля — мегабайты.
 pub fn proxy_extensions(app_path: &str) -> Vec<ProxyExtension> {
     static CACHE: Mutex<Option<HashMap<PathBuf, (SystemTime, Vec<ProxyExtension>)>>> = Mutex::new(None);
-    let Some(stem) = Path::new(app_path.trim_end_matches('/')).file_stem() else {
-        return Vec::new();
-    };
-    let Some(data) = data_dir(&stem.to_string_lossy()) else {
+    let Some(data) = data_dir(app_path) else {
         return Vec::new();
     };
     let mtime = std::fs::metadata(data.join("Default/Secure Preferences"))
@@ -149,6 +183,21 @@ pub fn proxy_extensions(app_path: &str) -> Vec<ProxyExtension> {
     Vec::new()
 }
 
+/// Адрес страницы расширения в браузере. id расширения Chromium — 32 буквы
+/// a–p; другое в командную строку и AppleScript не пускаем.
+pub fn extension_page_url(app_path: &str, ext_id: &str) -> Result<String, String> {
+    if ext_id.len() != 32 || !ext_id.chars().all(|c| ('a'..='p').contains(&c)) {
+        return Err("Некорректный идентификатор расширения".into());
+    }
+    let stem = app_stem(app_path).unwrap_or_default().to_ascii_lowercase();
+    let scheme = match stem.as_str() {
+        "yandex" | "browser" => "browser",
+        "msedge" | "microsoft edge" => "edge",
+        _ => "chrome",
+    };
+    Ok(format!("{scheme}://extensions/?id={ext_id}"))
+}
+
 /// Открыть в браузере страницу расширения, чтобы его отключить.
 #[cfg(not(target_os = "windows"))]
 pub fn open_extension_page(app_path: &str, ext_id: &str) -> Result<(), String> {
@@ -156,8 +205,7 @@ pub fn open_extension_page(app_path: &str, ext_id: &str) -> Result<(), String> {
         .file_stem()
         .map(|s| s.to_string_lossy().replace('"', ""))
         .ok_or("Браузер не найден")?;
-    let scheme = if app == "Yandex" { "browser" } else { "chrome" };
-    let url = format!("{scheme}://extensions/?id={ext_id}");
+    let url = extension_page_url(app_path, ext_id)?;
     // chrome:// нельзя открыть «как ссылку» снаружи — только новой вкладкой
     // через AppleScript самого браузера.
     let script = format!(
@@ -200,7 +248,31 @@ mod tests {
 
     #[test]
     fn unknown_app_has_no_data_dir() {
-        assert!(data_dir("Telegram").is_none());
-        assert!(data_dir("Google Chrome").is_some());
+        assert!(mac_data_rel("Telegram").is_none());
+        assert_eq!(app_stem("/Applications/Google Chrome.app/"), Some("Google Chrome"));
+        assert_eq!(mac_data_rel("Google Chrome"), Some("Google/Chrome"));
+    }
+
+    #[test]
+    fn windows_profiles_by_exe() {
+        let rel = |p: &str| windows_data_rel(app_stem(p).unwrap(), p);
+        assert_eq!(rel("C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"), Some("Google\\Chrome\\User Data"));
+        assert_eq!(rel("C:\\Users\\u\\AppData\\Local\\Chromium\\Application\\chrome.exe"), Some("Chromium\\User Data"));
+        assert_eq!(rel("C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"), Some("Microsoft\\Edge\\User Data"));
+        assert_eq!(rel("C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe"), Some("BraveSoftware\\Brave-Browser\\User Data"));
+        assert_eq!(rel("D:\\Telegram Desktop\\Telegram.exe"), None);
+    }
+
+    #[test]
+    fn extension_page_only_for_real_extension_ids() {
+        let id = "gcknhkkoolaabfmlnjonogaaifnjlfnp";
+        assert_eq!(
+            extension_page_url("C:\\x\\chrome.exe", id).unwrap(),
+            format!("chrome://extensions/?id={id}")
+        );
+        assert!(extension_page_url("C:\\x\\msedge.exe", id).unwrap().starts_with("edge://"));
+        assert!(extension_page_url("/Applications/Yandex.app", id).unwrap().starts_with("browser://"));
+        assert!(extension_page_url("C:\\x\\chrome.exe", "foxy").is_err());
+        assert!(extension_page_url("C:\\x\\chrome.exe", "gcknhkkoolaabfmlnjonogaaifnjlfn\"").is_err());
     }
 }

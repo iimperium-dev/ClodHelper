@@ -187,13 +187,15 @@ export interface AutostartState {
   needs_approval: boolean;
 }
 
-/** Найденная установленная программа (поиск при добавлении, macOS). */
+/** Найденная установленная программа (поиск при добавлении). */
 export interface FoundApp {
   name: string;
   path: string;
+  /** Иконка (data-URL PNG) сразу с ответом — Windows. */
+  icon?: string;
 }
 
-/** Живые соединения приложения: через мост / мимо моста (macOS). */
+/** Живые соединения приложения: через мост / мимо моста. */
 export interface AppTraffic {
   id: string;
   running: boolean;
@@ -201,9 +203,11 @@ export interface AppTraffic {
   direct: number;
   /** Браузер: включённое расширение, перехватившее прокси. */
   proxy_extension: { id: string; name: string } | null;
+  /** Telegram: чужой локальный прокси («127.0.0.1:1442»), мимо моста. */
+  other_proxy?: string | null;
 }
 
-/** Telegram через SOCKS-вход моста (macOS). */
+/** Telegram через SOCKS-вход моста. */
 export interface TelegramStatus {
   supported: boolean;
   app_path: string | null;
@@ -278,7 +282,7 @@ export interface PrivacyReport {
   error: string | null;
 }
 
-/** «Всегда через мост» у Chromium-браузера (политика macOS). */
+/** «Всегда через мост» у Chromium-браузера (политика macOS / Windows). */
 export interface BrowserPolicyStatus {
   configured: boolean;
   managed: boolean;
@@ -292,11 +296,12 @@ export interface BrowserPolicyStatus {
 export interface UpdateInfo {
   version: string;
   notes: string;
-  dmg_url: string;
+  /** Установщик для этой ОС (.dmg или -setup.exe). */
+  url: string;
   sums_url: string;
 }
 
-/** «Защита от утечек» (pf, macOS). */
+/** «Защита от утечек» (pf на macOS, брандмауэр Windows). */
 export interface LeakGuardStatus {
   enabled: boolean;
   /** "claude", "telegram" или "claude,telegram". */
