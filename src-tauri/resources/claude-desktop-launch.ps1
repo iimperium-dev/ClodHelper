@@ -194,6 +194,11 @@ function Start-ClaudeDesktopProcess {
     }
 }
 
+function Start-ClaudeDesktopPackage {
+    param([Parameter(Mandatory = $true)][string]$AppId)
+    Start-Process -FilePath 'explorer.exe' -ArgumentList ('shell:AppsFolder\' + $AppId)
+}
+
 function Invoke-ClaudeDesktopProxy {
     param([int]$Port)
     # Existing shortcuts from older Helper versions explicitly pass 8889.
@@ -213,7 +218,16 @@ function Invoke-ClaudeDesktopProxy {
         throw 'Штатный прокси Claude ещё не настроен или изменён другой программой. Откройте Clod Helper → Приложения → Claude Desktop → «Подключить».'
     }
     $startInfo = New-ClaudeDesktopStartInfo -Installation $installation -Port $Port
-    $process = Start-ClaudeDesktopProcess -StartInfo $startInfo -Port $Port
+    try {
+        $process = Start-ClaudeDesktopProcess -StartInfo $startInfo -Port $Port
+    } catch {
+        # Store-версия: на части систем Windows запрещает запускать exe из
+        # WindowsApps напрямую («Access is denied»). Прокси уже задан политикой
+        # (проверена выше) — запускаем штатно, как из меню «Пуск».
+        if (-not $installation.app_id) { throw }
+        Start-ClaudeDesktopPackage -AppId $installation.app_id
+        return
+    }
     if (-not $process) { throw 'Windows не удалось запустить Claude Desktop.' }
     try {
         if ($process.WaitForExit(750) -and $process.ExitCode -ne 0) {

@@ -229,6 +229,23 @@ public sealed class ClaudeHealthFixture : IDisposable {
     Assert-Equal $script:ObservedPort 8890 'Old shortcut migrates to the dedicated Claude port'
     Assert-Equal $rejected $true 'Missing policy prevents launching Claude with a partial configuration'
 
+    # Store: прямой запуск exe из WindowsApps запрещён («Access is denied») —
+    # запуск пакета штатно; у обычной установки ошибка не глотается.
+    function Test-ClaudeDesktopProxyPolicy { param([int]$Port) return $true }
+    function Test-ClaudeDesktopRunning { param($Installation) return $false }
+    function Start-ClaudeDesktopProcess { param($StartInfo, [int]$Port) throw 'Access is denied' }
+    function Start-ClaudeDesktopPackage { param([string]$AppId) $script:ActivatedAppId = $AppId }
+    function Resolve-ClaudeDesktopInstallation { [pscustomobject]@{ exe_path = 'C:\Program Files\WindowsApps\AnthropicPBC.Claude_1\app\claude.exe'; app_id = 'AnthropicPBC.Claude_test!Claude'; kind = 'msix' } }
+    $script:ActivatedAppId = $null
+    Invoke-ClaudeDesktopProxy -Port 8890
+    Assert-Equal $script:ActivatedAppId 'AnthropicPBC.Claude_test!Claude' 'Denied Store exe falls back to package activation'
+    function Resolve-ClaudeDesktopInstallation { [pscustomobject]@{ exe_path = 'C:\Users\u\AppData\Local\AnthropicClaude\claude.exe'; app_id = $null; kind = 'exe_flag' } }
+    $script:ActivatedAppId = $null
+    $denied = $false
+    try { Invoke-ClaudeDesktopProxy -Port 8890 } catch { $denied = $_.Exception.Message -match 'Access is denied' }
+    Assert-Equal $denied $true 'Classic install still reports the launch error'
+    Assert-Equal $script:ActivatedAppId $null 'Classic install is never activated as a package'
+
     Write-Output "All $script:Passed checks passed. No Desktop app was launched."
 } finally {
     $env:LOCALAPPDATA = $savedLocalAppData
