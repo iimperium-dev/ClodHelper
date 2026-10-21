@@ -1,6 +1,6 @@
 //! Обновление Clod Helper в один клик (без подписи Apple и Microsoft).
 //!
-//! Проверка: последний релиз GitHub (iimperium-dev/Clod-Helper-v1). Если он
+//! Проверка: последний релиз GitHub (iimperium-dev/ClodHelper). Если он
 //! новее — по кнопке скачиваем установщик своей ОС и сверяем SHA-256 с
 //! `SHA256SUMS.txt` того же релиза (CI публикует его рядом):
 //!   - macOS: `*_universal.dmg` — новая версия встаёт на место текущей,
@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
-const REPO: &str = "iimperium-dev/Clod-Helper-v1";
+const REPO: &str = "iimperium-dev/ClodHelper";
 
 /// Установщик этой ОС среди файлов релиза.
 #[cfg(not(target_os = "windows"))]

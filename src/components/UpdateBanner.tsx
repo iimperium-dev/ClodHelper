@@ -6,7 +6,7 @@ import { updateCheck, updateInstall } from "../lib/api";
 import type { UpdateInfo } from "../lib/types";
 
 const SESSION_KEY = "clod.update.checked";
-const RELEASES = "https://github.com/iimperium-dev/Clod-Helper-v1/releases/latest";
+const RELEASES = "https://github.com/iimperium-dev/ClodHelper/releases/latest";
 
 /** Одна проверка за сеанс приложения (GitHub API не дёргаем на каждый заход). */
 async function checkOnce(force: boolean): Promise<UpdateInfo | null> {
