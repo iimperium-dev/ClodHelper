@@ -16,9 +16,11 @@ tauri-build = { version = "2", features = [] }
 sha2 = "0.10"
 # image-png — смена иконки трея на лету (живой статус моста)
 # macos-private-api — прозрачный трей-попап на macOS (на Windows — no-op).
-tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
-tauri-plugin-opener = "2"
-tauri-plugin-shell = "2"
+# Версии крейтов Tauri — не ниже npm-пакетов (@tauri-apps/*): tauri build
+# падает, если major.minor расходятся, а Cargo.lock в git не хранится.
+tauri = { version = "2.12", features = ["tray-icon", "image-png", "macos-private-api"] }
+tauri-plugin-opener = "2.7.2"
+tauri-plugin-shell = "2.5"
 tauri-plugin-autostart = "2"
 # Системные тосты (мост упал/ожил, высокий пинг)
 tauri-plugin-notification = "2"
@@ -35,7 +37,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 sysinfo = "0.32"
 dirs = "5"
-tauri-plugin-dialog = "2.7.1"
+tauri-plugin-dialog = "2.8.3"
 
 # Windows: быстрые статусы без PowerShell — реестр (политики, правила
 # брандмауэра, пакеты Store), таблица TCP-соединений, иконки exe в PNG.
