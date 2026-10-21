@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import { Loader2 } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
 import { Toggle } from "../components/Toggle";
+import { UpdateBanner } from "../components/UpdateBanner";
 import { useStatus } from "../lib/status";
 import { autostartGet, autostartSet } from "../lib/api";
 import { fadeInUp, staggerContainer } from "../lib/motion";
@@ -93,6 +94,11 @@ export function Settings() {
             Разрешите в Системных настройках → Объекты входа
           </p>
         )}
+      </motion.section>
+
+      {/* ── Обновления ── */}
+      <motion.section variants={fadeInUp} className="mt-4">
+        <UpdateBanner />
       </motion.section>
 
       {/* ── О приложении ── */}

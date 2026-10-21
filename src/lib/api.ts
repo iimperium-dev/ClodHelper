@@ -8,6 +8,10 @@ import type {
   TelegramStatus,
   AppTraffic,
   FoundApp,
+  PrivacyReport,
+  UpdateInfo,
+  BrowserPolicyStatus,
+  LeakGuardStatus,
   AutostartState,
   BridgeTaskStatus,
   ClaudeProxyStatus,
@@ -327,4 +331,37 @@ export async function showMainWindow(): Promise<void> {
 /** Полный выход из приложения (мост продолжает работать — он отдельный процесс). */
 export async function quitApp(): Promise<void> {
   return invoke<void>("quit_app");
+}
+
+/** Проверка приватности: IP выхода/настоящий, DNS, кто идёт мимо моста. */
+export function privacyCheck(): Promise<PrivacyReport> {
+  return invoke<PrivacyReport>("privacy_check");
+}
+
+/** «Всегда через мост» у браузера; null — браузер без политик. */
+export function browserPolicyStatus(id: string): Promise<BrowserPolicyStatus | null> {
+  return invoke<BrowserPolicyStatus | null>("browser_policy_status", { id });
+}
+
+export function browserPolicySet(id: string, enable: boolean): Promise<BrowserPolicyStatus> {
+  return invoke<BrowserPolicyStatus>("browser_policy_set", { id, enable });
+}
+
+/** Новая версия Clod Helper (null — уже последняя). */
+export function updateCheck(): Promise<UpdateInfo | null> {
+  return invoke<UpdateInfo | null>("update_check");
+}
+
+/** Скачать, проверить SHA-256, поставить и перезапуститься. */
+export function updateInstall(info: UpdateInfo): Promise<void> {
+  return invoke<void>("update_install", { info });
+}
+
+export function leakGuardStatus(): Promise<LeakGuardStatus> {
+  return invoke<LeakGuardStatus>("leak_guard_status");
+}
+
+/** Пустой список — снять защиту. Mac попросит пароль. */
+export function leakGuardSet(services: string[]): Promise<LeakGuardStatus> {
+  return invoke<LeakGuardStatus>("leak_guard_set", { services });
 }

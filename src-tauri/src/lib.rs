@@ -20,6 +20,10 @@ mod tasks;
 mod telegram;
 mod traffic;
 mod browser_ext;
+mod browser_policy;
+mod leak_guard;
+mod privacy;
+mod updater;
 mod vscode_config;
 
 use tauri::{
@@ -83,6 +87,14 @@ pub fn run() {
             commands::telegram_status,
             commands::apps_traffic,
             commands::apps_open_extension,
+            commands::privacy_check,
+            commands::update_check,
+            commands::update_install,
+            commands::browser_policy_status,
+            commands::browser_policy_set,
+            commands::leak_guard_status,
+            commands::leak_guard_set,
+            commands::ui_log,
             commands::apps_search,
             commands::apps_icons,
             commands::apps_layout_get,
@@ -163,6 +175,15 @@ pub fn run() {
             // с автоперезапуском. Фоново — PS-вызовы медленные, UI не ждёт.
             std::thread::spawn(tasks::migrate_from_startup_vbs);
 
+            // Мост обновляется вместе с приложением: встроенный новее
+            // установленного — тихо заменить (перезапуск моста ~1 с).
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    commands::auto_update_bridge(handle).await;
+                });
+            }
+
             // macOS: агент переменных старого формата (`/bin/sh -c`, виден в
             // «Объектах входа» как безымянный «sh») → `clod-helper --apply-env`.
             #[cfg(not(target_os = "windows"))]
@@ -197,6 +218,8 @@ pub fn run() {
                 // (паттерн Tailscale/WARP).
                 WindowEvent::Focused(false) if window.label() == "tray" => {
                     let _ = window.hide();
+                    #[cfg(target_os = "macos")]
+                    mac_highlight_tray(window.app_handle(), false);
                 }
                 _ => {}
             }
@@ -237,10 +260,11 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<monitor::TrayHandles> {
             if let TrayIconEvent::Click {
                 button_state: MouseButtonState::Up,
                 position,
+                rect,
                 ..
             } = event
             {
-                show_tray_popup(tray.app_handle(), position.x, position.y);
+                show_tray_popup(tray.app_handle(), position.x, position.y, rect);
             }
         })
         .build(app)?;
@@ -251,7 +275,99 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<monitor::TrayHandles> {
 /// Показать трей-попап у точки клика (physical px). Позиция: над курсором,
 /// правый край примерно под иконкой (таскбар Windows обычно снизу справа);
 /// клампится в границы монитора — на случай таскбара сверху/сбоку.
-fn show_tray_popup(app: &tauri::AppHandle, cx: f64, cy: f64) {
+/// macOS: окно попапа — неактивирующая панель, как системные меню строки
+/// меню. Обычное окно при показе активирует приложение, а macOS при активации
+/// уводит пользователя в пространство с главным окном Clod Helper — поверх
+/// полноэкранного приложения меню не появлялось. Поэтому класс окна меняется
+/// на подкласс NSPanel (canBecomeKeyWindow = YES), стиль — nonactivatingPanel;
+/// плюс: на всех рабочих столах, поверх полноэкранных, уровень всплывающего меню.
+#[cfg(target_os = "macos")]
+fn mac_popup_window(win: &tauri::WebviewWindow) -> bool {
+    use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
+    use objc2::{msg_send, sel};
+    use std::sync::OnceLock;
+
+    let Ok(ptr) = win.ns_window() else { return false };
+    if ptr.is_null() {
+        return false;
+    }
+    const CAN_JOIN_ALL_SPACES: usize = 1 << 0;
+    const STATIONARY: usize = 1 << 4;
+    const FULL_SCREEN_AUXILIARY: usize = 1 << 8;
+    const NONACTIVATING_PANEL: usize = 1 << 7;
+    const POP_UP_MENU_LEVEL: isize = 101;
+
+    static PANEL: OnceLock<Option<&'static AnyClass>> = OnceLock::new();
+    let panel = *PANEL.get_or_init(|| {
+        extern "C-unwind" fn yes(_: &AnyObject, _: Sel) -> Bool {
+            Bool::YES
+        }
+        let sup = AnyClass::get(c"NSPanel")?;
+        let mut b = ClassBuilder::new(c"ClodHelperTrayPanel", sup)?;
+        // SAFETY: сигнатура совпадает с -[NSWindow canBecomeKeyWindow].
+        unsafe {
+            b.add_method(sel!(canBecomeKeyWindow), yes as extern "C-unwind" fn(_, _) -> _);
+        }
+        Some(b.register())
+    });
+    let Some(panel) = panel else { return false };
+
+    // SAFETY: ns_window() — живой NSWindow этого окна; вызов на главном потоке
+    // (обработчик событий трея исполняется в цикле событий). Подкласс NSPanel
+    // не добавляет ivar'ов, поэтому смена класса безопасна (так делает и
+    // tauri-nspanel); делегат окна (события фокуса) остаётся прежним.
+    unsafe {
+        let w = &*(ptr as *const AnyObject);
+        if !std::ptr::eq(w.class(), panel) {
+            AnyObject::set_class(w, panel);
+        }
+        let mask: usize = msg_send![w, styleMask];
+        let _: () = msg_send![w, setStyleMask: mask | NONACTIVATING_PANEL];
+        let _: () = msg_send![w, setHidesOnDeactivate: false];
+        let behavior = CAN_JOIN_ALL_SPACES | STATIONARY | FULL_SCREEN_AUXILIARY;
+        let _: () = msg_send![w, setCollectionBehavior: behavior];
+        let _: () = msg_send![w, setLevel: POP_UP_MENU_LEVEL];
+    }
+    true
+}
+
+/// macOS: значок в строке меню «нажат», пока открыт попап — как у системных
+/// меню; вместе с панелью под ним это читается как одно целое.
+#[cfg(target_os = "macos")]
+fn mac_highlight_tray(app: &tauri::AppHandle, on: bool) {
+    let Some(tray) = app.tray_by_id("main-tray") else { return };
+    let _ = tray.with_inner_tray_icon(move |t| {
+        let Some(item) = t.ns_status_item() else { return };
+        // SAFETY: живой NSStatusItem трея; вызов на главном потоке.
+        unsafe {
+            let item = &*(objc2::rc::Retained::as_ptr(&item) as *const objc2::runtime::AnyObject);
+            let button: *const objc2::runtime::AnyObject = objc2::msg_send![item, button];
+            if let Some(button) = button.as_ref() {
+                let _: () = objc2::msg_send![button, highlight: on];
+            }
+        }
+    });
+}
+
+/// macOS: показать панель поверх всего и сделать её ключевой — без
+/// активации приложения (никакого переключения рабочих столов).
+#[cfg(target_os = "macos")]
+fn mac_show_panel(win: &tauri::WebviewWindow) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    let Ok(ptr) = win.ns_window() else { return };
+    if ptr.is_null() {
+        return;
+    }
+    // SAFETY: см. mac_popup_window.
+    unsafe {
+        let w = &*(ptr as *const AnyObject);
+        let _: () = msg_send![w, orderFrontRegardless];
+        let _: () = msg_send![w, makeKeyWindow];
+    }
+}
+
+fn show_tray_popup(app: &tauri::AppHandle, cx: f64, cy: f64, icon: tauri::Rect) {
     // Окно объявлено в tauri.conf.json и создаётся при старте; если его нет
     // (создание упало) — создаём на лету, иначе клик по трею «молчит».
     let win = match app.get_webview_window("tray") {
@@ -311,20 +427,53 @@ fn show_tray_popup(app: &tauri::AppHandle, cx: f64, cy: f64) {
         (x, y)
     };
 
-    let size = win.outer_size().unwrap_or(tauri::PhysicalSize::new(332, 424));
-    let (x, y) = place(size.width as f64, size.height as f64);
-    let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
-    // Смешанные DPI: перенос окна на монитор с другим масштабом меняет его
-    // physical-размер — первый кламп считался по старому. Перемеряем и, если
-    // размер сменился, позиционируем ещё раз по фактическому.
-    if let Ok(after) = win.outer_size() {
-        if after.width != size.width || after.height != size.height {
-            let (x2, y2) = place(after.width as f64, after.height as f64);
-            let _ = win.set_position(tauri::PhysicalPosition::new(x2, y2));
+    // macOS: значок — в строке меню сверху. Попап висит прямо под ним, по
+    // центру значка, как системные меню; поверх всех рабочих столов и
+    // полноэкранных приложений (иначе macOS открывал его на «своём» столе).
+    #[cfg(target_os = "macos")]
+    {
+        let _ = (cx, cy, &place);
+        let panel = mac_popup_window(&win);
+        let scale = win.scale_factor().unwrap_or(2.0);
+        let ip: tauri::PhysicalPosition<f64> = icon.position.to_physical(scale);
+        let is: tauri::PhysicalSize<f64> = icon.size.to_physical(scale);
+        let w = win.outer_size().map(|s| s.width as f64).unwrap_or(332.0 * scale);
+        let mut x = ip.x + is.width / 2.0 - w / 2.0;
+        // Вплотную к строке меню: значок занимает её по высоте, а зазор в
+        // пару точек даёт сама панель (отступ сверху в TrayPopup).
+        let y = ip.y + is.height;
+        if let Ok(Some(m)) = win.monitor_from_point(ip.x, ip.y) {
+            let (mx, mw) = (m.position().x as f64, m.size().width as f64);
+            x = x.clamp(mx + 6.0 * scale, (mx + mw - w - 6.0 * scale).max(mx));
+        }
+        let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
+        if panel {
+            mac_show_panel(&win);
+            mac_highlight_tray(app, true);
+        } else {
+            let _ = win.show();
+            let _ = win.set_focus();
         }
     }
-    let _ = win.show();
-    let _ = win.set_focus();
+    // Windows: трей внизу — попап над курсором, клампится в монитор клика.
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = icon;
+        let size = win.outer_size().unwrap_or(tauri::PhysicalSize::new(332, 424));
+        let (x, y) = place(size.width as f64, size.height as f64);
+        let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
+        // Смешанные DPI: перенос окна на монитор с другим масштабом меняет его
+        // physical-размер — первый кламп считался по старому. Перемеряем и, если
+        // размер сменился, позиционируем ещё раз по фактическому.
+        if let Ok(after) = win.outer_size() {
+            if after.width != size.width || after.height != size.height {
+                let (x2, y2) = place(after.width as f64, after.height as f64);
+                let _ = win.set_position(tauri::PhysicalPosition::new(x2, y2));
+            }
+        }
+        let _ = win.show();
+        let _ = win.set_focus();
+    }
 }
 
 /// macOS: иконка в Dock — только пока видно главное окно (как у менюбар-

@@ -223,6 +223,9 @@ pub fn load_with_presets() -> Settings {
 /// independently of the installed apps and the user's saved proxy settings.
 fn merge_presets(profiles: &mut Vec<AppProfile>, presets: Vec<AppProfile>) -> bool {
     let mut changed = false;
+    let before = profiles.len();
+    profiles.retain(|p| !crate::apps::OBSOLETE_IDS.contains(&p.id.as_str()));
+    changed |= profiles.len() != before;
 
     for preset in presets {
         if let Some(existing) = profiles.iter_mut().find(|p| p.id == preset.id) {

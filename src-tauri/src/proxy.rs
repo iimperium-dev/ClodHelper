@@ -41,8 +41,15 @@ pub fn parse(input: &str) -> Result<ProxyConfig, String> {
     if trimmed.is_empty() {
         return Err("Пустая строка".into());
     }
-    let with_scheme = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+    // Мост ≥1.8 умеет HTTP, HTTPS (TLS до прокси) и SOCKS5.
+    let lower = trimmed.to_ascii_lowercase();
+    let with_scheme = if ["http://", "https://", "socks5://", "socks5h://"]
+        .iter()
+        .any(|p| lower.starts_with(p))
+    {
         trimmed.to_string()
+    } else if lower.contains("://") {
+        return Err("Поддерживаются прокси http://, https:// и socks5://".into());
     } else {
         format!("http://{trimmed}")
     };

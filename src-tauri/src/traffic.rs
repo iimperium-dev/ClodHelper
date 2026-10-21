@@ -39,22 +39,27 @@ fn traffic_names(p: &AppProfile) -> Vec<String> {
         "telegram" => vec!["Telegram".into()],
         _ => {
             // Своё приложение: имя бандла («WebStorm.app» → «WebStorm»).
+            // Своё приложение: имя бандла/файла («WebStorm.app» → «WebStorm»,
+            // «C:\\…\\chrome.exe» → «chrome») — разбор без учёта ОС.
             let from_path = p.exe_path.as_deref().and_then(|e| {
-                std::path::Path::new(e.trim_end_matches('/'))
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().to_string())
+                let leaf = e.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next()?;
+                let stem = leaf.strip_suffix(".app").or_else(|| leaf.strip_suffix(".exe")).unwrap_or(leaf);
+                (!stem.is_empty()).then(|| stem.to_string())
             });
             from_path.into_iter().collect()
         }
     }
 }
 
+/// Имя процесса совпадает с именем приложения или начинается с него и
+/// пробела/скобки («Claude Helper (Renderer)»). Без учёта регистра: на
+/// Windows процессы — «claude.exe», «chrome.exe».
 fn matches(command: &str, names: &[String]) -> bool {
+    let c = command.to_ascii_lowercase();
+    let c = c.strip_suffix(".exe").unwrap_or(&c);
     names.iter().any(|n| {
-        command == n
-            || command
-                .strip_prefix(n.as_str())
-                .is_some_and(|rest| rest.starts_with(' ') || rest.starts_with('('))
+        let n = n.to_ascii_lowercase();
+        c == n || c.strip_prefix(n.as_str()).is_some_and(|rest| rest.starts_with(' ') || rest.starts_with('('))
     })
 }
 
@@ -171,8 +176,55 @@ fn summarize(
         .collect()
 }
 
+/// Включена ли у браузера политика «всегда через мост» (кэш 30 с: статус —
+/// это запуск скрипта).
+#[cfg(not(target_os = "windows"))]
+fn browser_policy_on(app_path: &str) -> bool {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    static CACHE: Mutex<Option<HashMap<String, (Instant, bool)>>> = Mutex::new(None);
+    let Some(domain) = crate::browser_policy::policy_domain(app_path) else {
+        return false;
+    };
+    if let Ok(mut c) = CACHE.lock() {
+        let map = c.get_or_insert_with(HashMap::new);
+        if let Some((t, v)) = map.get(domain) {
+            if t.elapsed() < Duration::from_secs(30) {
+                return *v;
+            }
+        }
+        let on = crate::browser_policy::status(domain).is_ok_and(|s| s.configured);
+        map.insert(domain.to_string(), (Instant::now(), on));
+        return on;
+    }
+    false
+}
+
+/// Снимок не чаще раза в 3 с: страница «Приложения» и окно настроек могут
+/// спросить почти одновременно, а lsof по всем процессам — не бесплатный.
 #[cfg(not(target_os = "windows"))]
 pub fn snapshot(profiles: &[AppProfile]) -> Vec<AppTraffic> {
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    static CACHE: Mutex<Option<(Instant, Vec<String>, Vec<AppTraffic>)>> = Mutex::new(None);
+    let ids: Vec<String> = profiles.iter().map(|p| p.id.clone()).collect();
+    if let Ok(c) = CACHE.lock() {
+        if let Some((t, k, v)) = c.as_ref() {
+            if t.elapsed() < Duration::from_secs(3) && *k == ids {
+                return v.clone();
+            }
+        }
+    }
+    let fresh = snapshot_uncached(profiles);
+    if let Ok(mut c) = CACHE.lock() {
+        *c = Some((Instant::now(), ids, fresh.clone()));
+    }
+    fresh
+}
+
+#[cfg(not(target_os = "windows"))]
+fn snapshot_uncached(profiles: &[AppProfile]) -> Vec<AppTraffic> {
     use std::process::Command;
     // -c: только имя процесса (без пути), как его показывает lsof.
     let running: Vec<String> = Command::new("/bin/ps")
@@ -194,16 +246,79 @@ pub fn snapshot(profiles: &[AppProfile]) -> Vec<AppTraffic> {
     let mut t = summarize(profiles, &running, &parse_lsof(&out));
     for (traffic, p) in t.iter_mut().zip(profiles) {
         if let Some(path) = p.exe_path.as_deref() {
-            traffic.proxy_extension = crate::browser_ext::proxy_extensions(path).into_iter().next();
+            // Политика «всегда через мост» главнее расширений — тогда
+            // FoxyProxy и т.п. уже ничего не перехватывают.
+            if !browser_policy_on(path) {
+                traffic.proxy_extension = crate::browser_ext::proxy_extensions(path).into_iter().next();
+            }
         }
     }
     t
 }
 
-/// Windows: статус по соединениям пока не считаем (там есть killswitch).
+/// Windows: те же правила, источник — `netstat -ano` (соединения с PID) и
+/// `tasklist` (PID → имя образа). Кэш 3 с, как на macOS.
 #[cfg(target_os = "windows")]
-pub fn snapshot(_profiles: &[AppProfile]) -> Vec<AppTraffic> {
-    Vec::new()
+pub fn snapshot(profiles: &[AppProfile]) -> Vec<AppTraffic> {
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    static CACHE: Mutex<Option<(Instant, Vec<String>, Vec<AppTraffic>)>> = Mutex::new(None);
+    let ids: Vec<String> = profiles.iter().map(|p| p.id.clone()).collect();
+    if let Ok(c) = CACHE.lock() {
+        if let Some((t, k, v)) = c.as_ref() {
+            if t.elapsed() < Duration::from_secs(3) && *k == ids {
+                return v.clone();
+            }
+        }
+    }
+    let run = |cmd: &str, args: &[&str]| {
+        Command::new(cmd)
+            .args(args)
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default()
+    };
+    let names = parse_tasklist(&run("tasklist", &["/FO", "CSV", "/NH"]));
+    let running: Vec<String> = names.values().cloned().collect();
+    let conns: Vec<(String, String)> = parse_netstat(&run("netstat", &["-ano", "-p", "TCP"]))
+        .into_iter()
+        .filter_map(|(pid, remote)| names.get(&pid).map(|n| (n.clone(), remote)))
+        .collect();
+    let fresh = summarize(profiles, &running, &conns);
+    if let Ok(mut c) = CACHE.lock() {
+        *c = Some((Instant::now(), ids, fresh.clone()));
+    }
+    fresh
+}
+
+/// `tasklist /FO CSV /NH` → PID → имя образа.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn parse_tasklist(out: &str) -> std::collections::HashMap<u32, String> {
+    out.lines()
+        .filter_map(|l| {
+            let mut f = l.split("\",\"");
+            let name = f.next()?.trim_start_matches('"').to_string();
+            let pid = f.next()?.trim_matches('"').parse().ok()?;
+            Some((pid, name))
+        })
+        .collect()
+}
+
+/// `netstat -ano -p TCP` → (PID, удалённый адрес) для ESTABLISHED.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn parse_netstat(out: &str) -> Vec<(u32, String)> {
+    out.lines()
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split_whitespace().collect();
+            (f.len() == 5 && f[0] == "TCP" && f[3] == "ESTABLISHED")
+                .then(|| Some((f[4].parse().ok()?, f[2].to_string())))
+                .flatten()
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -237,6 +352,26 @@ mod tests {
         assert_eq!((t[0].via_bridge, t[0].direct), (1, 0));
         assert!(!is_dns_resolver("172.64.41.3:80"));
         assert!(!is_dns_resolver("104.18.32.47:443"));
+    }
+
+    #[test]
+    fn windows_netstat_and_tasklist() {
+        let tl = "\"Claude.exe\",\"4120\",\"Console\",\"1\",\"150 000 K\"\r\n\"chrome.exe\",\"77\",\"Console\",\"1\",\"9 K\"\r\n";
+        let ns = "\r\nActive Connections\r\n\r\n  Proto  Local Address          Foreign Address        State           PID\r\n  \
+                  TCP    127.0.0.1:50001        127.0.0.1:8890         ESTABLISHED     4120\r\n  \
+                  TCP    192.168.0.5:50002      142.250.1.1:443        ESTABLISHED     77\r\n  \
+                  TCP    0.0.0.0:135            0.0.0.0:0              LISTENING       900\r\n";
+        let names = parse_tasklist(tl);
+        assert_eq!(names.get(&4120).map(String::as_str), Some("Claude.exe"));
+        let conns: Vec<(String, String)> = parse_netstat(ns)
+            .into_iter()
+            .filter_map(|(pid, r)| names.get(&pid).map(|n| (n.clone(), r)))
+            .collect();
+        let profiles = vec![profile("claude-desktop", None), profile("custom-1", Some("C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"))];
+        let running: Vec<String> = names.values().cloned().collect();
+        let t = summarize(&profiles, &running, &conns);
+        assert_eq!((t[0].running, t[0].via_bridge, t[0].direct), (true, 1, 0));
+        assert_eq!((t[1].running, t[1].via_bridge, t[1].direct), (true, 0, 1));
     }
 
     #[test]

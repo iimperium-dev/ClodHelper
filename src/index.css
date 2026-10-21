@@ -146,10 +146,18 @@
     outline: none;
   }
 
-  /* Тонкий тёмный скроллбар. */
-  * {
-    scrollbar-width: thin;
-    scrollbar-color: oklch(40% 0.008 160 / 0.4) transparent;
+  /* Тонкий тёмный скроллбар. WebKit (macOS) и Chromium рисуют его по
+     ::-webkit-scrollbar ниже; стандартные свойства — только для остальных
+     движков: в новом WebKit scrollbar-width отключает ::-webkit-scrollbar,
+     и вместо тонкой полосы выходила системная светлая. */
+  :root {
+    color-scheme: dark;
+  }
+  @supports not selector(::-webkit-scrollbar) {
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: oklch(40% 0.008 160 / 0.4) transparent;
+    }
   }
   *::-webkit-scrollbar {
     width: 6px;
@@ -168,6 +176,29 @@
   }
   *::-webkit-scrollbar-corner {
     background: transparent;
+  }
+
+  /* Меню значка (macOS): раскрывается из значка вниз, как системные меню. */
+  .tray-drop {
+    transform-origin: top center;
+    animation: tray-drop 0.16s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  @keyframes tray-drop {
+    from {
+      opacity: 0;
+      transform: translateY(-6px) scale(0.97);
+    }
+  }
+
+  /* Появление раздела (App.tsx): въезд со стороны навигации, --view-dir = ±1. */
+  .view-enter {
+    animation: view-enter 0.18s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  @keyframes view-enter {
+    from {
+      opacity: 0;
+      transform: translateY(calc(14px * var(--view-dir, 1)));
+    }
   }
 
   /* Reduced motion: не «ноль», а мягче — убираем движение, оставляем opacity. */

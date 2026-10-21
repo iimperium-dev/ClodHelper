@@ -1,25 +1,20 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Activity,
   ExternalLink,
   Loader2,
   LogOut,
-  Network,
   Pause,
   Play,
   RotateCw,
-  Route,
 } from "lucide-react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Toggle } from "../components/Toggle";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { isMac } from "../lib/platform";
 import { StatusOrb } from "../components/StatusOrb";
 import { NumberTicker } from "../components/NumberTicker";
 import {
-  bridgeSetRouteMode,
-  clearGlobalProxyEnv,
   quitApp,
-  setGlobalProxyEnv,
   shimRestart,
   shimStart,
   shimStop,
@@ -37,12 +32,10 @@ import { cn } from "../lib/cn";
 */
 export function TrayPopup() {
   // orb — единое состояние из StatusProvider (учитывает и «нестабилен»).
-  const { status, health, refresh, env, setEnv, orb } = useStatus();
+  const { status, health, refresh, orb } = useStatus();
 
   const [busy, setBusy] = useState<"start" | "stop" | "restart" | "test" | null>(null);
   const [testResult, setTestResult] = useState<ShimTestResult | null>(null);
-  const [envBusy, setEnvBusy] = useState(false);
-  const [routeBusy, setRouteBusy] = useState(false);
   /** Ошибка последнего действия: без неё упавшая команда выглядит как
       «нажал и ничего не произошло». Гаснет сама. */
   const [actionError, setActionError] = useState<string | null>(null);
@@ -54,8 +47,6 @@ export function TrayPopup() {
   const loading = status === null;
   const running = status?.running ?? false;
 
-  const envOn = (env?.present ?? false) && (env?.points_to_bridge ?? false);
-  const smartOn = health?.mode === "smart";
 
   const act = async (
     kind: "start" | "stop" | "restart",
@@ -87,47 +78,54 @@ export function TrayPopup() {
     }
   };
 
-  const handleEnvToggle = async () => {
-    setEnvBusy(true);
-    setActionError(null);
-    try {
-      setEnv(envOn ? await clearGlobalProxyEnv() : await setGlobalProxyEnv());
-    } catch (e) {
-      failFlash(e);
-    } finally {
-      setEnvBusy(false);
-    }
-  };
-
-  const handleRouteToggle = async () => {
-    setRouteBusy(true);
-    setActionError(null);
-    try {
-      await bridgeSetRouteMode(smartOn ? "all" : "smart");
-      await refresh();
-    } catch (e) {
-      failFlash(e);
-    } finally {
-      setRouteBusy(false);
-    }
-  };
-
   const openApp = async () => {
     await showMainWindow();
     await getCurrentWindow().hide();
   };
 
+  // macOS: значок сверху — панель висит от верха окна, а окно ровно по её
+  // высоте (растёт вниз при результате теста). Без этого под панелью
+  // оставалась невидимая область окна, перехватывающая клики.
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = panelRef.current;
+    if (!isMac || !el) return;
+    // + отступы окна: 3 сверху (вплотную к строке меню) и 10 снизу под тень.
+    const fit = () => void getCurrentWindow().setSize(new LogicalSize(332, Math.ceil(el.offsetHeight) + 13)).catch(() => {});
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(el);
+    // Каждое открытие — панель «выезжает» из значка вниз (CSS .tray-drop).
+    const replay = () => {
+      el.classList.remove("tray-drop");
+      void el.offsetWidth;
+      el.classList.add("tray-drop");
+    };
+    const un = getCurrentWindow().onFocusChanged(({ payload }) => payload && replay());
+    return () => {
+      ro.disconnect();
+      void un.then((f) => f());
+    };
+  }, []);
+
   return (
-    // Панель хугает контент и прижата к низу окна (к трею): лишняя площадь
-    // окна прозрачна и невидима, при раскрытии результата теста панель растёт
-    // ВВЕРХ. Клик по прозрачной зоне — закрыть (как клик мимо).
+    // Windows: трей внизу — панель прижата к низу окна и растёт ВВЕРХ.
+    // Клик по прозрачной зоне — закрыть (как клик мимо).
     <div
-      className="flex h-screen w-screen flex-col justify-end p-2.5"
+      className={cn(
+        "flex h-screen w-screen flex-col",
+        isMac ? "justify-start px-2.5 pb-2.5 pt-[3px]" : "justify-end p-2.5",
+      )}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) void getCurrentWindow().hide();
       }}
     >
-      <div className="flex flex-col overflow-hidden rounded-lg border border-vb-border bg-vb-bg shadow-[0_16px_48px_rgba(0,0,0,0.55)]">
+      <div
+        ref={panelRef}
+        // shrink-0: высота панели — по содержимому, а не по окну. Иначе окно
+        // подгонялось под панель, панель под окно — и футер обрезался.
+        className="flex shrink-0 flex-col overflow-hidden rounded-xl border border-vb-border bg-vb-bg shadow-[0_8px_28px_rgba(0,0,0,0.5)]"
+      >
         {/* Статус */}
         <div className="flex items-center gap-3 px-4 pb-3 pt-4">
           <StatusOrb state={orb} size={11} />
@@ -137,9 +135,7 @@ export function TrayPopup() {
             </div>
             <div className="tnum text-[11px] text-vb-silver-faint">
               {running
-                ? `${formatUptime(health?.uptime_sec ?? status?.uptime_sec)}${
-                    health ? ` · ${health.mode === "smart" ? "smart" : "весь трафик"}` : ""
-                  }`
+                ? `работает ${formatUptime(health?.uptime_sec ?? status?.uptime_sec)}`
                 : "трафик не проксируется"}
             </div>
           </div>
@@ -235,56 +231,8 @@ export function TrayPopup() {
           </div>
         )}
 
-        {/* Тумблеры */}
-        <div className="mt-3 flex flex-col">
-          <button
-            type="button"
-            onClick={handleEnvToggle}
-            disabled={envBusy || env === null}
-            className="flex items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-vb-surface-2/50 disabled:opacity-60"
-          >
-            <Network className="h-4 w-4 shrink-0 text-vb-silver-dim" strokeWidth={1.9} />
-            <span className="min-w-0 flex-1 text-[13px] font-medium text-vb-silver">
-              Системное проксирование
-            </span>
-            {/* Toggle визуальный: клик обрабатывает вся строка (pointer-events-none
-                убирает двойное срабатывание клика по самому тумблеру). */}
-            <span className="pointer-events-none">
-              <Toggle
-                checked={envOn}
-                onChange={handleEnvToggle}
-                disabled={envBusy || env === null}
-                label="Системный прокси"
-              />
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={health ? handleRouteToggle : undefined}
-            disabled={routeBusy || !health}
-            className="flex items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-vb-surface-2/50 disabled:opacity-60"
-          >
-            <Route className="h-4 w-4 shrink-0 text-vb-silver-dim" strokeWidth={1.9} />
-            <span className="min-w-0 flex-1 text-[13px] font-medium text-vb-silver">
-              Умная маршрутизация
-            </span>
-            {health ? (
-              <span className="pointer-events-none">
-                <Toggle
-                  checked={smartOn}
-                  onChange={handleRouteToggle}
-                  disabled={routeBusy}
-                  label="Умная маршрутизация"
-                />
-              </span>
-            ) : (
-              <span className="text-[11px] text-vb-silver-faint">н/д</span>
-            )}
-          </button>
-        </div>
-
         {/* Тест */}
-        <div className="px-4 pt-1.5">
+        <div className="px-4 pt-3">
           <button
             type="button"
             onClick={handleTest}

@@ -62,10 +62,13 @@ export function IconWithGear({
   show,
   size,
   onSettings,
+  name,
   children,
 }: {
   show: boolean;
   size: number;
+  /** Для подписи кнопки: «Настройки — Telegram». */
+  name: string;
   onSettings?: () => void;
   children: React.ReactNode;
 }) {
@@ -87,7 +90,7 @@ export function IconWithGear({
               e.stopPropagation();
               onSettings();
             }}
-            aria-label="Настройки приложения"
+            aria-label={`Настройки — ${name}`}
             title="Настройки"
             style={{ width: g, height: g, left: (size - g) / 2, bottom: -g / 2 }}
             className="absolute z-10 flex items-center justify-center rounded-full border border-vb-border bg-vb-surface text-vb-silver shadow-[0_4px_10px_rgba(0,0,0,0.45)] transition-colors hover:border-vb-emerald/60 hover:text-vb-emerald"
@@ -131,7 +134,7 @@ export function AppTile({ name, icon, installed, status, editing, onRemove, onSe
       onMouseLeave={() => setHover(false)}
     >
       <div className="relative">
-        <IconWithGear show={hover && !editing} size={52} onSettings={onSettings}>
+        <IconWithGear show={hover && !editing} size={52} onSettings={onSettings} name={name}>
           <AppIcon name={name} icon={icon} size={52} dim={!installed} />
         </IconWithGear>
         {dot && !editing && (

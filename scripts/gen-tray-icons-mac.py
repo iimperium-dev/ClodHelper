@@ -3,9 +3,10 @@
 
   tray-mac-template.png      — норма: чёрный + альфа, isTemplate (macOS сама
                                красит под светлую/тёмную строку меню);
-  tray-mac-{warn,down}-{light,dark}.png — тревога: «C» в цвет текста строки
-                               меню (light — тёмная «C» для светлой строки,
-                               dark — светлая для тёмной) + цветная точка.
+  tray-mac-{ok,warn,down}-{light,dark}.png — состояние: «C» в цвет текста
+                               строки меню (light — тёмная «C» для светлой
+                               строки, dark — светлая для тёмной) + цветная
+                               точка: зелёная / жёлтая / красная.
 
 Цветную точку нельзя держать в template-картинке: macOS перекрашивает её
 целиком. Поэтому тревожные состояния — обычные картинки в двух вариантах.
@@ -105,7 +106,11 @@ def main():
     c_alert = coverage(lambda x, y: in_c(x, y, DOT_R_ALERT))
     dot = coverage(lambda x, y: in_dot(x, y, DOT_R_ALERT))
     ink = {"light": (0, 0, 0, 0.85), "dark": (255, 255, 255, 0.92)}
-    colors = {"warn": (233, 162, 59, 1.0), "down": (229, 72, 77, 1.0)}
+    colors = {
+        "ok": (52, 199, 89, 1.0),      # зелёный — мост работает
+        "warn": (233, 162, 59, 1.0),   # жёлтый — прокси шалит / высокий пинг
+        "down": (229, 72, 77, 1.0),    # красный — мост не работает
+    }
     for state, color in colors.items():
         for bar, c_color in ink.items():
             path = os.path.join(OUT, f"tray-mac-{state}-{bar}.png")

@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use tauri::tray::TrayIcon;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 use tauri_plugin_notification::NotificationExt;
 
 use crate::shim::{self, LISTEN_PORT};
@@ -32,12 +32,18 @@ const TRAY_WARN: &[u8] = include_bytes!("../icons/tray-warn.png");
 #[cfg(not(target_os = "macos"))]
 const TRAY_DOWN: &[u8] = include_bytes!("../icons/tray-down.png");
 
-/// macOS: норма — template (macOS сама красит под светлую/тёмную строку
-/// меню); тревога — «C» в цвет строки меню + цветная точка. Template-картинку
-/// с цветной точкой сделать нельзя: macOS перекрашивает её целиком.
+/// macOS: «C» в цвет строки меню + цветная точка состояния (зелёная /
+/// жёлтая / красная). Template-картинку с цветной точкой сделать нельзя:
+/// macOS перекрашивает её целиком — поэтому по два варианта на тему.
+/// Template — только первая картинка до первого замера.
 /// Генератор: scripts/gen-tray-icons-mac.py.
 #[cfg(target_os = "macos")]
 pub const MAC_TEMPLATE: &[u8] = include_bytes!("../icons/tray-mac-template.png");
+#[cfg(target_os = "macos")]
+const MAC_OK: [&[u8]; 2] = [
+    include_bytes!("../icons/tray-mac-ok-light.png"),
+    include_bytes!("../icons/tray-mac-ok-dark.png"),
+];
 #[cfg(target_os = "macos")]
 const MAC_WARN: [&[u8]; 2] = [
     include_bytes!("../icons/tray-mac-warn-light.png"),
@@ -66,7 +72,7 @@ fn tray_icon_for(state: BridgeState) -> (&'static [u8], bool, u8) {
     {
         let dark = usize::from(menu_bar_dark());
         match state {
-            BridgeState::Ok => (MAC_TEMPLATE, true, 0),
+            BridgeState::Ok => (MAC_OK[dark], false, 5 + dark as u8),
             BridgeState::Warn => (MAC_WARN[dark], false, 1 + dark as u8),
             BridgeState::Down => (MAC_DOWN[dark], false, 3 + dark as u8),
         }
@@ -170,9 +176,12 @@ fn run(app: AppHandle, h: TrayHandles) {
             && skip_healthz_until.map(|t| Instant::now() > t).unwrap_or(true)
         {
             match fetch_healthz() {
-                Some(x) => {
+                Some((x, raw)) => {
                     healthz_fail_streak = 0;
                     skip_healthz_until = None;
+                    // Один опрос моста на всё приложение: окна получают
+                    // свежий /healthz событием и сами мост не опрашивают.
+                    let _ = app.emit("bridge-health", raw);
                     Some(x)
                 }
                 None => {
@@ -226,10 +235,13 @@ fn run(app: AppHandle, h: TrayHandles) {
         // (на macOS ещё и при смене темы, пока иконка тревожная)
         let (bytes, template, variant) = tray_icon_for(state);
         if prev_icon != Some(variant) {
-            let _ = h.tray.set_icon_as_template(template);
+            // Порядок важен: set_icon создаёт новую картинку БЕЗ флага template
+            // (tray-icon), флаг ставится уже на неё. Наоборот — чёрная «C»
+            // на тёмной строке меню, то есть невидимая иконка.
             if let Ok(img) = tauri::image::Image::from_bytes(bytes) {
                 let _ = h.tray.set_icon(Some(img));
             }
+            let _ = h.tray.set_icon_as_template(template);
             prev_icon = Some(variant);
         }
 
@@ -332,7 +344,7 @@ fn port_listening() -> bool {
 }
 
 /// GET /healthz мини-клиентом на std::net (монитор — обычный поток, не tokio).
-fn fetch_healthz() -> Option<Health> {
+fn fetch_healthz() -> Option<(Health, serde_json::Value)> {
     let addr: SocketAddr = format!("127.0.0.1:{LISTEN_PORT}").parse().ok()?;
     let mut s = TcpStream::connect_timeout(&addr, Duration::from_millis(800)).ok()?;
     s.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
@@ -343,7 +355,9 @@ fn fetch_healthz() -> Option<Health> {
     let _ = s.read_to_end(&mut buf);
     let text = String::from_utf8_lossy(&buf);
     let body = text.split("\r\n\r\n").nth(1)?;
-    serde_json::from_str::<Health>(body.trim()).ok()
+    let raw: serde_json::Value = serde_json::from_str(body.trim()).ok()?;
+    let h = serde_json::from_value::<Health>(raw.clone()).ok()?;
+    Some((h, raw))
 }
 
 /// host:port из masked-URL upstream'а ("http://user:****@host:port" | "http://host:port").

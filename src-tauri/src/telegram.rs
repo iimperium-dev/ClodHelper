@@ -48,9 +48,24 @@ pub fn status() -> TelegramStatus {
     }
 }
 
+/// Windows: Telegram Desktop, соединения — из общего снимка (netstat).
 #[cfg(target_os = "windows")]
 pub fn status() -> TelegramStatus {
-    TelegramStatus::default()
+    let app_path = crate::apps::find_telegram_exe().map(|p| p.to_string_lossy().to_string());
+    let profile = crate::settings::load_with_presets()
+        .app_profiles
+        .into_iter()
+        .filter(|p| p.id == crate::apps::TELEGRAM_ID)
+        .collect::<Vec<_>>();
+    let t = crate::traffic::snapshot(&profile).into_iter().next().unwrap_or_default();
+    TelegramStatus {
+        supported: app_path.is_some(),
+        app_path,
+        running: t.running,
+        socks_ready: socks_listening(),
+        via_bridge: t.via_bridge,
+        direct: t.direct,
+    }
 }
 
 /// Открыть в Telegram окно «Добавить прокси» с нашим SOCKS-входом.
@@ -64,6 +79,15 @@ pub fn setup() -> Result<TelegramStatus, String> {
         return Err(
             "Мост ещё не умеет SOCKS для Telegram — нажмите «Обновить мост» в Обзоре.".into(),
         );
+    }
+    // Защита от утечек по умолчанию: Telegram не пойдёт мимо прокси. Отказ
+    // от пароля не мешает подключению — защиту можно включить позже.
+    if let Ok(cur) = crate::leak_guard::status() {
+        if let Ok(list) = crate::leak_guard::with_service(&cur, "telegram", true) {
+            if !cur.enabled || cur.services != list {
+                let _ = crate::leak_guard::set(&list);
+            }
+        }
     }
     let url = format!("tg://socks?server=127.0.0.1&port={SOCKS_PORT}");
     let ok = std::process::Command::new("/usr/bin/open")
@@ -79,7 +103,6 @@ pub fn setup() -> Result<TelegramStatus, String> {
 }
 
 /// Запомнить, что окно прокси Telegram уже показывали.
-#[cfg(not(target_os = "windows"))]
 fn mark_prompted() {
     let mut s = crate::settings::load();
     if !s.telegram_prompted {
@@ -92,7 +115,6 @@ fn mark_prompted() {
 /// при готовом SOCKS-входе, сами открываем его окно «Добавить прокси». Telegram
 /// не позволяет менять прокси снаружи — нажатие «Подключить» остаётся за
 /// пользователем, но искать настройку ему не нужно. Дальше не навязываемся.
-#[cfg(not(target_os = "windows"))]
 pub fn auto_prompt_once() {
     if crate::settings::load().telegram_prompted {
         return;
@@ -107,12 +129,25 @@ pub fn auto_prompt_once() {
     }
 }
 
-#[cfg(target_os = "windows")]
-pub fn auto_prompt_once() {}
-
+/// Windows: окно «Добавить прокси» Telegram Desktop по той же ссылке.
 #[cfg(target_os = "windows")]
 pub fn setup() -> Result<TelegramStatus, String> {
-    Err("Настройка Telegram пока есть только в версии для macOS".into())
+    use std::os::windows::process::CommandExt;
+    let st = status();
+    if st.app_path.is_none() {
+        return Err("Telegram Desktop не найден. Установите его и повторите.".into());
+    }
+    if !st.socks_ready {
+        return Err("Мост ещё не умеет SOCKS для Telegram — обновите мост в Обзоре.".into());
+    }
+    let url = format!("tg://socks?server=127.0.0.1&port={SOCKS_PORT}");
+    std::process::Command::new("cmd")
+        .args(["/C", "start", "", &url])
+        .creation_flags(0x0800_0000)
+        .status()
+        .map_err(|e| format!("Не удалось открыть Telegram: {e}"))?;
+    mark_prompted();
+    Ok(st)
 }
 
 #[cfg_attr(target_os = "windows", allow(dead_code))]

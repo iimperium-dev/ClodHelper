@@ -164,17 +164,24 @@ fn elevate(action: &str) -> Result<ClaudePolicyStatus, String> {
     // автовосстановления (LaunchDaemon). Пишет root в root-owned каталог:
     // пользовательский процесс подменить копию не может.
     let shell = if action == "Enable" {
+        // В том же окне пароля — защита от утечек для Claude (по умолчанию):
+        // из России Claude напрямую не работает, прямой выход только выдаёт IP.
+        let guard = crate::leak_guard::status()
+            .ok()
+            .and_then(|st| crate::leak_guard::with_service(&st, "claude", true).ok())
+            .map(|list| format!("{}; ", crate::leak_guard::shell_enable(&list)))
+            .unwrap_or_default();
         format!(
             "/bin/mkdir -p '{dir}' && /usr/sbin/chown root:wheel '{dir}' && /bin/chmod 755 '{dir}' && \
              /bin/echo {encoded} | /usr/bin/base64 -D > '{dir}/claude-proxy-policy.sh'; \
-             /bin/echo {encoded} | /usr/bin/base64 -D | /bin/sh -s -- {action}; exit 0",
+             {guard}/bin/echo {encoded} | /usr/bin/base64 -D | /bin/sh -s -- {action}; exit 0",
             dir = "/Library/Application Support/ClodHelper",
         )
     } else {
         format!("/bin/echo {encoded} | /usr/bin/base64 -D | /bin/sh -s -- {action}; exit 0")
     };
     let apple = format!(
-        "do shell script \"{shell}\" with prompt \"Clod Helper настраивает прокси для Claude Desktop.\" with administrator privileges"
+        "do shell script \"{shell}\" with prompt \"Clod Helper подключает Claude через мост и включает защиту от утечек.\" with administrator privileges"
     );
     let output = Command::new("/usr/bin/osascript")
         .args(["-e", &apple])

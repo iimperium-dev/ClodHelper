@@ -1,6 +1,6 @@
 [package]
 name = "clod-bridge"
-version = "1.7.0"
+version = "1.8.1"
 edition = "2021"
 description = "Локальный HTTP-прокси-мост: no-auth localhost → auth upstream, с domain-routing и failover"
 
@@ -11,6 +11,9 @@ url = "2"
 base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "0.26"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

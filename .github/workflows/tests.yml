@@ -1,0 +1,54 @@
+name: Tests
+
+# Быстрая проверка на каждый push и PR: тесты моста и приложения (Rust),
+# типы TypeScript и автотесты интерфейса на стенде (Playwright, снимки —
+# в артефактах, чтобы видеть, как выглядит каждый экран).
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            bridge/target/
+            src-tauri/target/
+          key: tests-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+      - name: Bridge tests
+        run: cargo test --manifest-path bridge/Cargo.toml
+      # Бинарник моста не в git; для тестов Tauri достаточно, чтобы ресурс был.
+      - name: App tests
+        run: |
+          touch src-tauri/resources/clod-bridge
+          cargo test --manifest-path src-tauri/Cargo.toml
+
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: TypeScript
+        run: npx tsc --noEmit
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: UI tests
+        run: npx playwright test
+      - name: Screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-screenshots
+          path: test-results/
+          retention-days: 14

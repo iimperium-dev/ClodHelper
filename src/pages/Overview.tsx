@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  AlertCircle,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
   Loader2,
@@ -9,23 +11,21 @@ import {
   RotateCw,
 } from "lucide-react";
 import { Button } from "../components/Button";
-import { Toggle } from "../components/Toggle";
 import { StatusOrb } from "../components/StatusOrb";
 import { NumberTicker } from "../components/NumberTicker";
 import { Sparkline } from "../components/Sparkline";
+import { UpdateBanner } from "../components/UpdateBanner";
 import {
-  bridgeSetRouteMode,
   bridgeTaskRegister,
   bridgeUpdate,
-  clearGlobalProxyEnv,
-  setGlobalProxyEnv,
   shimRestart,
   shimStart,
   shimStop,
   shimTest,
+  privacyCheck,
 } from "../lib/api";
 import { formatUptime, useStatus } from "../lib/status";
-import type { ShimTestResult } from "../lib/types";
+import type { PrivacyReport, ShimTestResult } from "../lib/types";
 import { fadeInUp, staggerContainer } from "../lib/motion";
 import { cn } from "../lib/cn";
 
@@ -98,7 +98,6 @@ export function Overview({ onOpenProxies }: Props) {
     health,
     healthErr,
     task,
-    env,
     exeLegacy,
     versions,
     quality,
@@ -106,13 +105,11 @@ export function Overview({ onOpenProxies }: Props) {
     history,
     poolPing,
     refresh,
-    setEnv,
   } = useStatus();
 
   const [busy, setBusy] = useState<"start" | "stop" | "restart" | "test" | null>(null);
   const [testResult, setTestResult] = useState<ShimTestResult | null>(null);
-  const [envBusy, setEnvBusy] = useState(false);
-  const [routeBusy, setRouteBusy] = useState(false);
+  const [report, setReport] = useState<PrivacyReport | null>(null);
   const [taskBusy, setTaskBusy] = useState(false);
   const [updatingBridge, setUpdatingBridge] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
@@ -126,9 +123,6 @@ export function Overview({ onOpenProxies }: Props) {
   const shakyTotal = shaky.reduce((a, q) => a + q.recentOk + q.recentFail, 0);
   const bridgeOutdated = running && (versions?.outdated ?? false);
 
-  const envOn = (env?.present ?? false) && (env?.points_to_bridge ?? false);
-  const envForeign = (env?.present ?? false) && !(env?.points_to_bridge ?? false);
-  const smartOn = health?.mode === "smart";
   const oldBridge =
     !health && (exeLegacy || (healthErr !== null && healthErr.includes("разобрать")));
 
@@ -154,41 +148,20 @@ export function Overview({ onOpenProxies }: Props) {
     }
   };
 
+  /** «Проверить»: связь через мост + проверка приватности (IP, DNS, утечки). */
   const handleTest = async () => {
     setBusy("test");
     setTestResult(null);
+    setReport(null);
     setActionError(null);
     try {
-      setTestResult(await shimTest());
+      const [t, r] = await Promise.all([shimTest(), privacyCheck().catch(() => null)]);
+      setTestResult(t);
+      setReport(r);
     } catch (e) {
       setActionError(String(e));
     } finally {
       setBusy(null);
-    }
-  };
-
-  const handleEnvToggle = async () => {
-    setEnvBusy(true);
-    setActionError(null);
-    try {
-      setEnv(envOn ? await clearGlobalProxyEnv() : await setGlobalProxyEnv());
-    } catch (e) {
-      setActionError(String(e));
-    } finally {
-      setEnvBusy(false);
-    }
-  };
-
-  const handleRouteToggle = async () => {
-    setRouteBusy(true);
-    setActionError(null);
-    try {
-      await bridgeSetRouteMode(smartOn ? "all" : "smart");
-      await refresh();
-    } catch (e) {
-      setActionError(String(e));
-    } finally {
-      setRouteBusy(false);
     }
   };
 
@@ -226,7 +199,8 @@ export function Overview({ onOpenProxies }: Props) {
       ? chipLabel(health.upstreams[0].url).split(":")[0]
       : null;
   const primaryState = quality[0]?.state ?? (health?.upstreams[0]?.healthy === false ? "down" : "ok");
-  const exitIp = testResult?.ok && testResult.external_ip ? testResult.external_ip : primaryHost;
+  const exitIp =
+    report?.exit?.ip ?? (testResult?.ok && testResult.external_ip ? testResult.external_ip : primaryHost);
   const exitMs = testResult?.ok ? testResult.latency_ms : (poolPing[0]?.ms ?? undefined);
   const spare = Math.max(0, (health?.upstreams.length ?? poolPing.length) - 1);
 
@@ -323,7 +297,7 @@ export function Overview({ onOpenProxies }: Props) {
               />
               <span className="min-w-0">
                 <span className="block text-[11px] text-vb-silver-faint">
-                  Выход в интернет{spare > 0 && ` · +${spare} запасн.`}
+                  Выход через мост{spare > 0 && ` · +${spare} запасн.`}
                 </span>
                 <span className="flex items-baseline gap-2">
                   <span className="truncate font-mono text-[14px] text-vb-fg">
@@ -343,7 +317,21 @@ export function Overview({ onOpenProxies }: Props) {
               Проверить
             </Button>
           </div>
-          {(testResult?.error || shaky.length > 0) && (
+          {/* Проверка приватности — вердикт по пунктам */}
+          <AnimatePresence>
+            {report && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: "auto" }}
+                exit={{ opacity: 0, height: 0 }}
+                transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+                className="overflow-hidden border-t border-vb-border/70"
+              >
+                <PrivacyRows report={report} />
+              </motion.div>
+            )}
+          </AnimatePresence>
+          {!report && (testResult?.error || shaky.length > 0) && (
             <p
               className={cn(
                 "border-t border-vb-border/70 px-4 py-2.5 text-[12px] leading-snug",
@@ -442,53 +430,13 @@ export function Overview({ onOpenProxies }: Props) {
         </motion.section>
       )}
 
-      {/* ── Переключатели: смысл — прямо в подписи, без «?» ── */}
-      <motion.section variants={fadeInUp} className="surface-card mt-5 divide-y divide-vb-border/70">
-        <div className="flex items-center justify-between gap-4 px-4 py-3.5">
-          <div className="min-w-0">
-            <div className="text-[14px] font-medium text-vb-fg">Все программы через мост</div>
-            <div className="text-[12px] text-vb-silver-faint">
-              Терминал, VS Code, Claude Code — без настройки
-            </div>
-          </div>
-          {env === null ? (
-            <Loader2 className="h-4 w-4 shrink-0 animate-spin text-vb-silver-dim" />
-          ) : (
-            <Toggle checked={envOn} onChange={handleEnvToggle} disabled={envBusy} label="Все программы через мост" />
-          )}
-        </div>
-        {envForeign && (
-          <p className="px-4 py-2.5 text-[12px] text-vb-warn">
-            Сейчас в системе задан чужой прокси — включение заменит его на мост.
-          </p>
-        )}
-        <div className="flex items-center justify-between gap-4 px-4 py-3.5">
-          <div className="min-w-0">
-            <div className="text-[14px] font-medium text-vb-fg">Умная маршрутизация</div>
-            <div className="text-[12px] text-vb-silver-faint">
-              Через прокси только AI, остальное напрямую
-            </div>
-          </div>
-          {health ? (
-            <Toggle checked={smartOn} onChange={handleRouteToggle} disabled={routeBusy} label="Умная маршрутизация" />
-          ) : running && oldBridge ? (
-            <Button variant="secondary" size="sm" onClick={handleBridgeUpdate} disabled={updatingBridge}>
-              {updatingBridge && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              Обновить мост
-            </Button>
-          ) : running ? (
-            <Loader2 className="h-4 w-4 shrink-0 animate-spin text-vb-silver-dim" />
-          ) : null}
-        </div>
-      </motion.section>
-
       {/* ── Требует внимания (только когда есть что сделать) ── */}
-      {(bridgeOutdated || (task !== null && !task.registered)) && (
+      {(bridgeOutdated || (running && oldBridge) || (task !== null && !task.registered)) && (
         <motion.section variants={fadeInUp} className="mt-3 space-y-2">
-          {bridgeOutdated && (
+          {(bridgeOutdated || (running && oldBridge)) && (
             <div className="flex items-center justify-between gap-3 rounded-lg border border-vb-border bg-vb-surface-2/60 px-4 py-2.5">
               <p className="text-[12px] text-vb-silver">
-                Новый мост {versions?.bundled} — стабильнее при сбоях прокси
+                Новый мост{versions?.bundled ? ` ${versions.bundled}` : ""} — стабильнее при сбоях прокси
               </p>
               <Button variant="secondary" size="sm" onClick={handleBridgeUpdate} disabled={updatingBridge}>
                 {updatingBridge && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
@@ -509,11 +457,72 @@ export function Overview({ onOpenProxies }: Props) {
         </motion.section>
       )}
 
+      <UpdateBanner compact />
+
       {health && (
         <p className="mt-4 text-center font-mono text-[10px] text-vb-silver-faint/70">
           мост {health.version}
         </p>
       )}
     </motion.div>
+  );
+}
+
+/** Вердикт проверки приватности: одна строка на пункт, ✓ или ⚠. */
+function PrivacyRows({ report }: { report: PrivacyReport }) {
+  const rows: { ok: boolean; title: string; sub?: string }[] = [];
+  if (report.error && !report.exit) {
+    rows.push({ ok: false, title: "Проверка не удалась", sub: report.error });
+  } else {
+    rows.push({
+      ok: report.ip_hidden,
+      title: report.ip_hidden ? "Через мост ваш IP скрыт" : "Через мост виден ваш настоящий IP",
+      sub: report.exit
+        ? `Видят ${report.exit.ip}${report.exit.country ? ` · ${report.exit.country}` : ""}${
+            report.home ? ` — настоящий ${report.home.ip}` : ""
+          }`
+        : undefined,
+    });
+    const dnsOrg = [...new Set(report.dns.map((d) => d.org).filter(Boolean))].slice(0, 2).join(", ");
+    rows.push({
+      ok: !report.dns_leak,
+      title: report.dns_leak ? "DNS выдаёт вашего провайдера" : "DNS не выдаёт провайдера",
+      sub: dnsOrg || undefined,
+    });
+  }
+  rows.push({
+    ok: report.leaking_apps.length === 0,
+    title:
+      report.leaking_apps.length === 0
+        ? "Приложения из вашего списка — через мост"
+        : `Мимо моста: ${report.leaking_apps.join(", ")}`,
+    // Мост — не VPN: остальные программы компьютера ходят напрямую.
+    sub:
+      report.leaking_apps.length > 0
+        ? "Подробности — в «Приложениях»"
+        : "Остальные программы работают напрямую, как обычно",
+  });
+  const allOk = rows.every((r) => r.ok);
+  return (
+    <div className="px-4 py-3">
+      <div className={cn("mb-2 text-[13px] font-medium", allOk ? "text-vb-emerald" : "text-vb-warn")}>
+        {allOk ? "Всё чисто" : "Есть что поправить"}
+      </div>
+      <ul className="space-y-1.5">
+        {rows.map((r) => (
+          <li key={r.title} className="flex items-start gap-2">
+            {r.ok ? (
+              <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-vb-emerald" />
+            ) : (
+              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-vb-warn" />
+            )}
+            <span className="min-w-0">
+              <span className="block text-[12px] text-vb-fg">{r.title}</span>
+              {r.sub && <span className="block truncate text-[11px] text-vb-silver-faint">{r.sub}</span>}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }

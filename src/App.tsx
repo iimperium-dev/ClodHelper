@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
 import { Titlebar } from "./components/Titlebar";
 import { Sidebar, NAV_ORDER } from "./components/Sidebar";
 import { WizardShell } from "./components/WizardShell";
@@ -19,24 +18,13 @@ import type { AppView, WizardInstallResult, WizardStep } from "./lib/types";
 const IS_TRAY = new URLSearchParams(window.location.search).get("view") === "tray";
 
 /*
-  Direction-aware переход между разделами: контент уезжает в сторону,
-  противоположную движению по навигации. Тайминги короткие (exit 100ms +
-  enter 160ms): mode="wait" играет их ПОСЛЕДОВАТЕЛЬНО, длинные тайминги
-  ощущались как «долго листается».
+  Переход между разделами — CSS-анимация появления (index.css, .view-enter):
+  раздел въезжает со стороны движения по навигации. Раньше это делал
+  framer-motion (AnimatePresence mode="wait"), и после долгой работы окна
+  контейнер раздела изредка застревал в начальном состоянии opacity 0 —
+  «Обзор» и «Прокси» выглядели чёрными (видно в ui.log). CSS-анимация
+  застрять не может: в худшем случае раздел просто появляется без неё.
 */
-const viewVariants = {
-  enter: (dir: number) => ({ opacity: 0, y: 14 * dir }),
-  center: {
-    opacity: 1,
-    y: 0,
-    transition: { duration: 0.16, ease: [0.22, 1, 0.36, 1] as const },
-  },
-  exit: (dir: number) => ({
-    opacity: 0,
-    y: -10 * dir,
-    transition: { duration: 0.1, ease: [0.22, 1, 0.36, 1] as const },
-  }),
-};
 
 function App() {
   // ─── Top-level routing ───────────────────────────────────────
@@ -134,16 +122,11 @@ function App() {
         <div className="flex min-h-0 flex-1">
           {view !== null && <Sidebar view={view} onNavigate={navigate} />}
           <main className="min-h-0 flex-1 overflow-y-auto">
-            <AnimatePresence mode="wait" custom={direction}>
-              <motion.div
-                key={view ?? "loading"}
-                custom={direction}
-                variants={viewVariants}
-                initial="enter"
-                animate="center"
-                exit="exit"
-                className="min-h-full"
-              >
+            <div
+              key={view ?? "loading"}
+              className="view-enter min-h-full"
+              style={{ "--view-dir": direction } as React.CSSProperties}
+            >
                 {view === "overview" ? (
                   <Overview onOpenProxies={() => navigate("proxies")} />
                 ) : view === "proxies" ? (
@@ -155,8 +138,7 @@ function App() {
                 ) : (
                   <div className="h-full w-full" />
                 )}
-              </motion.div>
-            </AnimatePresence>
+            </div>
           </main>
         </div>
       </div>

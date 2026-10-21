@@ -58,7 +58,21 @@ fn runner_vbs_path() -> Option<PathBuf> {
 /// Ключи хранятся в settings.proxy_assignments; домены разворачиваются в
 /// rules-файл (мост матчит по суффиксу). Синхронизировано с UI (Настройки).
 pub const SERVICE_GROUPS: &[(&str, &[&str])] = &[
-    ("anthropic", &["anthropic.com", "claude.ai", "claude.com"]),
+    (
+        "anthropic",
+        &[
+            "anthropic.com",
+            "claude.ai",
+            "claude.com",
+            // Телеметрия Claude Code на сторонних сервисах (найдено в бинарнике
+            // 2.1.x): отчёты об ошибках (Sentry, организация Anthropic), логи
+            // (Datadog), флаги экспериментов (GrowthBook). Без них эти запросы
+            // уходили с настоящего IP в обход прокси Claude.
+            "o1158394.ingest.us.sentry.io",
+            "http-intake.logs.us5.datadoghq.com",
+            "cdn.growthbook.io",
+        ],
+    ),
     (
         "openai",
         &["openai.com", "chatgpt.com", "oaistatic.com", "oaiusercontent.com"],
@@ -89,6 +103,12 @@ pub const SERVICE_GROUPS: &[(&str, &[&str])] = &[
 /// Вызывается при регистрации задачи и при изменениях в UI. Возвращает путь
 /// для аргумента --rules.
 pub fn write_rules_file() -> Result<PathBuf, String> {
+    write_rules_file_if_changed().map(|(p, _)| p)
+}
+
+/// То же, но сообщает, изменился ли файл: при старте приложения правила
+/// новой версии (новые домены сервисов) применяются перезапуском моста.
+pub fn write_rules_file_if_changed() -> Result<(PathBuf, bool), String> {
     let s = crate::settings::load();
     let mode = s
         .route_mode
@@ -110,7 +130,12 @@ pub fn write_rules_file() -> Result<PathBuf, String> {
         }
     }
 
-    let json = serde_json::json!({ "mode": mode, "assignments": assignments });
+    // Все домены сервисов — через прокси и в умном режиме: у моста свой
+    // встроенный список AI-доменов, а сюда попадают и новые (телеметрия).
+    let mut proxy_domains: Vec<&str> = SERVICE_GROUPS.iter().flat_map(|(_, d)| d.iter().copied()).collect();
+    proxy_domains.sort_unstable();
+    proxy_domains.dedup();
+    let json = serde_json::json!({ "mode": mode, "proxy_domains": proxy_domains, "assignments": assignments });
     let path = shim::install_dir()
         .map(|d| d.join(RULES_FILE))
         .ok_or_else(|| "Не нашёл папку ClaudeDesktopProxy".to_string())?;
@@ -119,13 +144,16 @@ pub fn write_rules_file() -> Result<PathBuf, String> {
             .map_err(|e| format!("create dir {}: {e}", parent.display()))?;
     }
     let text = serde_json::to_string_pretty(&json).map_err(|e| format!("serialize rules: {e}"))?;
+    if std::fs::read_to_string(&path).is_ok_and(|old| old == text) {
+        return Ok((path, false));
+    }
     // Атомарно (tmp + rename): мост читает этот файл при старте, а супервизор
     // может перезапустить его в любой момент — полузаписанный JSON для моста
     // 1.2.0 означает отказ запуска (fail-fast), для старых — потерю правил.
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, text).map_err(|e| format!("write {}: {e}", tmp.display()))?;
     std::fs::rename(&tmp, &path).map_err(|e| format!("replace {}: {e}", path.display()))?;
-    Ok(path)
+    Ok((path, true))
 }
 
 /// Зарегистрирована ли задача (быстрая проверка для ветвления start/stop).
@@ -210,20 +238,50 @@ pub fn parse_version(v: &str) -> Option<(u32, u32, u32)> {
     Some((it.next()??, it.next()??, it.next().flatten().unwrap_or(0)))
 }
 
+/// `bridge-upstreams.txt` (атомарно; на macOS — 0600, на Windows профиль
+/// пользователя и так закрыт от других учёток): по URL в строке, порядок
+/// пула сохраняется — индексы assignments считаются по нему.
+pub fn write_upstream_file(pool: &[String]) -> Result<PathBuf, String> {
+    let path = shim::install_dir()
+        .map(|d| d.join("bridge-upstreams.txt"))
+        .ok_or_else(|| "Не нашёл папку ClaudeDesktopProxy".to_string())?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create dir {}: {e}", parent.display()))?;
+    }
+    let mut text = String::from("# Пул прокси Clod Helper (порядок важен). Файл перезаписывается.\n");
+    for u in pool {
+        text.push_str(u);
+        text.push('\n');
+    }
+    let tmp = path.with_extension("txt.tmp");
+    {
+        use std::io::Write;
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = opts.open(&tmp).map_err(|e| format!("write {}: {e}", tmp.display()))?;
+        f.write_all(text.as_bytes()).map_err(|e| format!("write {}: {e}", tmp.display()))?;
+    }
+    std::fs::rename(&tmp, &path).map_err(|e| format!("replace {}: {e}", path.display()))?;
+    Ok(path)
+}
+
 /// Закреплённые входы моста ≥1.7: 8892 + индекс прокси в пуле. Приложение,
 /// которому выбран конкретный прокси, запускается с этим портом.
 pub const PIN_PORT_BASE: u16 = 8892;
 
 /// Мост ≥1.7 умеет закреплённые входы (`--pin-listen`).
-#[cfg(not(target_os = "windows"))]
-fn bridge_supports_pin_listen(exe: &std::path::Path) -> bool {
+pub fn bridge_supports_pin_listen(exe: &std::path::Path) -> bool {
     exe_version(exe)
         .and_then(|v| parse_version(&v))
         .is_some_and(|v| v >= (1, 7, 0))
 }
 
 /// Мост ≥1.5 принимает пул прокси файлом (`--upstream-file`).
-#[cfg(not(target_os = "windows"))]
 fn bridge_supports_upstream_file(exe: &std::path::Path) -> bool {
     exe_version(exe)
         .and_then(|v| parse_version(&v))
@@ -312,13 +370,27 @@ pub fn register(proxy_url: &str) -> Result<(), String> {
             "--listen".into(),
             format!("127.0.0.1:{LISTEN_PORT}"),
         ];
-        for u in &pool {
-            parts.push("--upstream".into());
-            parts.push(format!("\"{}\"", u.replace('"', "")));
+        if bridge_supports_upstream_file(&exe) {
+            // Пароль прокси — в файле, а не в аргументах задачи (их видно в
+            // Планировщике и в списке процессов).
+            let file = write_upstream_file(&pool)?;
+            parts.push("--upstream-file".into());
+            parts.push(format!("\"{}\"", file.to_string_lossy()));
+        } else {
+            for u in &pool {
+                parts.push("--upstream".into());
+                parts.push(format!("\"{}\"", u.replace('"', "")));
+            }
         }
         parts.push("--rules".into());
         parts.push(format!("\"{}\"", rules_path.to_string_lossy()));
         parts.push("--quiet".into());
+        if bridge_supports_pin_listen(&exe) {
+            for i in 0..pool.len() {
+                parts.push("--pin-listen".into());
+                parts.push(format!("127.0.0.1:{}={i}", PIN_PORT_BASE + i as u16));
+            }
+        }
         // Старый runner-vbs больше не нужен — подчищаем, чтобы не смущал AV.
         if vbs_path.exists() {
             let _ = std::fs::remove_file(&vbs_path);
@@ -488,7 +560,7 @@ mod launchd {
 
     use super::{
         bridge_supports_pin_listen, bridge_supports_rules, bridge_supports_upstream_file,
-        upstream_pool, write_rules_file, BridgeTaskStatus, PIN_PORT_BASE,
+        upstream_pool, write_rules_file, write_upstream_file, BridgeTaskStatus, PIN_PORT_BASE,
     };
     use crate::macos;
     use crate::shim::{self, LISTEN_PORT};
@@ -582,40 +654,6 @@ mod launchd {
         )?;
         macos::bootout(LABEL);
         Ok(())
-    }
-
-    /// `bridge-upstreams.txt` (0600, атомарно): по URL в строке, порядок пула
-    /// сохраняется — индексы assignments считаются по нему.
-    fn write_upstream_file(pool: &[String]) -> Result<PathBuf, String> {
-        let path = shim::install_dir()
-            .map(|d| d.join("bridge-upstreams.txt"))
-            .ok_or_else(|| "Не нашёл папку ClaudeDesktopProxy".to_string())?;
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("create dir {}: {e}", parent.display()))?;
-        }
-        let mut text = String::from("# Пул прокси Clod Helper (порядок важен). Файл перезаписывается.\n");
-        for u in pool {
-            text.push_str(u);
-            text.push('\n');
-        }
-        let tmp = path.with_extension("txt.tmp");
-        {
-            use std::io::Write;
-            use std::os::unix::fs::OpenOptionsExt;
-            let mut f = std::fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .mode(0o600)
-                .open(&tmp)
-                .map_err(|e| format!("write {}: {e}", tmp.display()))?;
-            f.write_all(text.as_bytes())
-                .map_err(|e| format!("write {}: {e}", tmp.display()))?;
-        }
-        macos::set_mode(&tmp, 0o600);
-        std::fs::rename(&tmp, &path).map_err(|e| format!("replace {}: {e}", path.display()))?;
-        Ok(path)
     }
 
     pub fn start() -> Result<(), String> {

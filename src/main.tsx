@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./index.css";
+import { startUiWatchdog } from "./lib/uiWatchdog";
 
 // Трей-попап живёт в прозрачном окне: помечаем body, чтобы CSS убрал фон
 // (само окно с transparent:true, скругление и тень рисует контент).
@@ -18,6 +19,9 @@ window.addEventListener("contextmenu", (e) => {
   if (target?.closest("input, textarea, [contenteditable='true']")) return;
   e.preventDefault();
 });
+
+// Сторож окна: чёрный экран после долгой работы → журнал + восстановление.
+startUiWatchdog();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { listen } from "@tauri-apps/api/event";
 import {
   bridgeExeLegacy,
   bridgeHealth,
@@ -102,6 +103,8 @@ export function StatusProvider({ children }: { children: ReactNode }) {
   const qualityWindow = useRef<{ ok: number; fail: number }[][]>([]);
   const lastCounters = useRef<{ ok: number; fail: number }[] | null>(null);
   const tick = useRef(0);
+  /** Когда пришло последнее событие bridge-health от монитора (мс). */
+  const lastEvent = useRef(0);
   const [history, setHistory] = useState<TrafficSample[]>([]);
   const [poolPing, setPoolPing] = useState<ProxyPing[]>([]);
   const lastTotal = useRef<number | null>(null);
@@ -151,6 +154,38 @@ export function StatusProvider({ children }: { children: ReactNode }) {
     );
   }, []);
 
+  /** Новый снимок /healthz → состояние, качество прокси, история трафика. */
+  const applyHealth = useCallback(
+    (h: BridgeHealth) => {
+      setHealth(h);
+      setHealthErr(null);
+      updateQuality(h);
+      const total = h.via_upstream + h.via_direct;
+      const prev = lastTotal.current;
+      lastTotal.current = total;
+      // Первый сэмпл (или рестарт моста → счётчики упали) — дельту не пишем.
+      if (prev !== null && total >= prev) {
+        setHistory((old) =>
+          [...old, { delta: total - prev, active: h.active }].slice(-HISTORY_LEN),
+        );
+      }
+    },
+    [updateQuality],
+  );
+
+  useEffect(() => {
+    const un = listen<BridgeHealth>("bridge-health", (e) => {
+      lastEvent.current = Date.now();
+      // Без проверки document.hidden: WebKit иногда считает видимое окно
+      // скрытым, и тогда событие терялось, а свой опрос тоже молчал —
+      // данные в окне застывали на часы. Применить снимок дёшево.
+      applyHealth(e.payload);
+    });
+    return () => {
+      void un.then((f) => f());
+    };
+  }, [applyHealth]);
+
   /**
    * full=true — всё (при открытии окна и после действий пользователя);
    * full=false — интервальный тик: только здоровье моста и, редко, процесс.
@@ -169,21 +204,15 @@ export function StatusProvider({ children }: { children: ReactNode }) {
           bridgeVersions().then((v) => fresh() && setVersions(v)).catch(() => {}),
         ]
       : [];
-    const healthOk = await bridgeHealth()
+    // Монитор трея присылает /healthz событием каждые 5 с — сами опрашиваем
+    // мост, только если событий давно не было (монитор не запущен и т.п.).
+    const viaEvents = !full && Date.now() - lastEvent.current < 8_000;
+    const healthOk = viaEvents
+      ? true
+      : await bridgeHealth()
       .then((h) => {
         if (!fresh()) return true;
-        setHealth(h);
-        setHealthErr(null);
-        updateQuality(h);
-        const total = h.via_upstream + h.via_direct;
-        const prev = lastTotal.current;
-        lastTotal.current = total;
-        // Первый сэмпл (или рестарт моста → счётчики упали) — дельту не пишем.
-        if (prev !== null && total >= prev) {
-          setHistory((old) =>
-            [...old, { delta: total - prev, active: h.active }].slice(-HISTORY_LEN),
-          );
-        }
+        applyHealth(h);
         return true;
       })
       .catch((err) => {
@@ -200,7 +229,7 @@ export function StatusProvider({ children }: { children: ReactNode }) {
       slow.push(shimStatus().then((v) => fresh() && setStatus(v)).catch(() => {}));
     }
     await Promise.all(slow);
-  }, [updateQuality]);
+  }, [applyHealth]);
 
   useEffect(() => {
     void refresh();

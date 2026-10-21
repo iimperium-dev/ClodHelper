@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { Check, Loader2, X } from "lucide-react";
@@ -8,14 +8,42 @@ import type { RowStatus } from "./AppRow";
 import {
   appsCreateShortcut,
   appsSettingsSet,
+  clearGlobalProxyEnv,
+  leakGuardSet,
+  leakGuardStatus,
+  setGlobalProxyEnv,
+  bridgeSetRouteMode,
+  browserPolicySet,
+  browserPolicyStatus,
   proxiesGet,
   proxyAssignmentsGet,
   proxyAssignmentsSet,
   proxyLabelsGet,
 } from "../lib/api";
 import type { AppFolder } from "../lib/appLayout";
-import type { AppProfileStatus } from "../lib/types";
+import type { AppProfileStatus, BrowserPolicyStatus, LeakGuardStatus } from "../lib/types";
 import { cn } from "../lib/cn";
+import { isMac } from "../lib/platform";
+import { useStatus } from "../lib/status";
+
+type CodeMode = "off" | "ai" | "all";
+const CODE_MODES: { id: CodeMode; title: string; sub: string }[] = [
+  { id: "ai", title: "Через прокси только AI", sub: "Claude и другие AI — через прокси; npm, git, загрузки — напрямую, не тратя трафик прокси" },
+  { id: "all", title: "Через прокси всё", sub: "Если что-то не качается из вашей страны (Docker, часть Google Cloud и т.п.)" },
+  { id: "off", title: "Выключено", sub: "Claude Code в терминале — напрямую, без Clod Helper" },
+];
+
+/** Сервис защиты от утечек (pf) по id приложения. */
+const GUARD_OF: Record<string, { id: string; sub: string }> = {
+  "claude-desktop": {
+    id: "claude",
+    sub: "Брандмауэр закрывает прямой выход к Claude — IP не уйдёт, даже если программа обойдёт мост",
+  },
+  telegram: {
+    id: "telegram",
+    sub: "Если прокси упадёт, Telegram не переключится на прямое соединение — будет ждать прокси",
+  },
+};
 
 /** Встроенные, чей прокси — назначение сервиса (мост роутит по доменам). */
 const GROUP_OF: Record<string, string> = {
@@ -63,23 +91,72 @@ export function AppSettingsModal({
   const [assign, setAssign] = useState<Record<string, number>>({});
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const [policy, setPolicy] = useState<BrowserPolicyStatus | null>(null);
+  const [guard, setGuard] = useState<LeakGuardStatus | null>(null);
+  // Системные переменные прокси (Claude Code в терминале) — общее состояние.
+  const { env, setEnv, health, refresh } = useStatus();
+  const envOn = !!env?.present && !!env.points_to_bridge;
+  const envForeign = !!env?.present && !env.points_to_bridge;
+  const guardOf = app && isMac ? GUARD_OF[app.id] : undefined;
 
+  // Загрузка — только при открытии другого приложения (по id): родитель
+  // перерисовывается после каждого действия, и по ссылке на app/onClose окно
+  // сбрасывало подсказку «Сохранено» / текст ошибки сразу после показа.
+  const appId = app?.id;
   useEffect(() => {
-    if (!app) return;
+    if (!appId) return;
     setNote(null);
     void Promise.all([
       proxiesGet().then(setPool).catch(() => {}),
       proxyLabelsGet().then(setLabels).catch(() => {}),
       proxyAssignmentsGet().then(setAssign).catch(() => {}),
+      browserPolicyStatus(appId).then(setPolicy).catch(() => setPolicy(null)),
+      isMac && GUARD_OF[appId] ? leakGuardStatus().then(setGuard).catch(() => setGuard(null)) : Promise.resolve(),
     ]);
-    const esc = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+  }, [appId]);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    if (!appId) return;
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && closeRef.current();
     window.addEventListener("keydown", esc);
     return () => window.removeEventListener("keydown", esc);
-  }, [app, onClose]);
+  }, [appId]);
 
   const group = app ? GROUP_OF[app.id] : undefined;
   const current = !app ? -1 : group ? (assign[group] ?? -1) : (app.proxy ?? -1);
   const launchable = app ? !group : false; // VS Code и свои: флаг --proxy-server
+  const guardOn = !!guardOf && !!guard?.enabled && guard.services.split(",").includes(guardOf.id);
+
+  // Режим Claude Code вне приложения: переменные прокси (вкл/выкл) и режим
+  // общего входа моста (только AI / всё). Через него ходят только программы,
+  // понимающие системный прокси, — остальные приложения он не трогает.
+  const codeMode: CodeMode | null = !env ? null : !envOn ? "off" : health?.mode === "all" ? "all" : "ai";
+  const pickCodeMode = (m: CodeMode) => {
+    if (m === codeMode) return;
+    void run(async () => {
+      if (m === "off") {
+        setEnv(await clearGlobalProxyEnv());
+        return null;
+      }
+      if (!envOn) setEnv(await setGlobalProxyEnv());
+      if ((health?.mode === "all") !== (m === "all")) await bridgeSetRouteMode(m === "all" ? "all" : "smart");
+      // Полное обновление статуса может идти секунды — не держим окно занятым.
+      void refresh();
+      return null;
+    }, m === "off" ? "Выключено — новые окна терминала пойдут напрямую" : "Сохранено — действует в новых окнах терминала");
+  };
+
+  const toggleGuard = () => {
+    if (!guardOf) return;
+    const list = new Set(guard?.enabled ? guard.services.split(",").filter(Boolean) : []);
+    if (guardOn) list.delete(guardOf.id);
+    else list.add(guardOf.id);
+    void run(async () => {
+      setGuard(await leakGuardSet([...list]));
+      return null;
+    }, guardOn ? "Защита снята" : "Защита включена");
+  };
 
   const run = async (fn: () => Promise<unknown>, done?: string) => {
     setBusy(true);
@@ -192,6 +269,50 @@ export function AppSettingsModal({
               ))}
             </Section>
 
+            {/* Защита от утечек (pf): Claude и Telegram — включается при подключении */}
+            {guardOf && guard && (
+              <Section>
+                <div className="flex items-center justify-between gap-3 px-3.5 py-2.5">
+                  <span className="min-w-0">
+                    <span className="block text-[13px] text-vb-fg">Не пускать мимо прокси</span>
+                    <span className="block text-[11px] leading-snug text-vb-silver-faint">{guardOf.sub}</span>
+                  </span>
+                  <Toggle checked={guardOn} disabled={busy} onChange={toggleGuard} label="Не пускать мимо прокси" />
+                </div>
+              </Section>
+            )}
+
+            {/* Claude: Claude Code вне приложения — системные переменные + режим моста */}
+            {app.id === "claude-desktop" && env && (
+              <Section title="Claude Code в терминале и VS Code">
+                {CODE_MODES.map((o) => (
+                  <button
+                    key={o.id}
+                    type="button"
+                    disabled={busy || (o.id !== "off" && !health)}
+                    onClick={() => pickCodeMode(o.id)}
+                    className="flex w-full items-center gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-vb-surface-2/60"
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-[13px] text-vb-fg">{o.title}</span>
+                      <span className="block text-[11px] leading-snug text-vb-silver-faint">{o.sub}</span>
+                    </span>
+                    {o.id === codeMode &&
+                      (busy ? (
+                        <Loader2 className="h-4 w-4 animate-spin text-vb-silver-faint" />
+                      ) : (
+                        <Check className="h-4 w-4 text-vb-emerald" />
+                      ))}
+                  </button>
+                ))}
+                {envForeign && (
+                  <p className="px-3.5 py-2 text-[11px] leading-snug text-vb-warn">
+                    В системе задан чужой прокси — выбор режима заменит его на мост
+                  </p>
+                )}
+              </Section>
+            )}
+
             {/* Трафик — только для запускаемых с --proxy-server */}
             {launchable && (
               <Section>
@@ -212,6 +333,34 @@ export function AppSettingsModal({
                       )
                     }
                     label="Весь трафик через прокси"
+                  />
+                </div>
+              </Section>
+            )}
+
+            {/* Браузер: политика главнее Dock-запуска и расширений */}
+            {policy && (
+              <Section>
+                <div className="flex items-center justify-between gap-3 px-3.5 py-2.5">
+                  <span className="min-w-0">
+                    <span className="block text-[13px] text-vb-fg">Всегда через мост</span>
+                    <span className="block text-[11px] text-vb-silver-faint">
+                      {policy.conflict
+                        ? policy.conflict
+                        : "Даже из Dock, расширения не перебивают. Пароль Mac один раз"}
+                    </span>
+                  </span>
+                  <Toggle
+                    checked={policy.configured}
+                    disabled={busy || !!policy.conflict}
+                    onChange={() =>
+                      void run(async () => {
+                        const next = await browserPolicySet(app.id, !policy.configured);
+                        setPolicy(next);
+                        return null;
+                      }, policy.configured ? "Снято — перезапустите браузер" : "Готово — перезапустите браузер")
+                    }
+                    label="Всегда через мост"
                   />
                 </div>
               </Section>

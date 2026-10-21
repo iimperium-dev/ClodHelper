@@ -5,7 +5,7 @@
   confidence:"low" + альтернативу, и UI эскалирует подтверждение.
 
   Поддерживаемые формы:
-    http://user:pass@host:port      (стандарт)
+    http://user:pass@host:port      (стандарт; также https:// и socks5://)
     user:pass@host:port
     host:port@user:pass
     host:port:user:pass             (частый формат шопов)
@@ -72,18 +72,31 @@ export function isParseReject(r: ParsedProxy | ParseReject | null): r is ParseRe
   return !!r && "error" in r;
 }
 
+/**
+ * Разобрать строку прокси. Схема сохраняется: мост (≥1.8) умеет HTTP, HTTPS
+ * (TLS до прокси) и SOCKS5; без схемы — http.
+ */
 export function parseProxyInput(raw: string): ParsedProxy | ParseReject | null {
-  let s = raw.trim();
-  if (!s) return null;
-
-  // SOCKS молча превращать в http нельзя: мост говорит только HTTP CONNECT,
-  // и такой прокси «не отвечал» бы без объяснения причины.
-  if (/^socks\d?h?:\/\//i.test(s)) {
-    return { error: "Это SOCKS-прокси — мост работает только с HTTP-прокси. Попросите у продавца HTTP-адрес." };
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const m = trimmed.match(/^([a-z0-9]+):\/\//i);
+  const given = m?.[1].toLowerCase();
+  if (given && !["http", "https", "socks5", "socks5h", "socks"].includes(given)) {
+    return { error: `Протокол ${given}:// не поддерживается — нужен http, https или socks5.` };
   }
+  const scheme = given === "https" ? "https" : given?.startsWith("socks") ? "socks5" : "http";
+  const r = parseInner(trimmed.replace(/^[a-z0-9]+:\/\//i, ""));
+  if (!r || isParseReject(r) || scheme === "http") return r;
+  const withScheme = (p: ParsedProxy): ParsedProxy => ({
+    ...p,
+    url: p.url.replace(/^http:\/\//, `${scheme}://`),
+    alt: p.alt ? withScheme(p.alt) : undefined,
+  });
+  return withScheme(r);
+}
 
-  // Схему убираем (протокол всегда http для моста).
-  s = s.replace(/^https?:\/\//i, "");
+function parseInner(input: string): ParsedProxy | ParseReject | null {
+  let s = input;
   s = s.replace(/\/+$/, "");
 
   // "host:port user:pass" (пробел/таб/;) → склеиваем в 4-частную форму.

@@ -169,6 +169,11 @@ struct Upstream {
     port: u16,
     /// base64(login:pass) для Proxy-Authorization, если в URL был auth.
     auth: Option<String>,
+    /// Логин/пароль как есть — для SOCKS5 (RFC 1929).
+    user: Option<(String, String)>,
+    /// Сглаженное время подключения, мс (0 — ещё не мерили): «Авто»
+    /// пробует сначала быстрые и стабильные прокси.
+    ewma_ms: AtomicU64,
     /// URL с замаскированным паролем — для логов и /healthz.
     masked: String,
     ok: AtomicU64,
@@ -196,6 +201,11 @@ impl Upstream {
         if let Ok(mut g) = self.bad_until.lock() {
             *g = None;
         }
+    }
+    fn note_latency(&self, ms: u64) {
+        let old = self.ewma_ms.load(Ordering::Relaxed);
+        let new = if old == 0 { ms } else { (old * 7 + ms * 3) / 10 };
+        self.ewma_ms.store(new.max(1), Ordering::Relaxed);
     }
     fn mark_fail(&self) {
         self.fail.fetch_add(1, Ordering::Relaxed);
@@ -239,7 +249,7 @@ impl State {
         self.routing_policy == RoutingPolicy::UpstreamOnly
             // В мосте пока нет TLS до самого прокси. Не посылаем учётные
             // данные открытым текстом на якобы HTTPS endpoint.
-            && matches!(strict_upstream(self), Pin::Pinned(i) if self.upstreams[i].scheme == "http")
+            && matches!(strict_upstream(self), Pin::Pinned(_))
     }
 
     fn log(&self, msg: &str) {
@@ -373,9 +383,9 @@ fn wall_clock() -> String {
 /// http://login:pass@ip:port → Upstream. Формат тот же, что у python-моста.
 fn parse_upstream(raw: &str) -> Result<Upstream, String> {
     let u = url::Url::parse(raw).map_err(|e| format!("bad upstream URL: {e}"))?;
-    if u.scheme() != "http" && u.scheme() != "https" {
+    if !matches!(u.scheme(), "http" | "https" | "socks5" | "socks5h") {
         return Err(format!(
-            "upstream scheme must be http/https, got {}",
+            "upstream scheme must be http/https/socks5, got {}",
             u.scheme()
         ));
     }
@@ -384,6 +394,14 @@ fn parse_upstream(raw: &str) -> Result<Upstream, String> {
         .ok_or("upstream URL must include host")?
         .to_string();
     let port = u.port().ok_or("upstream URL must include port")?;
+    let user = (!u.username().is_empty()).then(|| {
+        let dec = |s: &str| {
+            url::form_urlencoded::parse(s.as_bytes())
+                .map(|(k, v)| if v.is_empty() { k.into_owned() } else { format!("{k}={v}") })
+                .collect::<String>()
+        };
+        (dec(u.username()), dec(u.password().unwrap_or("")))
+    });
     let (auth, masked) = if !u.username().is_empty() {
         let creds = format!("{}:{}", u.username(), u.password().unwrap_or(""));
         (
@@ -394,10 +412,12 @@ fn parse_upstream(raw: &str) -> Result<Upstream, String> {
         (None, format!("{}://{}:{}", u.scheme(), host, port))
     };
     Ok(Upstream {
-        scheme: u.scheme().to_string(),
+        scheme: if u.scheme() == "socks5h" { "socks5".into() } else { u.scheme().to_string() },
         host,
         port,
         auth,
+        user,
+        ewma_ms: AtomicU64::new(0),
         masked,
         ok: AtomicU64::new(0),
         fail: AtomicU64::new(0),
@@ -505,6 +525,44 @@ fn host_matches(host: &str, domain: &str) -> bool {
             && host.as_bytes()[host.len() - domain.len() - 1] == b'.')
 }
 
+/// Сети Anthropic и Telegram (официальные диапазоны). Клиенты, идущие по
+/// IP без имени (Telegram — к своим DC), иначе попадали бы в «напрямую»:
+/// правила умного режима сопоставляются по доменам.
+const SERVICE_NETS: &[(&str, u8)] = &[
+    ("160.79.104.0", 21),
+    ("2607:6bc0::", 48),
+    ("149.154.160.0", 20),
+    ("91.108.0.0", 16),
+    ("91.105.192.0", 23),
+    ("95.161.64.0", 20),
+    ("185.76.151.0", 24),
+    ("2001:b28:f23d::", 48),
+    ("2001:b28:f23f::", 48),
+    ("2001:67c:4e8::", 48),
+    ("2a0a:f280::", 32),
+];
+
+fn is_service_ip(host: &str) -> bool {
+    let Ok(ip) = host.trim_start_matches('[').trim_end_matches(']').parse::<std::net::IpAddr>() else {
+        return false;
+    };
+    let bits = |ip: std::net::IpAddr| -> u128 {
+        match ip {
+            std::net::IpAddr::V4(v) => u32::from(v) as u128,
+            std::net::IpAddr::V6(v) => u128::from(v),
+        }
+    };
+    SERVICE_NETS.iter().any(|(net, len)| {
+        let Ok(net) = net.parse::<std::net::IpAddr>() else { return false };
+        if net.is_ipv4() != ip.is_ipv4() {
+            return false;
+        }
+        let width = if ip.is_ipv4() { 32 } else { 128 };
+        let shift = width - *len as u32;
+        (bits(ip) >> shift) == (bits(net) >> shift)
+    })
+}
+
 fn decide(state: &State, host: &str) -> Route {
     if state.routing_policy != RoutingPolicy::Rules {
         return Route::Upstream;
@@ -515,7 +573,7 @@ fn decide(state: &State, host: &str) -> Route {
     match state.mode {
         Mode::All => Route::Upstream,
         Mode::Smart => {
-            if state.proxy_domains.iter().any(|d| host_matches(host, d)) {
+            if state.proxy_domains.iter().any(|d| host_matches(host, d)) || is_service_ip(host) {
                 Route::Upstream
             } else {
                 Route::Direct
@@ -731,8 +789,13 @@ fn socks_upstream(state: &State) -> Pin {
 
 /// Установленный через upstream канал: сокет + ответ upstream'а на CONNECT
 /// (его отдаём клиенту как есть; для plain HTTP ответ придёт через pipe).
+/// Поток к цели через прокси: TCP, TLS (HTTPS-прокси) — для остального кода одно и то же.
+trait Duplex: AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + tokio::io::AsyncWrite + Unpin + Send> Duplex for T {}
+type BoxStream = Box<dyn Duplex>;
+
 struct UpstreamConn {
-    stream: TcpStream,
+    stream: BoxStream,
     reply: Option<Vec<u8>>,
 }
 
@@ -740,14 +803,35 @@ struct UpstreamConn {
 /// CONNECT — ожидание ответа прокси. Ошибка = клиенту ещё ничего не ушло,
 /// попытку можно безопасно повторить.
 async fn attempt_upstream(u: &Upstream, head: &[u8], is_connect: bool) -> Result<UpstreamConn, String> {
-    let mut stream = timeout(
+    let t0 = Instant::now();
+    let tcp = timeout(
         UPSTREAM_CONNECT_TIMEOUT,
         TcpStream::connect((u.host.as_str(), u.port)),
     )
     .await
     .map_err(|_| "нет ответа на TCP-коннект".to_string())?
     .map_err(|e| format!("коннект: {e}"))?;
-    enable_keepalive(&stream);
+    enable_keepalive(&tcp);
+    u.note_latency(t0.elapsed().as_millis() as u64);
+    match u.scheme.as_str() {
+        "socks5" => socks5_upstream(u, tcp, head, is_connect).await,
+        "https" => {
+            let tls = timeout(UPSTREAM_REPLY_TIMEOUT, tls_connect(&u.host, tcp))
+                .await
+                .map_err(|_| "TLS к прокси: нет ответа".to_string())??;
+            http_upstream(u, Box::new(tls), head, is_connect).await
+        }
+        _ => http_upstream(u, Box::new(tcp), head, is_connect).await,
+    }
+}
+
+/// HTTP(S)-прокси: первый запрос с Proxy-Authorization; для CONNECT — ждём ответ.
+async fn http_upstream(
+    u: &Upstream,
+    mut stream: BoxStream,
+    head: &[u8],
+    is_connect: bool,
+) -> Result<UpstreamConn, String> {
     let rewritten = rewrite_head(head, u.auth.as_deref(), false, !is_connect);
     stream
         .write_all(&rewritten)
@@ -768,6 +852,137 @@ async fn attempt_upstream(u: &Upstream, head: &[u8], is_connect: bool) -> Result
             }
         })?;
     Ok(UpstreamConn { stream, reply: Some(reply) })
+}
+
+/// TLS до HTTPS-прокси: логин/пароль больше не идут открытым текстом.
+async fn tls_connect(
+    host: &str,
+    tcp: TcpStream,
+) -> Result<tokio_rustls::client::TlsStream<TcpStream>, String> {
+    use std::sync::OnceLock;
+    static CONFIG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
+    let config = CONFIG
+        .get_or_init(|| {
+            let mut roots = rustls::RootCertStore::empty();
+            roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+            Arc::new(
+                rustls::ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+                    .with_safe_default_protocol_versions()
+                    .expect("TLS versions")
+                    .with_root_certificates(roots)
+                    .with_no_client_auth(),
+            )
+        })
+        .clone();
+    let name = rustls::pki_types::ServerName::try_from(host.to_string())
+        .map_err(|_| format!("TLS: неверное имя прокси {host}"))?;
+    tokio_rustls::TlsConnector::from(config)
+        .connect(name, tcp)
+        .await
+        .map_err(|e| format!("TLS к прокси: {e}"))
+}
+
+/// SOCKS5-прокси (RFC 1928/1929): CONNECT к цели по имени (резолвит прокси —
+/// DNS не утекает). Клиенту на CONNECT отвечаем сами «200», хвост запроса
+/// (ранний ClientHello) уходит цели; обычный HTTP — в origin-form.
+async fn socks5_upstream(
+    u: &Upstream,
+    mut tcp: TcpStream,
+    head: &[u8],
+    is_connect: bool,
+) -> Result<UpstreamConn, String> {
+    let req = parse_request(head)?;
+    let io = |e: std::io::Error| format!("SOCKS5: {e}");
+    let hs = async {
+        let methods: &[u8] = if u.user.is_some() { &[5, 2, 0, 2] } else { &[5, 1, 0] };
+        tcp.write_all(methods).await.map_err(io)?;
+        let mut sel = [0u8; 2];
+        tcp.read_exact(&mut sel).await.map_err(io)?;
+        match sel {
+            [5, 0] => {}
+            [5, 2] => {
+                let (user, pass) = u.user.as_ref().ok_or("SOCKS5: прокси требует логин")?;
+                if user.len() > 255 || pass.len() > 255 {
+                    return Err("SOCKS5: слишком длинный логин или пароль".into());
+                }
+                let mut auth = vec![1, user.len() as u8];
+                auth.extend(user.as_bytes());
+                auth.push(pass.len() as u8);
+                auth.extend(pass.as_bytes());
+                tcp.write_all(&auth).await.map_err(io)?;
+                let mut st = [0u8; 2];
+                tcp.read_exact(&mut st).await.map_err(io)?;
+                if st[1] != 0 {
+                    return Err("SOCKS5: прокси отклонил логин/пароль".into());
+                }
+            }
+            _ => return Err("SOCKS5: прокси не принял способ входа".into()),
+        }
+        let host = req.host.as_bytes();
+        if host.len() > 255 {
+            return Err("SOCKS5: слишком длинное имя".into());
+        }
+        let mut c = vec![5, 1, 0, 3, host.len() as u8];
+        c.extend(host);
+        c.extend(req.port.to_be_bytes());
+        tcp.write_all(&c).await.map_err(io)?;
+        let mut rep = [0u8; 4];
+        tcp.read_exact(&mut rep).await.map_err(io)?;
+        if rep[1] != 0 {
+            return Err(format!("SOCKS5: прокси не открыл соединение (код {})", rep[1]));
+        }
+        let skip = match rep[3] {
+            1 => 4 + 2,
+            4 => 16 + 2,
+            3 => {
+                let mut l = [0u8; 1];
+                tcp.read_exact(&mut l).await.map_err(io)?;
+                l[0] as usize + 2
+            }
+            _ => return Err("SOCKS5: неизвестный ответ".into()),
+        };
+        let mut rest = vec![0u8; skip];
+        tcp.read_exact(&mut rest).await.map_err(io)?;
+        Ok::<(), String>(())
+    };
+    timeout(UPSTREAM_REPLY_TIMEOUT, hs)
+        .await
+        .map_err(|_| "SOCKS5: прокси молчит".to_string())??;
+
+    let end = find_head_end(head).map(|e| e + 4).unwrap_or(head.len());
+    if is_connect {
+        let tail = &head[end..];
+        if !tail.is_empty() {
+            tcp.write_all(tail).await.map_err(io)?;
+        }
+        let reply = b"HTTP/1.1 200 Connection Established\r\n\r\n".to_vec();
+        return Ok(UpstreamConn { stream: Box::new(tcp), reply: Some(reply) });
+    }
+    tcp.write_all(&origin_form(head)).await.map_err(io)?;
+    Ok(UpstreamConn { stream: Box::new(tcp), reply: None })
+}
+
+/// «GET http://host/path HTTP/1.1» → «GET /path HTTP/1.1» без прокси-заголовков,
+/// с Connection: close (дальше слепой pipe) — для отправки прямо серверу.
+fn origin_form(head: &[u8]) -> Vec<u8> {
+    let clean = rewrite_head(head, None, true, true);
+    let Some(line_end) = clean.windows(2).position(|w| w == b"\r\n") else {
+        return clean;
+    };
+    let line = String::from_utf8_lossy(&clean[..line_end]).to_string();
+    let mut parts = line.splitn(3, ' ');
+    let (Some(method), Some(target), Some(ver)) = (parts.next(), parts.next(), parts.next()) else {
+        return clean;
+    };
+    let path = url::Url::parse(target)
+        .map(|u| match u.query() {
+            Some(q) => format!("{}?{q}", u.path()),
+            None => u.path().to_string(),
+        })
+        .unwrap_or_else(|_| target.to_string());
+    let mut out = format!("{method} {path} {ver}").into_bytes();
+    out.extend_from_slice(&clean[line_end..]);
+    out
 }
 
 /// Попытки к upstream'у №i с учётом статистики. `retry` — повторить один раз
@@ -846,7 +1061,17 @@ async fn connect_upstream(
     let (order, is_pin): (Vec<usize>, bool) = match pinned {
         Some(p) if p < n => (vec![p], true),
         Some(_) => return None, // битый индекс — сюда не должен дойти (Pin::Broken отсекается раньше)
-        None => ((0..n).collect(), false),
+        None => {
+            // «Авто»: сначала стабильные (меньше отказов подряд), среди них —
+            // быстрые (сглаженное время подключения; ещё не мерянные — после).
+            let mut idx: Vec<usize> = (0..n).collect();
+            idx.sort_by_key(|&i| {
+                let u = &state.upstreams[i];
+                let ms = u.ewma_ms.load(Ordering::Relaxed);
+                (u.streak.load(Ordering::Relaxed).min(UNHEALTHY_STREAK), if ms == 0 { u64::MAX / 2 } else { ms }, i)
+            });
+            (idx, false)
+        }
     };
     let retry = is_pin || n == 1;
     if is_pin {
@@ -889,6 +1114,7 @@ fn healthz_json(state: &State) -> String {
                 "ok": u.ok.load(Ordering::Relaxed),
                 "fail": u.fail.load(Ordering::Relaxed),
                 "fail_streak": u.streak.load(Ordering::Relaxed),
+                "latency_ms": u.ewma_ms.load(Ordering::Relaxed),
             })
         })
         .collect();
@@ -1058,7 +1284,7 @@ async fn handle(mut client: TcpStream, state: Arc<State>, sem: Arc<Semaphore>) {
 
     if state.routing_policy == RoutingPolicy::UpstreamOnly && !state.strict_ready() {
         state.errors.fetch_add(1, Ordering::Relaxed);
-        state.log_err("строгий вход требует хотя бы один HTTP upstream; HTTPS upstream пока не поддерживается");
+        state.log_err("строгий вход: назначенный прокси вне пула");
         let _ = client
             .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
             .await;
@@ -1088,7 +1314,7 @@ async fn handle(mut client: TcpStream, state: Arc<State>, sem: Arc<Semaphore>) {
     // Устанавливаем исходящее соединение. Для Upstream запоминаем auth ИМЕННО
     // того прокси, к которому реально подключились (failover мог выбрать не первый).
     // via_* считаем только по факту успешного коннекта — неудачи идут в errors.
-    let (mut server, upstream_reply): (TcpStream, Option<Vec<u8>>) = match route {
+    let (mut server, upstream_reply): (BoxStream, Option<Vec<u8>>) = match route {
         Route::Direct => {
             match timeout(
                 CONNECT_TIMEOUT,
@@ -1098,7 +1324,8 @@ async fn handle(mut client: TcpStream, state: Arc<State>, sem: Arc<Semaphore>) {
             {
                 Ok(Ok(s)) => {
                     state.via_direct.fetch_add(1, Ordering::Relaxed);
-                    (s, None)
+                    enable_keepalive(&s);
+                    (Box::new(s) as BoxStream, None)
                 }
                 _ => {
                     state.errors.fetch_add(1, Ordering::Relaxed);
@@ -1139,7 +1366,6 @@ async fn handle(mut client: TcpStream, state: Arc<State>, sem: Arc<Semaphore>) {
     };
 
     enable_keepalive(&client);
-    enable_keepalive(&server);
 
     match route {
         Route::Direct => {
@@ -1278,12 +1504,6 @@ async fn handle_socks(mut client: TcpStream, state: Arc<State>, sem: Arc<Semapho
         let _ = socks_reply(&mut client, SOCKS_GENERAL_FAILURE).await;
         return;
     };
-    if state.upstreams[i].scheme != "http" {
-        state.errors.fetch_add(1, Ordering::Relaxed);
-        state.log_err("SOCKS: HTTPS upstream пока не поддерживается");
-        let _ = socks_reply(&mut client, SOCKS_GENERAL_FAILURE).await;
-        return;
-    }
     let authority = if host.contains(':') {
         format!("[{host}]:{port}")
     } else {
@@ -1745,6 +1965,17 @@ async fn serve_listener(listener: TcpListener, state: Arc<State>, sem: Arc<Semap
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn service_ips_go_upstream() {
+        assert!(is_service_ip("160.79.104.10"));
+        assert!(is_service_ip("149.154.167.51"));
+        assert!(is_service_ip("[2001:b28:f23d:f001::a]"));
+        assert!(is_service_ip("2607:6bc0::10"));
+        assert!(!is_service_ip("160.79.112.1"), "за пределами /21");
+        assert!(!is_service_ip("1.1.1.1"));
+        assert!(!is_service_ip("api.anthropic.com"));
+    }
     use super::*;
 
     fn test_state(policy: RoutingPolicy, upstreams: Vec<Upstream>) -> State {
@@ -2026,28 +2257,128 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn https_upstream_is_rejected_before_sending_plaintext_credentials() {
+    async fn https_upstream_never_sends_plaintext_credentials() {
+        // «Прокси», который не умеет TLS: мост начинает TLS-рукопожатие, оно
+        // проваливается — и логин/пароль так и не уходят открытым текстом.
         let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = upstream.local_addr().unwrap();
+        let seen = tokio::spawn(async move {
+            let (mut s, _) = upstream.accept().await.unwrap();
+            let mut buf = vec![0u8; 4096];
+            let n = timeout(Duration::from_secs(2), s.read(&mut buf)).await.ok().and_then(|r| r.ok()).unwrap_or(0);
+            buf.truncate(n);
+            buf
+        });
         let state = Arc::new(test_state(
             RoutingPolicy::UpstreamOnly,
-            vec![parse_upstream(&format!(
-                "https://test-user:test-password@{}",
-                upstream.local_addr().unwrap()
-            ))
-            .unwrap()],
+            vec![parse_upstream(&format!("https://test-user:test-password@{addr}")).unwrap()],
         ));
-        let response = single_request(
-            state.clone(),
-            "CONNECT example.invalid:443 HTTP/1.1\r\n\r\n".into(),
-        )
-        .await;
+        let response = single_request(state.clone(), "CONNECT example.invalid:443 HTTP/1.1\r\n\r\n".into()).await;
         assert!(response.starts_with(b"HTTP/1.1 502"));
-        assert_no_connection(&upstream).await;
+        let bytes = String::from_utf8_lossy(&seen.await.unwrap()).to_string();
+        assert!(!bytes.contains("test-password") && !bytes.contains("Proxy-Authorization"));
         let health = single_request(state, "GET /healthz HTTP/1.1\r\n\r\n".into()).await;
-        assert!(health.starts_with(b"HTTP/1.1 503"));
-        assert!(String::from_utf8_lossy(&health).contains("\"strict_ready\":false"));
         assert!(!String::from_utf8_lossy(&health).contains("test-password"));
         assert!(!String::from_utf8_lossy(&health).contains("test-user"));
+    }
+
+    /// Фейковый SOCKS5-прокси с логином/паролем: отдаёт рукопожатие и эхо.
+    async fn fake_socks5() -> (SocketAddr, tokio::task::JoinHandle<(String, String, String, Vec<u8>)>) {
+        let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap();
+        let h = tokio::spawn(async move {
+            let (mut s, _) = l.accept().await.unwrap();
+            let mut g = [0u8; 2];
+            s.read_exact(&mut g).await.unwrap();
+            let mut m = vec![0u8; g[1] as usize];
+            s.read_exact(&mut m).await.unwrap();
+            s.write_all(&[5, 2]).await.unwrap();
+            let mut v = [0u8; 2];
+            s.read_exact(&mut v).await.unwrap();
+            let mut user = vec![0u8; v[1] as usize];
+            s.read_exact(&mut user).await.unwrap();
+            let mut pl = [0u8; 1];
+            s.read_exact(&mut pl).await.unwrap();
+            let mut pass = vec![0u8; pl[0] as usize];
+            s.read_exact(&mut pass).await.unwrap();
+            s.write_all(&[1, 0]).await.unwrap();
+            let mut r = [0u8; 5];
+            s.read_exact(&mut r).await.unwrap();
+            let mut host = vec![0u8; r[4] as usize];
+            s.read_exact(&mut host).await.unwrap();
+            let mut port = [0u8; 2];
+            s.read_exact(&mut port).await.unwrap();
+            s.write_all(&[5, 0, 0, 1, 0, 0, 0, 0, 0, 0]).await.unwrap();
+            let mut first = vec![0u8; 256];
+            let n = timeout(Duration::from_secs(2), s.read(&mut first)).await.ok().and_then(|r| r.ok()).unwrap_or(0);
+            first.truncate(n);
+            s.write_all(b"from-target").await.unwrap();
+            (
+                String::from_utf8_lossy(&user).into(),
+                String::from_utf8_lossy(&pass).into(),
+                format!("{}:{}", String::from_utf8_lossy(&host), u16::from_be_bytes(port)),
+                first,
+            )
+        });
+        (addr, h)
+    }
+
+    #[tokio::test]
+    async fn socks5_upstream_connect_with_auth() {
+        let (addr, h) = fake_socks5().await;
+        let state = Arc::new(test_state(
+            RoutingPolicy::UpstreamOnly,
+            vec![parse_upstream(&format!("socks5://u%40x:p%3Aw@{addr}")).unwrap()],
+        ));
+        let resp = single_request(state, "CONNECT claude.ai:443 HTTP/1.1\r\n\r\nclienthello".into()).await;
+        let text = String::from_utf8_lossy(&resp);
+        assert!(text.starts_with("HTTP/1.1 200"), "{text}");
+        assert!(text.ends_with("from-target"), "{text}");
+        let (user, pass, target, first) = h.await.unwrap();
+        assert_eq!((user.as_str(), pass.as_str()), ("u@x", "p:w"), "логин/пароль декодированы");
+        assert_eq!(target, "claude.ai:443", "имя резолвит прокси");
+        assert_eq!(first, b"clienthello", "ранний ClientHello дошёл до цели");
+    }
+
+    #[tokio::test]
+    async fn socks5_upstream_plain_http_goes_origin_form() {
+        let (addr, h) = fake_socks5().await;
+        let state = Arc::new(test_state(
+            RoutingPolicy::UpstreamOnly,
+            vec![parse_upstream(&format!("socks5://u:p@{addr}")).unwrap()],
+        ));
+        let _ = single_request(
+            state,
+            "GET http://example.org/a?b=1 HTTP/1.1\r\nHost: example.org\r\nProxy-Connection: keep-alive\r\n\r\n".into(),
+        )
+        .await;
+        let (_, _, target, first) = h.await.unwrap();
+        let first = String::from_utf8_lossy(&first);
+        assert_eq!(target, "example.org:80");
+        assert!(first.starts_with("GET /a?b=1 HTTP/1.1\r\n"), "{first}");
+        assert!(!first.contains("Proxy-Connection"));
+        assert!(first.contains("Connection: close"));
+    }
+
+    #[test]
+    fn auto_prefers_stable_fast_upstreams() {
+        let a = parse_upstream("http://127.0.0.1:1").unwrap();
+        let b = parse_upstream("http://127.0.0.1:2").unwrap();
+        let c = parse_upstream("http://127.0.0.1:3").unwrap();
+        a.note_latency(900);
+        b.note_latency(120);
+        c.note_latency(50);
+        for _ in 0..UNHEALTHY_STREAK {
+            c.mark_fail();
+        }
+        let st = test_state(RoutingPolicy::Rules, vec![a, b, c]);
+        let mut idx: Vec<usize> = (0..3).collect();
+        idx.sort_by_key(|&i| {
+            let u = &st.upstreams[i];
+            let ms = u.ewma_ms.load(Ordering::Relaxed);
+            (u.streak.load(Ordering::Relaxed).min(UNHEALTHY_STREAK), if ms == 0 { u64::MAX / 2 } else { ms }, i)
+        });
+        assert_eq!(idx, vec![1, 0, 2], "быстрый и стабильный первым, падающий последним");
     }
 
     #[tokio::test]

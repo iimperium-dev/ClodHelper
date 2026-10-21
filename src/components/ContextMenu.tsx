@@ -32,10 +32,13 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const r = el.getBoundingClientRect();
+    // offset*, а не getBoundingClientRect: в момент замера меню ещё уменьшено
+    // анимацией появления — по нему оно «влезало» и обрезалось снизу.
+    const w = el.offsetWidth;
+    const h = el.offsetHeight;
     setPos({
-      x: Math.min(x, window.innerWidth - r.width - 8),
-      y: Math.min(y, window.innerHeight - r.height - 8),
+      x: Math.max(8, Math.min(x, window.innerWidth - w - 8)),
+      y: Math.max(8, Math.min(y, window.innerHeight - h - 8)),
     });
   }, [x, y]);
 
@@ -62,7 +65,7 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
       animate={{ opacity: 1, scale: 1 }}
       transition={{ duration: 0.14, ease: [0.22, 1, 0.36, 1] }}
       style={{ left: pos.x, top: pos.y, transformOrigin: "top left" }}
-      className="fixed z-[60] min-w-[200px] overflow-hidden rounded-xl border border-vb-border bg-vb-surface/95 p-1 shadow-[0_12px_32px_rgba(0,0,0,0.55)] backdrop-blur-xl"
+      className="fixed z-[60] max-h-[calc(100vh-16px)] min-w-[200px] overflow-y-auto rounded-xl border border-vb-border bg-vb-surface/95 p-1 shadow-[0_12px_32px_rgba(0,0,0,0.55)] backdrop-blur-xl"
       role="menu"
     >
       {items.map((it, i) =>

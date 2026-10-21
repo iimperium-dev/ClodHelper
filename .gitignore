@@ -49,3 +49,5 @@ src-tauri/resources/clod-bridge.exe
 # проверочная сборка под macOS с Windows
 src-tauri/resources/clod-bridge
 src-tauri/target-macos-check
+test-results/
+playwright-report/

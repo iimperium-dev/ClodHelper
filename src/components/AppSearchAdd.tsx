@@ -29,15 +29,18 @@ export function AppSearchAdd({ existing, onAdd, onClose }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [icons, setIcons] = useState<Record<string, string>>({});
   const seq = useRef(0);
+  /** Пути, за иконками которых уже ходили (удачно или нет) — не повторяем. */
+  const asked = useRef(new Set<string>());
 
   // Настоящие иконки найденных программ (подгружаются после подсказок).
   useEffect(() => {
-    const need = results.map((r) => r.path).filter((p) => !(p in icons));
+    const need = results.map((r) => r.path).filter((p) => !asked.current.has(p));
     if (need.length === 0) return;
+    need.forEach((p) => asked.current.add(p));
     appsIcons(need)
       .then((got) => setIcons((old) => ({ ...old, ...got })))
       .catch(() => {});
-  }, [results, icons]);
+  }, [results]);
 
   useEffect(() => {
     const q = query.trim();

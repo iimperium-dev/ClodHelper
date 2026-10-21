@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Clod Helper — стенд UI</title>
+</head>
+<body>
+<div id="root"></div>
+<!--
+  Стенд интерфейса без Tauri: подставной бэкенд с реалистичными данными.
+  npm run mock → http://localhost:1420/mock.html (в vite build не входит).
+  ?still — без анимаций (для снимков), ?platform=win — интерфейс Windows.
+  Используется тестами tests/ui (Playwright).
+-->
+<script>
+  const params = new URLSearchParams(location.search);
+  if (params.get("platform") !== "win") {
+    Object.defineProperty(navigator, "userAgent", {
+      get: () => "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141 Safari/537.36",
+    });
+  }
+  const app = (id, name, kind, builtin, location, extra = {}) => ({
+    id, name, kind, enabled: false, builtin, hidden: false, proxy: null,
+    full_proxy: kind === "custom", installed: true, location, desktop_shortcut: false, process_names: [], ...extra,
+  });
+  const apps = [
+    app("claude-desktop", "Claude Desktop", "exe_flag", true, "/Applications/Claude.app"),
+    app("vscode", "VS Code", "exe_flag", true, "/Applications/Visual Studio Code.app"),
+    app("codex", "ChatGPT Codex", "exe_flag", true, "/Applications/ChatGPT.app"),
+    app("telegram", "Telegram", "exe_flag", true, "/Applications/Telegram.app"),
+    app("custom-1", "Google Chrome", "custom", false, "/Applications/Google Chrome.app"),
+  ];
+  const health = {
+    status: "ok", version: "1.8.0", uptime_sec: 28000, listen: "127.0.0.1:8889", mode: "smart",
+    active: 3, total: 700, via_upstream: 412, via_direct: 288, errors: 6,
+    upstreams: [{ url: "http://185.68.187.138:8000", healthy: true, ok: 900, fail: 6, fail_streak: 0, latency_ms: 66 }],
+    last_errors: [
+      { t: 26000, msg: "назначенный прокси http://185.68.187.138:8000 не отвечает (коннект: Network is unreachable (os error 51))" },
+      { t: 26010, msg: "назначенный прокси x не отвечает (принял соединение, но молчит на CONNECT)" },
+    ],
+  };
+  let layout = null;
+  let leak = { enabled: true, services: "claude", auto_restore: true, verified: true };
+  const R = {
+    settings_get: { proxy_url: "http://u:p@185.68.187.138:8000" },
+    shim_script_path: "/x",
+    shim_status: { running: true, pid: 1, uptime_sec: 28000, listen: "127.0.0.1:8889" },
+    shim_test: { ok: true, latency_ms: 420, external_ip: "185.68.187.138", error: null },
+    bridge_health: health,
+    bridge_task_status: { registered: true, state: "Running" },
+    bridge_exe_legacy: false,
+    bridge_versions: { installed: "1.8.0", bundled: "1.8.0", outdated: false },
+    global_proxy_env: { present: true, points_to_bridge: true, values: [] },
+    proxies_ping: [{ url: "http://185.68.187.138:8000", host: "185.68.187.138", port: 8000, ms: 74 }],
+    apps_list: apps,
+    apps_traffic: [
+      { id: "claude-desktop", running: true, via_bridge: 6, direct: 0, proxy_extension: null },
+      { id: "codex", running: true, via_bridge: 12, direct: 0, proxy_extension: null },
+      { id: "telegram", running: true, via_bridge: 4, direct: 0, proxy_extension: null },
+      { id: "custom-1", running: true, via_bridge: 0, direct: 9, proxy_extension: { id: "foxy", name: "FoxyProxy" } },
+    ],
+    apps_icons: {},
+    claude_proxy_status: {
+      policy: { configured: true, managed: true, conflict: null, proxy_url: "http://127.0.0.1:8890", pac_configured: false, notice: null, auto_restore: true },
+      bridge_ready: true, bridge_error: null, network_enforced: false,
+    },
+    telegram_status: { supported: true, app_path: "/Applications/Telegram.app", running: true, socks_ready: true, via_bridge: 4, direct: 0 },
+    proxies_get: ["http://u:p@185.68.187.138:8000", "socks5://u:p@93.1.2.3:1080"],
+    proxy_labels_get: { "http://u:p@185.68.187.138:8000": "Claude main" },
+    proxy_assignments_get: { anthropic: 0 },
+    apps_search: [{ name: "WeChat", path: "/Applications/WeChat.app" }],
+    check_proxy: { reachable: true, latency_ms: 74, status_code: 200, error: null, ip: "185.68.187.138", country_code: "FI", country_name: "Finland", isp: "Global Connectivity Solutions" },
+    browser_policy_status: { configured: false, managed: false, conflict: null, auto_restore: false, server: "", notice: null },
+    privacy_check: {
+      exit: { ip: "185.68.187.138", country: "Finland", org: "Global Connectivity Solutions LLP" },
+      home: { ip: "95.174.127.216", country: "Russia", org: "Consumer Internet Cooperative PG-19" },
+      dns: [{ ip: "172.253.11.22", country: "United States of America", org: "Google LLC" }],
+      ip_hidden: true, dns_leak: false, leaking_apps: [], error: null,
+    },
+    update_check: { version: "0.7.0", notes: "", dmg_url: "x", sums_url: "y" },
+    "plugin:app|version": "0.6.0",
+    "plugin:autostart|is_enabled": true,
+  };
+  // Тесты подменяют ответы: page.addInitScript(() => { window.__mockOverrides = {...} }).
+  Object.assign(R, window.__mockOverrides || {});
+  window.__R = R; // тесты меняют ответы на лету (например, растущие ошибки прокси)
+  let cbId = 1;
+  window.__TAURI_INTERNALS__ = {
+    metadata: { currentWindow: { label: "main" }, currentWebview: { windowLabel: "main", label: "main" } },
+    transformCallback: () => cbId++,
+    unregisterCallback: () => {},
+    convertFileSrc: (p) => p,
+    invoke: async (cmd, args) => {
+      if (cmd === "apps_layout_get") return layout;
+      if (cmd === "apps_layout_set") { layout = args.layout; return null; }
+      if (cmd === "leak_guard_set") {
+        const on = args.services.length > 0;
+        leak = { enabled: on, services: args.services.join(","), auto_restore: on, verified: on && args.services.includes("claude") ? true : null };
+        return leak;
+      }
+      if (cmd === "leak_guard_status") return leak;
+      if (cmd === "set_global_proxy_env") return (R.global_proxy_env = { present: true, points_to_bridge: true, values: [] });
+      if (cmd === "clear_global_proxy_env") return (R.global_proxy_env = { present: false, points_to_bridge: false, values: [] });
+      if (cmd === "bridge_set_route_mode") { health.mode = args.mode; return null; }
+      if (cmd === "browser_policy_status") return args.id === "custom-1" ? structuredClone(R.browser_policy_status) : null;
+      if (cmd === "apps_remove") { const a = apps.find((x) => x.id === args.id); if (a) a.hidden = true; return apps; }
+      if (cmd.startsWith("plugin:event|")) return 1;
+      if (cmd in R) return structuredClone(R[cmd]);
+      (window.__mockMisses ||= []).push(cmd);
+      return null;
+    },
+  };
+  window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
+</script>
+<script type="module">
+  import { MotionGlobalConfig } from "framer-motion";
+  if (new URLSearchParams(location.search).has("still")) MotionGlobalConfig.skipAnimations = true;
+  await import("/src/main.tsx");
+</script>
+</body>
+</html>

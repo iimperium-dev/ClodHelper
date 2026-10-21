@@ -62,8 +62,8 @@ function trafficStatus(t: AppTraffic | undefined, idle: string): RowStatus {
   Приложения: один список одинаковых строк. У каждой — статус по ЖИВЫМ
   соединениям (через мост / мимо моста) и одна кнопка, если что-то не так.
   Claude Desktop и Telegram — такие же строки; их настройка — та же кнопка
-  «Подключить», а не отдельные панели. На Windows статуса по соединениям нет —
-  там работает тумблер killswitch и прежняя панель Claude.
+  «Подключить», а не отдельные панели. На Windows статусы те же (netstat),
+  плюс тумблер killswitch и прежняя панель «Прокси Claude».
 */
 export function Apps() {
   const [apps, setApps] = useState<AppProfileStatus[] | null>(null);
@@ -109,27 +109,30 @@ export function Apps() {
   }, []);
 
   // Иконки своих приложений (встроенные рисуются брендовыми плитками).
+  // Каждый путь запрашиваем один раз: если иконку не удалось достать, ответ
+  // пустой — повторный запрос по изменению icons зациклил бы опрос.
+  const askedIcons = useRef(new Set<string>());
   useEffect(() => {
     if (!isMac || !apps) return;
     const need = apps
-      .filter((a) => a.location && !(a.location in icons))
-      .map((a) => a.location as string);
+      .map((a) => a.location)
+      .filter((l): l is string => !!l && !askedIcons.current.has(l));
     if (need.length === 0) return;
+    need.forEach((l) => askedIcons.current.add(l));
     appsIcons(need)
       .then((got) => setIcons((old) => ({ ...old, ...got })))
       .catch(() => {});
-  }, [apps, icons]);
+  }, [apps]);
 
   const loadTraffic = useCallback(async () => {
-    if (!isMac) return;
     const list = await appsTraffic().catch(() => [] as AppTraffic[]);
     setTraffic(Object.fromEntries(list.map((t) => [t.id, t])));
   }, []);
 
   const loadSetup = useCallback(async () => {
-    if (!isMac) return;
     await Promise.all([
-      claudeProxyStatus().then(setClaude).catch(() => {}),
+      // Windows: прокси Claude настраивается блоком ниже, здесь только статус.
+      isMac ? claudeProxyStatus().then(setClaude).catch(() => {}) : Promise.resolve(),
       telegramStatus().then(setTelegram).catch(() => {}),
     ]);
   }, []);
@@ -138,7 +141,6 @@ export function Apps() {
     void load();
     void loadSetup();
     void loadTraffic();
-    if (!isMac) return;
     // Скрытое окно не опрашиваем; после действия — чаще, пока не переключится.
     let timer = 0;
     const tick = () => {
@@ -196,14 +198,16 @@ export function Apps() {
     const remove: RowAction[] = app.builtin
       ? []
       : [{ label: "Удалить из списка", run: () => removeApp(app.id), danger: true }];
-    if (!isMac) {
-      return { status: null, action: null, menu: [...shortcutMenu(app), ...remove] };
-    }
     const t = traffic[app.id];
     const relaunch: RowAction = {
       label: "Перезапустить через мост",
       run: () => after(appsRelaunch(app.id)),
     };
+    // Windows: Claude настраивается блоком «Прокси Claude» ниже — в строке
+    // только факт по соединениям.
+    if (!isMac && app.id === CLAUDE_ID) {
+      return { status: trafficStatus(t, "Не запущен"), action: null, menu: shortcutMenu(app) };
+    }
 
     if (app.id === CLAUDE_ID) {
       const policy = claude?.policy;
@@ -231,7 +235,9 @@ export function Apps() {
             label: "Подключить",
             run: () =>
               after(claudeProxyEnable()).then(
-                (r) => r.policy.notice ?? "Готово. Перезапустите Claude Desktop (Cmd+Q и открыть снова).",
+                (r) =>
+                  r.policy.notice ??
+                  "Готово, защита от утечек включена. Перезапустите Claude Desktop (Cmd+Q и открыть снова).",
               ),
           },
           menu,
@@ -262,7 +268,7 @@ export function Apps() {
       return {
         status: { tone: "warn", text: `Прокси перехватывает ${ext.name}` },
         action: {
-          label: `Отключить ${ext.name}`,
+          label: "Отключить",
           run: () =>
             after(appsOpenExtension(app.id, ext.id)).then(
               () => `Выключите ${ext.name} в открывшейся вкладке — перезапуск не нужен`,
@@ -363,7 +369,7 @@ export function Apps() {
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {isMac && !editing && (
+          {!editing && (
             <ViewSwitch
               value={layout.view}
               onChange={(view) => updateLayout({ ...layout, view })}

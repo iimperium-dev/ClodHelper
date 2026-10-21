@@ -133,7 +133,7 @@ export function AppRow({
             </motion.button>
           )}
         </AnimatePresence>
-        <IconWithGear show={hover && !editing} size={32} onSettings={onSettings}>
+        <IconWithGear show={hover && !editing} size={32} onSettings={onSettings} name={app.name}>
           <AppIcon name={app.name} icon={icon} size={32} dim={!app.installed} />
         </IconWithGear>
 

@@ -229,6 +229,7 @@ export function Proxies() {
       setGeoBusy((b) => ({ ...b, [key]: true }));
       try {
         const r = await checkProxy(url);
+        if (!r) return; // нет ответа — не роняем страницу, просто без флага
         setGeo((old) => {
           const next = { ...old, [key]: r };
           // Провал (гео-API недоступен, прокси моргнул) навсегда не кэшируем —
