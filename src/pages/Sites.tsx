@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, ChevronDown, Eye, Loader2, Pencil, Plus, RotateCw, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, Eye, FolderOpen, Loader2, Pencil, Plus, RotateCw, Trash2, X } from "lucide-react";
 import { Button } from "../components/Button";
 import { Toggle } from "../components/Toggle";
 import { ProxySelect } from "./Proxies";
@@ -14,17 +14,23 @@ import {
   proxyLabelsGet,
   sitesGet,
   sitesHosts,
+  sitesBypassCandidates,
+  sitesBypassFromExe,
+  sitesBypassGet,
+  sitesBypassSet,
   sitesNormalize,
   sitesOpenExtension,
   sitesPeek,
   sitesProxyExtensions,
+  sitesScopeGet,
+  sitesScopeSet,
   sitesSet,
   sitesStatus,
   systemPacSet,
   systemPacStatus,
 } from "../lib/api";
 import { useStatus } from "../lib/status";
-import type { BrowserProxyExtensions, SeenHost, SiteEntry, SitesStatus, SystemPacStatus } from "../lib/types";
+import type { BrowserProxyExtensions, BypassApp, SitesScope, SeenHost, SiteEntry, SitesStatus, SystemPacStatus } from "../lib/types";
 import { fadeInUp, staggerContainer } from "../lib/motion";
 import { cn } from "../lib/cn";
 
@@ -109,6 +115,54 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
   const [peek, setPeek] = useState<string | null>(null);
   const [pac, setPac] = useState<SystemPacStatus | null>(null);
   const [advanced, setAdvanced] = useState(false);
+  // Где работают сайты: false — во всех браузерах (системная автонастройка),
+  // true — только в выбранных (PAC их политикой). scopeView — что показано
+  // (выбор «только в выбранных» вступает в силу по «Применить»).
+  const [scope, setScope] = useState<SitesScope | null>(null);
+  const [scopeView, setScopeView] = useState(false);
+  const [draft, setDraft] = useState<Set<string>>(new Set());
+  const applyScopeState = (sc: SitesScope) => {
+    setScope(sc);
+    setScopeView(sc.selected);
+    setDraft(new Set(sc.browsers.filter((b) => b.state === "pac").map((b) => b.domain)));
+  };
+  const scopePac = scope?.browsers.filter((b) => b.state === "pac").map((b) => b.domain) ?? [];
+  const draftChanged =
+    !!scope && (scopeView !== scope.selected || draft.size !== scopePac.length || scopePac.some((d) => !draft.has(d)));
+
+  const chooseScope = async (sel: boolean) => {
+    if (sel === scopeView) return;
+    if (sel || !scope?.selected) {
+      setScopeView(sel); // «Только в выбранных» — по «Применить»
+      return;
+    }
+    // Обратно «во всех»: снять политики с браузеров и включить автонастройку.
+    setBusy("scope");
+    setError(null);
+    try {
+      applyScopeState(await sitesScopeSet(false, []));
+      setPac(await systemPacStatus().catch(() => null));
+      setNote("Сайты снова во всех браузерах — перезапустите браузеры, где они были выбраны");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const applyScope = async () => {
+    setBusy("scope");
+    setError(null);
+    try {
+      applyScopeState(await sitesScopeSet(true, [...draft]));
+      setPac(await systemPacStatus().catch(() => null));
+      setNote("Готово — перезапустите выбранные браузеры. Остальные работают без Clod Helper");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
   const [extensions, setExtensions] = useState<BrowserProxyExtensions[]>([]);
   const [showIssues, setShowIssues] = useState(false);
   const [dismissed, setDismissed] = useState<Set<string>>(loadDismissed);
@@ -128,14 +182,16 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
   };
 
   const loadStatus = useCallback(async () => {
-    const [st, p, ext] = await Promise.all([
+    const [st, p, ext, sc] = await Promise.all([
       sitesStatus().catch(() => null),
       systemPacStatus().catch(() => null),
       sitesProxyExtensions().catch(() => []),
+      sitesScopeGet().catch(() => null),
     ]);
     setStatus(st);
     setPac(p);
     setExtensions(ext);
+    if (sc) applyScopeState(sc);
   }, []);
 
   // Человек ушёл отключать расширение в браузер и вернулся — перепроверить.
@@ -215,7 +271,7 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
       // сайт, ждёт, что он заработает (в 0.8.0 «ничего не происходило»).
       // Включаем «Во всех браузерах» сами, если ничто не мешает: чужой
       // прокси в Windows молча не заменяем — для него есть предупреждение.
-      if (pac?.supported && !pac.enabled && !pac.foreign && status?.supported && sitesBrowsers.length === 0) {
+      if (pac?.supported && !pac.enabled && !pac.foreign && status?.supported && sitesBrowsers.length === 0 && !scope?.selected) {
         await togglePac(true);
         setNote(`«${name}» — через прокси. Включил «Во всех браузерах»: сайты работают в Chrome, Edge и других`);
       }
@@ -287,7 +343,11 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
   // «Только сайты». Браузер «весь трафик» в счёт не идёт: он ходит через
   // мост, только когда открыт через Clod Helper.
   const notWired =
-    !!status?.supported && !!sites?.some((s) => s.enabled) && !(pac?.enabled && pac.active) && sitesBrowsers.length === 0;
+    !!status?.supported &&
+    !!sites?.some((s) => s.enabled) &&
+    !(pac?.enabled && pac.active) &&
+    sitesBrowsers.length === 0 &&
+    scopePac.length === 0;
   const peekSite = sites?.find((s) => s.id === peek) ?? null;
 
   return (
@@ -568,6 +628,28 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
                 transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
                 className="overflow-hidden"
               >
+          {/* Где работают сайты: во всех браузерах или только в выбранных */}
+          <div className="mt-2 flex rounded-lg bg-vb-surface-2/60 p-0.5" role="tablist" aria-label="Где работают сайты">
+            {([false, true] as const).map((sel) => (
+              <button
+                key={String(sel)}
+                type="button"
+                role="tab"
+                aria-selected={scopeView === sel}
+                onClick={() => void chooseScope(sel)}
+                disabled={busy !== null}
+                className={cn(
+                  "flex-1 rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors",
+                  scopeView === sel ? "bg-vb-surface text-vb-fg shadow-[0_1px_2px_rgba(0,0,0,0.3)]" : "text-vb-silver-dim hover:text-vb-silver",
+                )}
+              >
+                {sel ? "Только в выбранных" : "Во всех браузерах"}
+              </button>
+            ))}
+          </div>
+
+          {!scopeView ? (
+            <>
           <div className="surface-card mt-2 divide-y divide-vb-border/70">
             <div className="flex items-center justify-between gap-4 px-4 py-3">
               <div className="min-w-0">
@@ -614,9 +696,82 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
             )}
           </div>
           <p className="mt-2 px-1 text-[11px] leading-snug text-vb-silver-faint">
-            Включено — сайты из списка идут через прокси в любом браузере, обычные сайты — напрямую, мимо
-            моста. Выключите, только если настраиваете прокси в браузерах сами
+            Каждый браузер перед каждым запросом спрашивает, идти ли через прокси, — это несколько
+            миллисекунд на запрос. Не нужно в каждом браузере — выберите «Только в выбранных»
           </p>
+          <BypassCard />
+            </>
+          ) : (
+            <>
+              <div className="surface-card mt-2 divide-y divide-vb-border/70">
+                {scope === null ? (
+                  <div className="flex justify-center p-4">
+                    <Loader2 className="h-4 w-4 animate-spin text-vb-silver-dim" />
+                  </div>
+                ) : scope.browsers.length === 0 ? (
+                  <p className="px-4 py-3 text-[12px] text-vb-silver-faint">Не нашёл Chrome, Edge, Brave или Chromium</p>
+                ) : (
+                  scope.browsers.map((b) => {
+                    const locked = b.state === "bridge" || b.state === "conflict";
+                    const on = draft.has(b.domain);
+                    return (
+                      <button
+                        key={b.domain}
+                        type="button"
+                        disabled={locked || busy !== null}
+                        onClick={() =>
+                          setDraft((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(b.domain)) next.delete(b.domain);
+                            else next.add(b.domain);
+                            return next;
+                          })
+                        }
+                        className={cn(
+                          "flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors",
+                          locked ? "cursor-default opacity-60" : "hover:bg-vb-surface-2/50",
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            "flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors",
+                            on ? "border-vb-emerald bg-vb-emerald" : "border-vb-border-strong",
+                          )}
+                        >
+                          {on && <Check className="h-3 w-3 text-black" />}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-[13px] font-medium text-vb-fg">{b.name}</span>
+                          <span className={cn("block truncate text-[11px]", b.state === "conflict" ? "text-vb-warn" : "text-vb-silver-faint")}>
+                            {b.state === "pac"
+                              ? "Сайты из списка — через прокси"
+                              : b.state === "bridge"
+                                ? "Весь трафик через мост — настроено в «Приложениях»"
+                                : b.state === "conflict"
+                                  ? b.conflict ?? "Чужая политика прокси"
+                                  : "Без Clod Helper"}
+                          </span>
+                        </span>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+              <div className="mt-2 flex items-start justify-between gap-3 px-1">
+                <p className="text-[11px] leading-snug text-vb-silver-faint">
+                  Остальные браузеры, включая 1browser, работают совсем без Clod Helper. После изменений
+                  перезапустите выбранные браузеры. Новые сайты в них могут заработать только после перезапуска
+                </p>
+                {scope && draftChanged && (
+                  <Button size="sm" disabled={busy !== null} onClick={() => void applyScope()}>
+                    {busy === "scope" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                    Применить
+                  </Button>
+                )}
+              </div>
+            </>
+          )}
+
               </motion.div>
             )}
           </AnimatePresence>
@@ -691,8 +846,9 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
         <PeekDialog
           site={peekSite}
           sites={sites ?? []}
-          browserReady={(!!pac?.enabled && pac.active) || sitesBrowsers.length > 0}
+          browserReady={(!!pac?.enabled && pac.active) || sitesBrowsers.length > 0 || scopePac.length > 0}
           pacMode={!!pac?.enabled && pac.active}
+          limited={scopePac.length > 0 && !(pac?.enabled && pac.active)}
           onAdd={async (domains) => {
             const next = [...new Set([...peekSite.domains, ...domains])];
             return save(
@@ -705,6 +861,149 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
         />
       )}
     </motion.div>
+  );
+}
+
+/*
+  «Не трогать эти браузеры»: программы, трафик которых Clod Helper не
+  трогает вовсе — мост узнаёт их по соединению и отпускает напрямую, с
+  настоящего IP. Правило — на папку программы: у антидетект-браузера
+  (1browser и т.п.) сразу на все профили, сколько их ни открой.
+*/
+function BypassCard() {
+  const [apps, setApps] = useState<BypassApp[] | null>(null);
+  const [candidates, setCandidates] = useState<BypassApp[] | null>(null);
+  const [picking, setPicking] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    void sitesBypassGet().then(setApps).catch(() => setApps([]));
+  }, []);
+
+  const save = async (next: BypassApp[]) => {
+    const prev = apps;
+    setApps(next);
+    setErr(null);
+    try {
+      setApps(await sitesBypassSet(next));
+    } catch (e) {
+      setApps(prev);
+      setErr(String(e));
+    }
+  };
+
+  const openPicker = async () => {
+    setPicking((v) => !v);
+    setCandidates(null);
+    setCandidates(await sitesBypassCandidates().catch(() => []));
+  };
+
+  const add = (a: BypassApp) => {
+    setPicking(false);
+    if (apps?.some((x) => x.dir.toLowerCase() === a.dir.toLowerCase())) return;
+    void save([...(apps ?? []), a]);
+  };
+
+  const pickExe = async () => {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const path = await open({ multiple: false, filters: [{ name: "Программа", extensions: ["exe"] }] });
+    if (typeof path !== "string") return;
+    try {
+      add(await sitesBypassFromExe(path));
+    } catch (e) {
+      setErr(String(e));
+    }
+  };
+
+  return (
+    <div className="surface-card mt-3">
+      <div className="flex items-start justify-between gap-3 px-4 pt-3">
+        <div className="min-w-0">
+          <div className="text-[14px] font-semibold text-vb-fg">Не трогать эти браузеры</div>
+          <div className="mt-px text-[11px] leading-snug text-vb-silver-faint">
+            Их трафик идёт напрямую с вашего IP, как без Clod Helper. У антидетект-браузеров — сразу все профили
+          </div>
+        </div>
+        <Button variant="secondary" size="sm" onClick={() => void openPicker()}>
+          <Plus className={cn("h-3.5 w-3.5 transition-transform duration-200", picking && "rotate-45")} />
+          {picking ? "Закрыть" : "Добавить"}
+        </Button>
+      </div>
+
+      <AnimatePresence initial={false}>
+        {picking && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+            className="overflow-hidden"
+          >
+            <div className="mx-4 mt-3 overflow-hidden rounded-lg border border-vb-border/70 bg-vb-surface-2/40">
+              {candidates === null ? (
+                <div className="flex justify-center p-3">
+                  <Loader2 className="h-4 w-4 animate-spin text-vb-silver-dim" />
+                </div>
+              ) : (
+                candidates.map((c) => (
+                  <button
+                    key={c.dir}
+                    type="button"
+                    onClick={() => add(c)}
+                    className="flex w-full items-center gap-2.5 border-b border-vb-border/50 px-3 py-2 text-left transition-colors hover:bg-vb-surface-2/80"
+                  >
+                    <span
+                      className={cn("h-1.5 w-1.5 shrink-0 rounded-full", c.running ? "bg-vb-emerald" : "bg-vb-border-strong")}
+                      title={c.running ? "Запущен" : "Не запущен"}
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[13px] text-vb-fg">{c.name}</span>
+                      <span className="block truncate font-mono text-[10px] text-vb-silver-faint">{c.dir}</span>
+                    </span>
+                    <Plus className="h-3.5 w-3.5 shrink-0 text-vb-silver-faint" />
+                  </button>
+                ))
+              )}
+              <button
+                type="button"
+                onClick={() => void pickExe()}
+                className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-[12px] text-vb-silver-dim transition-colors hover:bg-vb-surface-2/80 hover:text-vb-silver"
+              >
+                <FolderOpen className="h-3.5 w-3.5" />
+                Выбрать программу…
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <div className="px-4 pb-3 pt-2">
+        {apps === null ? null : apps.length === 0 ? (
+          <p className="text-[12px] text-vb-silver-faint">Пока сайты из списка идут через прокси во всех браузерах</p>
+        ) : (
+          <div className="flex flex-wrap gap-1.5">
+            {apps.map((a) => (
+              <span
+                key={a.dir}
+                title={a.dir}
+                className="inline-flex items-center gap-1.5 rounded-full border border-vb-border bg-vb-surface-2/60 py-1 pl-3 pr-1 text-[12px] text-vb-silver"
+              >
+                {a.name}
+                <button
+                  type="button"
+                  aria-label={`Вернуть ${a.name}`}
+                  onClick={() => void save(apps.filter((x) => x.dir !== a.dir))}
+                  className="rounded-full p-0.5 text-vb-silver-faint transition-colors hover:text-vb-loss"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        {err && <p className="mt-2 text-[11px] text-vb-loss">{err}</p>}
+      </div>
+    </div>
   );
 }
 
@@ -947,6 +1246,7 @@ function PeekDialog({
   sites,
   browserReady,
   pacMode,
+  limited,
   onAdd,
   onClose,
 }: {
@@ -955,6 +1255,8 @@ function PeekDialog({
   browserReady: boolean;
   /** Сайты идут через системный PAC: на время записи весь трафик — через мост. */
   pacMode: boolean;
+  /** «Только в выбранных»: PAC браузера постоянный — видны только адреса из списка. */
+  limited?: boolean;
   onAdd: (domains: string[]) => Promise<boolean>;
   onClose: () => void;
 }) {
@@ -964,6 +1266,9 @@ function PeekDialog({
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [adding, setAdding] = useState(false);
   const [showOther, setShowOther] = useState(false);
+  // Запись идёт до 3 минут (system_pac::PEEK_LIMIT): дольше весь браузер
+  // тянулся бы через мост и тормозил.
+  const [expired, setExpired] = useState(false);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
 
@@ -985,6 +1290,7 @@ function PeekDialog({
       // старта записи. since в будущем — пустой список, но с часами моста.
       const r = await sitesHosts(Number.MAX_SAFE_INTEGER, true);
       setShowOther(false);
+      setExpired(false);
       setMark(r.now_ms);
     } catch (e) {
       setErr(String(e));
@@ -995,6 +1301,16 @@ function PeekDialog({
   useEffect(() => {
     if (mark === null || !pacMode) return;
     return () => void sitesPeek(false).catch(() => {});
+  }, [mark, pacMode]);
+
+  // Через 3 минуты запись кончается сама (её выключает и программа).
+  useEffect(() => {
+    if (mark === null) return;
+    const t = window.setTimeout(() => {
+      setExpired(true);
+      if (pacMode) void sitesPeek(false).catch(() => {});
+    }, 180_000);
+    return () => window.clearTimeout(t);
   }, [mark, pacMode]);
 
   useEffect(() => {
@@ -1097,8 +1413,10 @@ function PeekDialog({
             <div className="truncate text-[16px] font-semibold text-vb-fg">Подсмотреть: {site.name}</div>
             <div className="text-[12px] leading-snug text-vb-silver-faint">
               {mark === null
-                ? "Начните запись, откройте сайт в браузере и полистайте его"
-                : "Записываю — обновите страницу сайта и полистайте, адреса появятся здесь"}
+                ? "Начните запись, откройте сайт в браузере и полистайте его. Запись идёт до 3 минут"
+                : expired
+                  ? "Запись закончилась (3 минуты) — нажмите «Заново», чтобы записать ещё"
+                  : "Записываю — обновите страницу сайта и полистайте, адреса появятся здесь"}
             </div>
           </div>
           <button
@@ -1116,6 +1434,12 @@ function PeekDialog({
             <p className="mb-3 rounded-lg border border-vb-warn/35 bg-vb-warn/[0.05] px-3 py-2 text-[12px] leading-snug text-vb-warn">
               Сайты не включены ни в одном браузере — запись будет пустой. Включите «Во всех браузерах» на
               странице «Сайты»
+            </p>
+          )}
+          {limited && (
+            <p className="mb-3 rounded-lg bg-vb-surface-2/50 px-3 py-2 text-[12px] leading-snug text-vb-silver-dim">
+              В режиме «Только в выбранных» запись видит лишь адреса, которые уже идут через прокси. Чтобы найти
+              новые, на время переключитесь «Во всех браузерах»
             </p>
           )}
           {err && <p className="mb-3 text-[12px] text-vb-loss">{err}</p>}

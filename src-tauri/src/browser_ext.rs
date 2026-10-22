@@ -224,6 +224,91 @@ pub fn installed_browsers() -> Vec<(String, String)> {
     out
 }
 
+/// Программа, которую «Сайты» не трогают (см. мост: bypass_apps).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct BypassApp {
+    pub name: String,
+    /// Папка программы: все её exe внутри (у антидетект-браузера — все профили).
+    pub dir: String,
+    /// Запущена сейчас (только для подсказок в UI).
+    #[serde(default)]
+    pub running: bool,
+}
+
+/// Папка программы по пути к её exe: «…\Google\Chrome\Application\chrome.exe»
+/// → «…\Google\Chrome»; «…\Local\1browser\1browser\Application\1browser.exe»
+/// → «…\Local\1browser» (двойная папка — весь продукт с его ядрами профилей).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub fn app_dir(exe: &str) -> Option<String> {
+    let p = Path::new(exe);
+    let mut dir = p.parent()?.to_path_buf();
+    if dir.file_name().is_some_and(|n| n.eq_ignore_ascii_case("Application")) {
+        dir = dir.parent()?.to_path_buf();
+    }
+    if let (Some(name), Some(parent)) = (dir.file_name(), dir.parent()) {
+        if parent.file_name().is_some_and(|pn| pn.eq_ignore_ascii_case(name)) {
+            dir = parent.to_path_buf();
+        }
+    }
+    // Не папка-«корзина» вроде диска, Program Files или AppData\Local целиком.
+    let s = dir.to_string_lossy().to_string();
+    let too_wide = dir.components().count() < 3
+        || [dirs::data_local_dir(), dirs::data_dir(), std::env::var_os("ProgramFiles").map(PathBuf::from), std::env::var_os("ProgramFiles(x86)").map(PathBuf::from)]
+            .into_iter()
+            .flatten()
+            .any(|w| w == dir);
+    (!too_wide).then_some(s)
+}
+
+/// Кандидаты в «Не трогать»: установленные Chromium-браузеры и запущенные
+/// программы на движке Chromium (рядом с exe лежит chrome_elf.dll — так
+/// находятся и антидетект-браузеры вроде 1browser, которых нет в списках).
+pub fn bypass_candidates() -> Vec<BypassApp> {
+    #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
+    let mut out: Vec<BypassApp> = Vec::new();
+    #[cfg(target_os = "windows")]
+    {
+        use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+        let mut sys = System::new();
+        sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::new().with_exe(UpdateKind::OnlyIfNotSet));
+        let mut running: Vec<String> = sys
+            .processes()
+            .values()
+            .filter_map(|p| p.exe().map(|e| e.to_string_lossy().to_string()))
+            .collect();
+        running.sort();
+        running.dedup();
+        let is_chromium = |exe: &str| {
+            let Some(dir) = Path::new(exe).parent() else { return false };
+            dir.join("chrome_elf.dll").exists()
+                || std::fs::read_dir(dir)
+                    .map(|rd| rd.flatten().any(|e| e.path().join("chrome_elf.dll").exists()))
+                    .unwrap_or(false)
+        };
+        let me = std::env::current_exe().ok().and_then(|e| e.to_str().and_then(app_dir));
+        let push = |name: String, exe: &str, is_running: bool, out: &mut Vec<BypassApp>| {
+            let Some(dir) = app_dir(exe) else { return };
+            if me.as_deref() == Some(dir.as_str()) {
+                return;
+            }
+            if let Some(found) = out.iter_mut().find(|a| a.dir.eq_ignore_ascii_case(&dir)) {
+                found.running |= is_running;
+                return;
+            }
+            out.push(BypassApp { name, dir, running: is_running });
+        };
+        for (name, exe) in installed_browsers() {
+            let is_running = running.iter().any(|r| r.eq_ignore_ascii_case(&exe));
+            push(name, &exe, is_running, &mut out);
+        }
+        for exe in running.iter().filter(|e| e.to_ascii_lowercase().ends_with(".exe") && is_chromium(e)) {
+            let name = app_stem(exe).unwrap_or("Программа").to_string();
+            push(name, exe, true, &mut out);
+        }
+    }
+    out
+}
+
 /// Открыть страницу расширения в браузере по его пути (Windows: адрес
 /// передаётся exe — открытый браузер просто покажет новую вкладку).
 #[cfg(target_os = "windows")]
@@ -300,6 +385,9 @@ mod tests {
     #[ignore]
     fn live_chrome() {
         println!("chrome → {:?}", proxy_extensions("/Applications/Google Chrome.app"));
+        for a in bypass_candidates() {
+            println!("кандидат «Не трогать»: {a:?}");
+        }
         for (name, path) in installed_browsers() {
             println!("{name} ({path}) → {:?}", proxy_extensions(&path));
         }
@@ -320,6 +408,22 @@ mod tests {
         assert_eq!(rel("C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"), Some("Microsoft\\Edge\\User Data"));
         assert_eq!(rel("C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe"), Some("BraveSoftware\\Brave-Browser\\User Data"));
         assert_eq!(rel("D:\\Telegram Desktop\\Telegram.exe"), None);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn app_dir_covers_the_whole_product() {
+        assert_eq!(
+            app_dir(r"C:\Program Files\Google\Chrome\Application\chrome.exe").as_deref(),
+            Some(r"C:\Program Files\Google\Chrome")
+        );
+        assert_eq!(
+            app_dir(r"C:\Users\u\AppData\Local\1browser\1browser\Application\1browser.exe").as_deref(),
+            Some(r"C:\Users\u\AppData\Local\1browser"),
+            "двойная папка 1browser\\1browser — весь продукт"
+        );
+        assert_eq!(app_dir(r"D:\Tools\MyBrowser\browser.exe").as_deref(), Some(r"D:\Tools\MyBrowser"));
+        assert_eq!(app_dir(r"C:\x.exe"), None, "корень диска — слишком широко");
     }
 
     #[test]

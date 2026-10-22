@@ -245,9 +245,31 @@ pub fn refresh() -> Result<(), String> {
     write(&ProxyConf::ours(&pac_url(PEEK.load(std::sync::atomic::Ordering::Relaxed))))
 }
 
+/// Сколько длится запись «Подсмотреть». В режиме записи весь трафик браузеров
+/// идёт через мост, а Chrome держит к одному прокси не больше 32 соединений —
+/// всё браузерное тянется через эти 32 и тормозит. Поэтому запись кончается
+/// сама: окно «Подсмотреть» могли не закрыть (спрятали программу в трей),
+/// и режим оставался включённым часами — «остальные сайты плохо работают».
+pub const PEEK_LIMIT: std::time::Duration = std::time::Duration::from_secs(180);
+
+/// Номер записи: таймер выключает только ту запись, которую он завёл.
+static PEEK_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Начать/закончить запись «Подсмотреть».
 pub fn set_peek(on: bool) -> Result<(), String> {
-    PEEK.store(on, std::sync::atomic::Ordering::Relaxed);
+    use std::sync::atomic::Ordering;
+    PEEK.store(on, Ordering::Relaxed);
+    let generation = PEEK_GEN.fetch_add(1, Ordering::Relaxed) + 1;
+    if on {
+        std::thread::spawn(move || {
+            std::thread::sleep(PEEK_LIMIT);
+            if PEEK_GEN.load(Ordering::Relaxed) == generation && PEEK.load(Ordering::Relaxed) {
+                if let Err(e) = set_peek(false) {
+                    tracing::warn!("автостоп «Подсмотреть»: {e}");
+                }
+            }
+        });
+    }
     refresh()
 }
 

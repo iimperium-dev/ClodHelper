@@ -56,8 +56,14 @@ pub fn policy_domain(app_path: &str) -> Option<&'static str> {
     })
 }
 
-/// Вход моста для политики — только локальный 127.0.0.1:порт.
+/// PAC моста для режима «Сайты только в выбранных браузерах».
+pub const PAC_SERVER: &str = "pac:http://127.0.0.1:8887/proxy.pac";
+
+/// Вход моста для политики — только локальный 127.0.0.1:порт или PAC моста.
 fn valid_server(srv: &str) -> Result<(), String> {
+    if srv == PAC_SERVER {
+        return Ok(());
+    }
     let port = srv.strip_prefix("127.0.0.1:").unwrap_or_default();
     if port.is_empty() || !port.chars().all(|c| c.is_ascii_digit()) || port.parse::<u16>().map_or(true, |p| p == 0) {
         return Err("Ожидался вход моста 127.0.0.1:порт".into());
@@ -166,6 +172,9 @@ const FOREIGN: &str = "У браузера уже есть чужая полит
 /// Значение ProxySettings, которое пишет Helper (байт в байт как скрипт).
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn proxy_settings(server: &str) -> String {
+    if let Some(url) = server.strip_prefix("pac:") {
+        return format!(r#"{{"ProxyMode":"pac_script","ProxyPacUrl":"{url}"}}"#);
+    }
     format!(r#"{{"ProxyMode":"fixed_servers","ProxyServer":"{server}","ProxyBypassList":"<local>"}}"#)
 }
 
@@ -205,9 +214,11 @@ fn status_from(proxy: &RegValue, webrtc: &RegValue, legacy: bool, owner: &RegVal
             Some((server, orig_proxy, orig_webrtc))
         }
     };
-    let ours = state
-        .as_ref()
-        .is_some_and(|(server, _, _)| proxy.is_str(&proxy_settings(server)) && webrtc.is_str(WEBRTC));
+    // PAC («Сайты» в этом браузере) WebRTC не трогает — наше там значение
+    // исходное; «весь трафик» — запрет UDP мимо прокси (как в скрипте).
+    let ours = state.as_ref().is_some_and(|(server, _, ow)| {
+        proxy.is_str(&proxy_settings(server)) && if server == PAC_SERVER { webrtc == ow } else { webrtc.is_str(WEBRTC) }
+    });
     let conflict = if legacy {
         Some(FOREIGN.to_string())
     } else {
@@ -243,6 +254,49 @@ pub fn status(domain: &str) -> Result<BrowserPolicyStatus, String> {
         legacy,
         &value(&root, OWNER_KEY, domain),
     )
+}
+
+/// Windows: «Сайты» (PAC моста) — включить одним браузерам и снять с других
+/// за ОДНО окно UAC. Проверяет фактический результат по реестру.
+#[cfg(target_os = "windows")]
+pub fn apply_pac(enable: &[&str], disable: &[&str]) -> Result<(), String> {
+    if enable.is_empty() && disable.is_empty() {
+        return Ok(());
+    }
+    if enable.iter().chain(disable).any(|d| policy_domain_known(d).is_none()) {
+        return Err("Неизвестный браузер".into());
+    }
+    let arguments = format!(
+        "-Action Apply -EnableDomains \"{}\" -DisableDomains \"{}\" -Server {PAC_SERVER}",
+        enable.join(","),
+        disable.join(",")
+    );
+    let outcome = crate::elevate::run("browser-policy", &[("browser-proxy-policy.ps1", SCRIPT)], &arguments)?;
+    if outcome.cancelled {
+        return Err("Запрос прав администратора отменён".into());
+    }
+    let payload = outcome
+        .result
+        .ok_or_else(|| "Не удалось изменить политику браузера с правами администратора".to_string())?;
+    // Ошибку скрипта показываем как есть, но верим только реестру.
+    let script_err = parse(&payload).err();
+    for d in enable {
+        let st = status(d)?;
+        if !(st.configured && st.server == PAC_SERVER) {
+            return Err(script_err.unwrap_or_else(|| "Не удалось подтвердить политику браузера".into()));
+        }
+    }
+    for d in disable {
+        if status(d)?.managed {
+            return Err(script_err.unwrap_or_else(|| "Не удалось снять политику браузера".into()));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn apply_pac(_: &[&str], _: &[&str]) -> Result<(), String> {
+    Err("Пока только для Windows".into())
 }
 
 /// Windows: включить/снять одним окном UAC. Прежние значения политики
@@ -381,6 +435,29 @@ mod tests {
         for bad in ["127.0.0.1:", "127.0.0.1:0", "127.0.0.1:99999", "10.0.0.1:8890", "127.0.0.1:8890 -Action Disable"] {
             assert!(valid_server(bad).is_err(), "{bad}");
         }
+        assert!(valid_server(PAC_SERVER).is_ok());
+        for bad in ["pac:http://evil.example/proxy.pac", "pac:http://127.0.0.1:8887/proxy.pac -Action Disable"] {
+            assert!(valid_server(bad).is_err(), "{bad}");
+        }
+    }
+
+    /// PAC-режим: та же логика, что в скрипте — WebRTC остаётся исходным.
+    #[test]
+    fn pac_policy_status() {
+        use RegValue::{Absent, Str};
+        let pac = proxy_settings(PAC_SERVER);
+        assert_eq!(pac, r#"{"ProxyMode":"pac_script","ProxyPacUrl":"http://127.0.0.1:8887/proxy.pac"}"#);
+        let owner = Str(format!(
+            r#"{{"owner":"ClodHelper","version":1,"server":"{PAC_SERVER}","original":{{"ProxySettings":{{"exists":false,"kind":null,"data":null}},"WebRtcIPHandling":{{"exists":false,"kind":null,"data":null}}}}}}"#
+        ));
+        let st = status_from(&Str(pac.clone()), &Absent, false, &owner).unwrap();
+        assert!(st.configured && st.conflict.is_none());
+        assert_eq!(st.server, PAC_SERVER);
+        // Наш WebRTC-запрет при PAC — не «настроено» (так не должно остаться).
+        assert!(!status_from(&Str(pac), &Str(WEBRTC.into()), false, &owner).unwrap().configured);
+        // Скрипт строит ту же строку.
+        let ps = include_str!("../resources/browser-proxy-policy.ps1");
+        assert!(ps.contains(r#"'{{"ProxyMode":"pac_script","ProxyPacUrl":"{0}"}}'"#));
     }
 
     /// Живой статус: cargo test live_browser_policy -- --ignored --nocapture

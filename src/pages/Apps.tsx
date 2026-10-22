@@ -105,7 +105,8 @@ export function Apps() {
     setApps(await appsList().catch(() => []));
   }, []);
 
-  // Иконки своих приложений (встроенные рисуются брендовыми плитками).
+  // Настоящие иконки программ — и своих, и встроенных (у приложений Store —
+  // логотип из пакета); фирменная плитка — только если иконку не достать.
   // Каждый путь запрашиваем один раз: если иконку не удалось достать, ответ
   // пустой — повторный запрос по изменению icons зациклил бы опрос.
   const askedIcons = useRef(new Set<string>());
@@ -371,6 +372,7 @@ export function Apps() {
             app={app}
             icon={app?.location ? icons[app.location] : undefined}
             status={app ? describe(app).status : null}
+            actions={app ? describe(app).menu.filter((m) => m.label !== "Убрать из списка") : []}
             folders={layout.folders}
             onMoveToFolder={(fid) => app && updateLayout(moveApp(layout, app.id, { folder: fid }))}
             onRemove={() => {

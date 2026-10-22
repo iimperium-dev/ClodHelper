@@ -105,6 +105,137 @@ pub async fn sites_open_extension(path: String, ext_id: String) -> Result<(), St
     .map_err(|e| format!("Внутренняя ошибка: {e}"))?
 }
 
+/// Браузер для режима «Только в выбранных»: PAC моста — его политикой.
+#[derive(Debug, Serialize)]
+pub struct ScopeBrowser {
+    pub domain: &'static str,
+    pub name: String,
+    /// "pac" — сайты в этом браузере; "bridge" — весь трафик через мост
+    /// («Всегда через мост» в Приложениях); "off"; "conflict" — чужая политика.
+    pub state: &'static str,
+    pub conflict: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SitesScope {
+    /// Режим доступен (Windows).
+    pub supported: bool,
+    /// true — «Только в выбранных браузерах», false — «Во всех».
+    pub selected: bool,
+    pub browsers: Vec<ScopeBrowser>,
+}
+
+fn scope_browsers() -> Vec<ScopeBrowser> {
+    let mut out: Vec<ScopeBrowser> = Vec::new();
+    for (name, exe) in crate::browser_ext::installed_browsers() {
+        let Some(domain) = crate::browser_policy::policy_domain(&exe) else { continue };
+        if out.iter().any(|b| b.domain == domain) {
+            continue;
+        }
+        let (state, conflict) = match crate::browser_policy::status(domain) {
+            Ok(st) if st.configured && st.server == crate::browser_policy::PAC_SERVER => ("pac", None),
+            Ok(st) if st.configured => ("bridge", None),
+            Ok(st) if st.conflict.is_some() => ("conflict", st.conflict),
+            Ok(_) => ("off", None),
+            Err(e) => ("conflict", Some(e)),
+        };
+        out.push(ScopeBrowser { domain, name, state, conflict });
+    }
+    out
+}
+
+fn scope_now() -> SitesScope {
+    SitesScope {
+        supported: cfg!(target_os = "windows"),
+        selected: settings::load().sites_scope_selected,
+        browsers: scope_browsers(),
+    }
+}
+
+#[tauri::command]
+pub async fn sites_scope_get() -> Result<SitesScope, String> {
+    tokio::task::spawn_blocking(scope_now).await.map_err(|e| format!("Внутренняя ошибка: {e}"))
+}
+
+/// Переключить режим: «во всех» (системная автонастройка) или «только в
+/// выбранных» (PAC моста политикой выбранных браузеров, остальные — вообще
+/// без Clod Helper и без лишней проверки каждого запроса). Политики — одним
+/// окном UAC; браузеры с «Всегда через мост» и с чужой политикой не трогаем.
+#[tauri::command]
+pub async fn sites_scope_set(selected: bool, browsers: Vec<String>) -> Result<SitesScope, String> {
+    tokio::task::spawn_blocking(move || -> Result<SitesScope, String> {
+        let current = scope_browsers();
+        let pac_now: Vec<&str> = current.iter().filter(|b| b.state == "pac").map(|b| b.domain).collect();
+        if selected {
+            let enable: Vec<&str> = current
+                .iter()
+                .filter(|b| b.state == "off" && browsers.iter().any(|x| x == b.domain))
+                .map(|b| b.domain)
+                .collect();
+            let disable: Vec<&str> = pac_now.iter().copied().filter(|d| !browsers.iter().any(|x| x == d)).collect();
+            crate::browser_policy::apply_pac(&enable, &disable)?;
+            if settings::load().system_pac {
+                crate::system_pac::disable()?;
+            }
+        } else {
+            crate::browser_policy::apply_pac(&[], &pac_now)?;
+            crate::system_pac::enable()?;
+        }
+        settings::set_sites_scope_selected(selected)?;
+        Ok(scope_now())
+    })
+    .await
+    .map_err(|e| format!("Внутренняя ошибка: {e}"))?
+}
+
+/// «Не трогать эти браузеры»: текущий список.
+#[tauri::command]
+pub fn sites_bypass_get() -> Vec<crate::browser_ext::BypassApp> {
+    settings::load().sites_bypass
+}
+
+/// Кандидаты: установленные и запущенные Chromium-браузеры (кроме уже исключённых).
+#[tauri::command]
+pub async fn sites_bypass_candidates() -> Result<Vec<crate::browser_ext::BypassApp>, String> {
+    tokio::task::spawn_blocking(|| {
+        let taken = settings::load().sites_bypass;
+        crate::browser_ext::bypass_candidates()
+            .into_iter()
+            .filter(|c| !taken.iter().any(|t| t.dir.eq_ignore_ascii_case(&c.dir)))
+            .collect()
+    })
+    .await
+    .map_err(|e| format!("Внутренняя ошибка: {e}"))
+}
+
+/// Программа по выбранному exe (кнопка «Выбрать программу…»).
+#[tauri::command]
+pub fn sites_bypass_from_exe(path: String) -> Result<crate::browser_ext::BypassApp, String> {
+    let dir = crate::browser_ext::app_dir(&path).ok_or("Эту программу так не исключить — выберите exe внутри её папки")?;
+    let name = std::path::Path::new(&path)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "Программа".into());
+    Ok(crate::browser_ext::BypassApp { name, dir, running: false })
+}
+
+/// Сохранить список и сразу отдать мосту (он перечитывает файл за ~2 с).
+#[tauri::command]
+pub async fn sites_bypass_set(apps: Vec<crate::browser_ext::BypassApp>) -> Result<Vec<crate::browser_ext::BypassApp>, String> {
+    let apps: Vec<_> = apps
+        .into_iter()
+        .map(|mut a| {
+            a.running = false;
+            a
+        })
+        .collect();
+    let saved = settings::set_sites_bypass(apps)?;
+    tokio::task::spawn_blocking(crate::tasks::write_sites_file)
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))??;
+    Ok(saved.sites_bypass)
+}
+
 /// «Сайты во всех браузерах»: состояние системной автонастройки прокси.
 #[tauri::command]
 pub async fn system_pac_status() -> Result<crate::system_pac::SystemPacStatus, String> {
@@ -225,6 +356,13 @@ pub async fn sites_hosts(since: u64, reset: Option<bool>) -> Result<SeenHosts, S
 #[cfg(test)]
 mod tests {
     use super::normalize_domain;
+
+    /// Живой список (только чтение): cargo test live_scope -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn live_scope() {
+        println!("{:#?}", super::scope_now());
+    }
 
     #[test]
     fn domains_from_pasted_urls() {

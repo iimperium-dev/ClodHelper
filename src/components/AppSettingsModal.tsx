@@ -3,8 +3,10 @@ import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { Check, Loader2, X } from "lucide-react";
 import { Toggle } from "./Toggle";
+import { CountryFlag } from "./CountryFlag";
+import { CopyIp, hostOnly, hostPort, loadGeoCache, saveGeoCache } from "../pages/Proxies";
 import { AppIcon } from "./AppTile";
-import type { RowStatus } from "./AppRow";
+import type { RowAction, RowStatus } from "./AppRow";
 import {
   appsCreateShortcut,
   appsSettingsSet,
@@ -15,13 +17,14 @@ import {
   bridgeSetRouteMode,
   browserPolicySet,
   browserPolicyStatus,
+  checkProxy,
   proxiesGet,
   proxyAssignmentsGet,
   proxyAssignmentsSet,
   proxyLabelsGet,
 } from "../lib/api";
 import type { AppFolder } from "../lib/appLayout";
-import type { AppProfileStatus, BrowserPolicyStatus, LeakGuardStatus } from "../lib/types";
+import type { AppProfileStatus, BrowserPolicyStatus, LeakGuardStatus, ProxyCheckResult } from "../lib/types";
 import { cn } from "../lib/cn";
 import { isMac } from "../lib/platform";
 import { useStatus } from "../lib/status";
@@ -52,9 +55,107 @@ const GROUP_OF: Record<string, string> = {
   telegram: "telegram",
 };
 
-function hostPort(url: string): string {
-  const rest = url.includes("://") ? url.split("://")[1] : url;
-  return rest.includes("@") ? rest.slice(rest.lastIndexOf("@") + 1) : rest;
+/** Строка выбора прокси: как в «Прокси» — имя, флаг и страна, IP (копируется), пинг. */
+function ProxyChoice({
+  title,
+  hint,
+  badge,
+  url,
+  geo,
+  ms,
+  selected,
+  busy,
+  disabled,
+  onPick,
+  shown,
+}: {
+  title: string;
+  hint?: string;
+  badge?: string;
+  url?: string;
+  geo?: ProxyCheckResult;
+  ms?: number | null;
+  selected: boolean;
+  busy: boolean;
+  disabled: boolean;
+  onPick: () => void;
+  shown?: string;
+}) {
+  const dot =
+    ms === undefined ? "bg-vb-silver-faint" : ms === null ? "bg-vb-loss" : ms > 1500 ? "bg-vb-warn" : "bg-vb-emerald";
+  return (
+    <div
+      role="radio"
+      aria-checked={selected}
+      tabIndex={disabled ? -1 : 0}
+      onClick={() => !disabled && onPick()}
+      onKeyDown={(e) => {
+        if (!disabled && (e.key === "Enter" || e.key === " ")) {
+          e.preventDefault();
+          onPick();
+        }
+      }}
+      className={cn(
+        "relative flex w-full cursor-pointer items-center gap-3 px-3.5 py-2.5 text-left outline-none transition-colors",
+        "hover:bg-vb-surface-2/60 focus-visible:bg-vb-surface-2/60",
+        selected && "bg-vb-emerald/[0.05]",
+        disabled && "cursor-default",
+      )}
+    >
+      {/* Радио-кружок: выбранный — зелёный с точкой */}
+      <span
+        className={cn(
+          "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-colors",
+          selected ? "border-vb-emerald bg-vb-emerald/15" : "border-vb-border-strong",
+        )}
+      >
+        {selected &&
+          (busy ? (
+            <Loader2 className="h-2.5 w-2.5 animate-spin text-vb-emerald" />
+          ) : (
+            <span className="h-1.5 w-1.5 rounded-full bg-vb-emerald" />
+          ))}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className={cn("truncate text-[13px]", selected ? "font-semibold text-vb-fg" : "text-vb-fg")}>
+            {title}
+          </span>
+          {hint && <span className="truncate text-[11px] text-vb-silver-faint">{hint}</span>}
+          {badge && (
+            <span className="shrink-0 rounded-md border border-vb-emerald/30 bg-vb-emerald/[0.07] px-1.5 py-[3px] text-[10px] font-medium leading-none text-vb-emerald">
+              {badge}
+            </span>
+          )}
+        </span>
+        {url && (
+          <span className="mt-1 flex min-w-0 items-center gap-1.5 whitespace-nowrap text-[11px] leading-none text-vb-silver-faint">
+            {geo?.country_code && (
+              <>
+                <span className="inline-flex shrink-0 items-center gap-1.5">
+                  <CountryFlag code={geo.country_code} />
+                  {geo.country_name ?? geo.country_code}
+                </span>
+                <span aria-hidden="true">·</span>
+              </>
+            )}
+            <CopyIp text={shown ?? hostOnly(url)} copy={hostOnly(url)} />
+          </span>
+        )}
+      </span>
+      {url && (
+        <span
+          className={cn(
+            "tnum flex shrink-0 items-center gap-1.5 whitespace-nowrap font-mono text-[11px]",
+            ms === null ? "text-vb-loss" : ms !== undefined && ms > 1500 ? "text-vb-warn" : "text-vb-silver-dim",
+          )}
+        >
+          {ms === undefined ? "" : ms === null ? "нет связи" : `${ms} мс`}
+          <span className={cn("h-1.5 w-1.5 rounded-full", dot)} />
+        </span>
+      )}
+    </div>
+  );
 }
 
 interface Props {
@@ -67,6 +168,9 @@ interface Props {
   onRelaunch: () => Promise<void>;
   onChanged: (apps?: AppProfileStatus[]) => void;
   onClose: () => void;
+  /** Действия приложения, что раньше жили в меню «…» строки (ярлыки у
+      Claude, «Отключить прокси Claude», окно прокси Telegram…). */
+  actions?: RowAction[];
 }
 
 /*
@@ -85,6 +189,7 @@ export function AppSettingsModal({
   onRelaunch,
   onChanged,
   onClose,
+  actions = [],
 }: Props) {
   const [pool, setPool] = useState<string[]>([]);
   const [labels, setLabels] = useState<Record<string, string>>({});
@@ -96,7 +201,9 @@ export function AppSettingsModal({
   // Тело прокручено — под закреплённой шапкой появляется линия.
   const [scrolled, setScrolled] = useState(false);
   // Системные переменные прокси (Claude Code в терминале) — общее состояние.
-  const { env, setEnv, health, refresh } = useStatus();
+  const { env, setEnv, health, refresh, poolPing } = useStatus();
+  // Гео прокси — общий с экраном «Прокси» кэш; недостающее проверяем фоном.
+  const [geo, setGeo] = useState<Record<string, ProxyCheckResult>>(loadGeoCache);
   const envOn = !!env?.present && !!env.points_to_bridge;
   const envForeign = !!env?.present && !env.points_to_bridge;
   const guardOf = app ? GUARD_OF[app.id] : undefined;
@@ -117,6 +224,29 @@ export function AppSettingsModal({
       GUARD_OF[appId] ? leakGuardStatus().then(setGuard).catch(() => setGuard(null)) : Promise.resolve(),
     ]);
   }, [appId]);
+  useEffect(() => {
+    if (!appId) return;
+    let alive = true;
+    for (const url of pool) {
+      const key = hostPort(url);
+      if (geo[key]?.country_code) continue;
+      void checkProxy(url)
+        .then((r) => {
+          if (!alive || !r?.country_code) return;
+          setGeo((old) => {
+            const next = { ...old, [key]: r };
+            saveGeoCache(next);
+            return next;
+          });
+        })
+        .catch(() => {});
+    }
+    return () => {
+      alive = false;
+    };
+    // geo намеренно не в deps: проверяем один раз на открытие
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appId, pool]);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   useEffect(() => {
@@ -198,12 +328,19 @@ export function AppSettingsModal({
     }
   };
 
+  const pingOf = (url: string) => poolPing.find((p) => p.url === url)?.ms;
+  // Один IP на разных портах — показываем с портом, иначе строки неотличимы.
+  const shownOf = (url: string) =>
+    pool.filter((u) => hostOnly(u) === hostOnly(url)).length > 1 ? hostPort(url) : hostOnly(url);
   const options = [
-    { v: -1, title: "Авто", sub: "Основной прокси" },
+    // «Авто» = основной прокси пула (при его падении мост уходит на запасные)
+    { v: -1, title: "Авто", hint: "основной, при сбое — запасной", badge: undefined as string | undefined, url: pool[0] },
     ...pool.map((url, i) => ({
       v: i,
-      title: labels[url] || hostPort(url),
-      sub: labels[url] ? hostPort(url) : i === 0 ? "Основной" : `Запасной ${i}`,
+      title: labels[url] || `Прокси ${i + 1}`,
+      hint: undefined as string | undefined,
+      badge: i === 0 ? "основной" : undefined,
+      url,
     })),
   ];
   const currentFolder = app ? folders.find((f) => f.apps.includes(app.id))?.id : undefined;
@@ -271,26 +408,31 @@ export function AppSettingsModal({
             >
               {/* Прокси */}
               <Section title="Прокси">
-                {options.map((o) => (
-                  <button
-                    key={o.v}
-                    type="button"
-                    disabled={busy}
-                    onClick={() => pickProxy(o.v)}
-                    className="flex w-full items-center gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-vb-surface-2/60"
-                  >
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[13px] text-vb-fg">{o.title}</span>
-                      <span className="block truncate text-[11px] text-vb-silver-faint">{o.sub}</span>
-                    </span>
-                    {o.v === current &&
-                      (busy ? (
-                        <Loader2 className="h-4 w-4 animate-spin text-vb-silver-faint" />
-                      ) : (
-                        <Check className="h-4 w-4 text-vb-emerald" />
-                      ))}
-                  </button>
-                ))}
+                <div role="radiogroup" aria-label="Прокси" className="divide-y divide-vb-border/60">
+                  {options.map((o, k) => (
+                    <div key={o.v}>
+                      {/* «Авто» отделён от конкретных прокси подписью */}
+                      {k === 1 && (
+                        <div className="px-3.5 pb-0.5 pt-2 text-[10px] font-medium uppercase tracking-wide text-vb-silver-faint">
+                          Или закрепить за прокси
+                        </div>
+                      )}
+                      <ProxyChoice
+                        title={o.title}
+                        hint={o.hint}
+                        badge={o.badge}
+                        url={o.url}
+                        shown={o.url ? shownOf(o.url) : undefined}
+                        geo={o.url ? geo[hostPort(o.url)] : undefined}
+                        ms={o.url ? pingOf(o.url) : undefined}
+                        selected={o.v === current}
+                        busy={busy}
+                        disabled={busy}
+                        onPick={() => pickProxy(o.v)}
+                      />
+                    </div>
+                  ))}
+                </div>
               </Section>
 
               {/* Защита от утечек (брандмауэр): Claude и Telegram — включается при подключении */}
@@ -428,6 +570,23 @@ export function AppSettingsModal({
                 {app.installed && (
                   <ActionRow label="Перезапустить через мост" onClick={() => void run(onRelaunch, "Перезапущено")} />
                 )}
+                {actions
+                  // Ярлыки запускаемых приложений уже есть выше.
+                  .filter((a) => !(launchable && a.label.startsWith("Ярлык")))
+                  .map((a) => (
+                    <ActionRow
+                      key={a.label}
+                      label={a.label}
+                      danger={a.danger}
+                      onClick={() =>
+                        void run(async () => {
+                          const r = await a.run();
+                          if (typeof r === "string") setNote(r);
+                          return null;
+                        })
+                      }
+                    />
+                  ))}
                 <ActionRow label="Убрать из списка" danger onClick={onRemove} />
               </Section>
             </div>
