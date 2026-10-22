@@ -5,6 +5,7 @@ import {
   Globe,
   House,
   LayoutGrid,
+  Link2,
   PanelLeftClose,
   PanelLeftOpen,
   Settings2,
@@ -15,12 +16,13 @@ import { formatUptime, useStatus } from "../lib/status";
 import { cn } from "../lib/cn";
 import type { AppView } from "../lib/types";
 
-export const NAV_ORDER: AppView[] = ["overview", "proxies", "apps", "settings"];
+export const NAV_ORDER: AppView[] = ["overview", "proxies", "apps", "sites", "settings"];
 
 const NAV_ITEMS: { id: AppView; label: string; icon: typeof LayoutGrid }[] = [
   { id: "overview", label: "Обзор", icon: House },
   { id: "proxies", label: "Прокси", icon: Globe },
   { id: "apps", label: "Приложения", icon: AppWindow },
+  { id: "sites", label: "Сайты", icon: Link2 },
   { id: "settings", label: "Настройки", icon: Settings2 },
 ];
 

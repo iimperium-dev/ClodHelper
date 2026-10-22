@@ -1,12 +1,21 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Loader2 } from "lucide-react";
+import { listen } from "@tauri-apps/api/event";
 import { Button } from "./Button";
-import { updateCheck, updateInstall } from "../lib/api";
+import { updateCheck } from "../lib/api";
+import { openUpdateDialog } from "../lib/updateBus";
 import type { UpdateInfo } from "../lib/types";
 
 const SESSION_KEY = "clod.update.checked";
-const RELEASES = "https://github.com/iimperium-dev/ClodHelper/releases/latest";
+
+function remember(r: UpdateInfo | null) {
+  try {
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify(r));
+  } catch {
+    /* ignore */
+  }
+}
 
 /** Одна проверка за сеанс приложения (GitHub API не дёргаем на каждый заход). */
 async function checkOnce(force: boolean): Promise<UpdateInfo | null> {
@@ -17,50 +26,39 @@ async function checkOnce(force: boolean): Promise<UpdateInfo | null> {
     /* нет sessionStorage — просто проверим */
   }
   const r = await updateCheck().catch(() => null);
-  try {
-    sessionStorage.setItem(SESSION_KEY, JSON.stringify(r));
-  } catch {
-    /* ignore */
-  }
+  remember(r);
   return r;
 }
 
 /*
-  Обновление приложения: «Доступна версия X» → «Обновить». Скачивание и
-  проверка контрольной суммы идут в бэкенде; приложение перезапустится само.
+  Обновление приложения: «Доступна версия X» → «Обновить» открывает окно
+  обновления (UpdateDialog): что нового и живой ход установки.
   compact — плашка для Обзора; иначе — блок для Настроек с ручной проверкой.
 */
 export function UpdateBanner({ compact }: { compact?: boolean }) {
   const [info, setInfo] = useState<UpdateInfo | null>(null);
   const [checked, setChecked] = useState(false);
-  const [busy, setBusy] = useState<"check" | "install" | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     void checkOnce(false).then((r) => {
       setInfo(r);
       setChecked(true);
     });
+    // Фоновая проверка (раз в несколько часов) нашла новую версию.
+    const un = listen<UpdateInfo>("update:available", (e) => {
+      remember(e.payload);
+      setInfo(e.payload);
+      setChecked(true);
+    });
+    return () => void un.then((f) => f());
   }, []);
 
-  const install = async () => {
-    if (!info) return;
-    setBusy("install");
-    setError(null);
-    try {
-      await updateInstall(info);
-    } catch (e) {
-      setError(String(e));
-      setBusy(null);
-    }
-  };
-
   const check = async () => {
-    setBusy("check");
-    setError(null);
+    setBusy(true);
     setInfo(await checkOnce(true));
     setChecked(true);
-    setBusy(null);
+    setBusy(false);
   };
 
   if (compact && !info) return null;
@@ -78,41 +76,26 @@ export function UpdateBanner({ compact }: { compact?: boolean }) {
               {info ? `Доступна версия ${info.version}` : "Обновления"}
             </div>
             <div className="truncate text-[12px] text-vb-silver-faint">
-              {busy === "install"
-                ? "Скачиваю и проверяю — приложение перезапустится само"
-                : info
-                  ? "Скачается с GitHub, целостность проверяется по SHA-256"
-                  : checked
-                    ? "У вас последняя версия"
-                    : "Проверяю…"}
+              {info
+                ? "Посмотрите, что нового, — обновление в один клик"
+                : checked
+                  ? "У вас последняя версия"
+                  : "Проверяю…"}
             </div>
           </div>
           {info ? (
-            <Button variant="primary" size="sm" onClick={install} disabled={busy !== null}>
-              {busy === "install" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            <Button variant="primary" size="sm" onClick={() => openUpdateDialog(info)}>
               Обновить
             </Button>
           ) : (
             !compact && (
-              <Button variant="secondary" size="sm" onClick={check} disabled={busy !== null}>
-                {busy === "check" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              <Button variant="secondary" size="sm" onClick={check} disabled={busy}>
+                {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                 Проверить
               </Button>
             )
           )}
         </div>
-        {error && (
-          <p className="mt-2 text-[12px] text-vb-loss">
-            {error}.{" "}
-            <button
-              type="button"
-              onClick={() => import("@tauri-apps/plugin-opener").then((m) => m.openUrl(RELEASES))}
-              className="text-vb-emerald hover:underline"
-            >
-              Скачать вручную
-            </button>
-          </p>
-        )}
       </motion.div>
     </AnimatePresence>
   );

@@ -140,17 +140,58 @@ pub async fn bridge_versions(app: AppHandle) -> Result<BridgeVersions, String> {
 /// Есть ли новая версия Clod Helper (последний релиз GitHub).
 #[tauri::command]
 pub async fn update_check() -> Result<Option<crate::updater::UpdateInfo>, String> {
-    crate::updater::check().await
+    let found = crate::updater::check().await?;
+    crate::update_notify::remember(&found);
+    Ok(found)
 }
 
-/// Скачать, проверить SHA-256, поставить и перезапуститься.
+/// Последнее найденное обновление (без запроса к GitHub) — для окна-уведомления.
+#[tauri::command]
+pub fn update_latest() -> Option<crate::updater::UpdateInfo> {
+    crate::update_notify::latest()
+}
+
+/// Скачать, проверить SHA-256, поставить и перезапуститься. Ход —
+/// событиями `update:progress` (окно обновления рисует по ним прогресс).
 #[tauri::command]
 pub async fn update_install(app: AppHandle, info: crate::updater::UpdateInfo) -> Result<(), String> {
-    crate::updater::install(&info).await?;
-    // Новую версию поставит и запустит фоновый скрипт (macOS) или тихий
+    let emitter = app.clone();
+    let progress = move |p: crate::updater::UpdateProgress| {
+        let _ = emitter.emit("update:progress", p);
+    };
+    crate::updater::install(&info, &progress).await?;
+    crate::update_notify::close_toast(&app);
+    progress(crate::updater::UpdateProgress { stage: "restart", received: 0, total: 0 });
+    // Пауза, чтобы «Перезапускаю…» успело показаться: иначе окно исчезает
+    // посреди «Устанавливаю» и это выглядит как вылет.
+    tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+    // Новую версию поставит и запустит фоновый скрипт (macOS) или
     // установщик (Windows), когда мы выйдем.
     app.exit(0);
     Ok(())
+}
+
+/// Клик по уведомлению «Доступно обновление».
+#[tauri::command]
+pub fn update_toast_open(app: AppHandle) {
+    crate::update_notify::open_from_toast(&app);
+}
+
+#[tauri::command]
+pub fn update_toast_close(app: AppHandle) {
+    crate::update_notify::close_toast(&app);
+}
+
+/// Версия для окна «Что нового», если приложение только что обновилось.
+#[tauri::command]
+pub fn whats_new_take() -> Result<Option<String>, String> {
+    settings::take_whats_new(env!("CARGO_PKG_VERSION"))
+}
+
+/// Фирменный звук уведомления.
+#[tauri::command]
+pub fn play_chime() {
+    crate::sound::chime();
 }
 
 /// При запуске: встроенный мост новее установленного → обновить сразу.
@@ -168,6 +209,22 @@ pub(crate) async fn auto_update_bridge(app: AppHandle) {
         .and_then(|r| r.ok())
         .is_some_and(|(_, changed)| changed);
     let Ok(v) = bridge_versions(app.clone()).await else { return };
+    // Мост уже умеет сайты, но задача зарегистрирована со старыми
+    // аргументами (мост поставили поверх раньше, чем появились сайты) —
+    // перерегистрировать: иначе браузер в режиме «только сайты» без сети.
+    if !v.outdated && tokio::task::spawn_blocking(crate::tasks::sites_args_stale).await.unwrap_or(false) {
+        let fixed = tokio::task::spawn_blocking(|| -> Result<(), String> {
+            let url = settings::load().proxy_url.ok_or("прокси не настроен")?;
+            crate::tasks::register(&url)?;
+            crate::shim::restart()
+        })
+        .await;
+        match fixed {
+            Ok(Ok(())) => tracing::info!("мост перезапущен со входом сайтов"),
+            other => tracing::warn!("не удалось включить вход сайтов: {other:?}"),
+        }
+        return;
+    }
     if !v.outdated {
         if rules_changed {
             match tokio::task::spawn_blocking(crate::shim::restart).await {

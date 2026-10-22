@@ -1,6 +1,6 @@
 [package]
 name = "clod-helper"
-version = "0.7.1"
+version = "0.8.0"
 description = "Установщик Claude Code и Claude Desktop через прокси"
 authors = ["iimperium"]
 edition = "2021"
@@ -49,7 +49,9 @@ windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_Globalization",
   "Win32_Graphics_Gdi",
+  "Win32_Media_Audio",
   "Win32_NetworkManagement_IpHelper",
+  "Win32_Networking_WinInet",
   "Win32_Networking_WinSock",
   "Win32_Storage_FileSystem",
   "Win32_UI_Shell",

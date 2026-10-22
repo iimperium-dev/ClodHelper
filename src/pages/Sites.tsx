@@ -1,0 +1,928 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { AnimatePresence, motion } from "framer-motion";
+import { Check, ChevronDown, Eye, Loader2, Plus, RotateCw, Trash2, X } from "lucide-react";
+import { Button } from "../components/Button";
+import { Toggle } from "../components/Toggle";
+import { ProxySelect } from "./Proxies";
+import {
+  appsSettingsSet,
+  bridgeUpdate,
+  browserPolicySet,
+  browserPolicyStatus,
+  proxiesGet,
+  proxyLabelsGet,
+  sitesGet,
+  sitesHosts,
+  sitesNormalize,
+  sitesPeek,
+  sitesSet,
+  sitesStatus,
+  systemPacSet,
+  systemPacStatus,
+} from "../lib/api";
+import { useStatus } from "../lib/status";
+import type { SeenHost, SiteEntry, SitesStatus, SystemPacStatus } from "../lib/types";
+import { fadeInUp, staggerContainer } from "../lib/motion";
+import { cn } from "../lib/cn";
+
+/** Вход сайтов моста (mirror tasks::SITES_PORT). */
+const SITES_SERVER = "127.0.0.1:8887";
+
+/** Готовые сайты: все домены, к которым они обращаются, — иначе часть
+    страницы (видео, картинки, вход) шла бы с настоящего IP. */
+const PRESETS: { name: string; domains: string[] }[] = [
+  {
+    name: "YouTube",
+    domains: ["youtube.com", "youtu.be", "googlevideo.com", "ytimg.com", "ggpht.com", "youtube-nocookie.com", "youtubei.googleapis.com"],
+  },
+  { name: "Instagram", domains: ["instagram.com", "cdninstagram.com", "fbcdn.net", "ig.me"] },
+  { name: "Facebook", domains: ["facebook.com", "fb.com", "fbcdn.net", "facebook.net", "fbsbx.com", "messenger.com"] },
+  { name: "X (Twitter)", domains: ["x.com", "twitter.com", "twimg.com", "t.co"] },
+  { name: "Discord", domains: ["discord.com", "discord.gg", "discordapp.com", "discordapp.net", "discord.media"] },
+  { name: "Netflix", domains: ["netflix.com", "nflxvideo.net", "nflximg.net", "nflxext.com", "nflxso.net"] },
+  { name: "Spotify", domains: ["spotify.com", "scdn.co", "spotifycdn.com"] },
+  { name: "LinkedIn", domains: ["linkedin.com", "licdn.com"] },
+];
+
+/** Двухуровневые зоны, под которыми регистрируют домены (bbc.co.uk). */
+const SECOND_LEVEL = new Set(["co.uk", "org.uk", "com.au", "com.br", "co.jp", "com.ru", "co.in", "com.tr", "com.cn", "co.kr", "com.ua", "com.mx"]);
+
+/** Общие площадки: под ними живут тысячи чужих сервисов — добавлять всю
+    зону нельзя (googleapis.com увёл бы в прокси весь Google), только адрес. */
+const SHARED = new Set([
+  "googleapis.com", "gstatic.com", "googleusercontent.com", "cloudfront.net", "amazonaws.com",
+  "akamaized.net", "akamaihd.net", "azureedge.net", "fastly.net", "cloudflare.com", "jsdelivr.net",
+  "doubleclick.net", "googlesyndication.com", "google.com", "microsoft.com", "apple.com",
+]);
+
+/** Регистрируемый домен хоста: «rr3---sn-abc.googlevideo.com» → «googlevideo.com». */
+function baseDomain(host: string): string {
+  if (/^[\d.]+$/.test(host) || host.includes(":")) return host; // IP
+  const parts = host.split(".");
+  if (parts.length <= 2) return host;
+  const tail2 = parts.slice(-2).join(".");
+  if (SHARED.has(tail2)) return host;
+  return SECOND_LEVEL.has(tail2) ? parts.slice(-3).join(".") : tail2;
+}
+
+/** Хост попадает под домен (сам домен или поддомен) — как матч в мосте. */
+function covers(domain: string, host: string): boolean {
+  return host === domain || host.endsWith(`.${domain}`);
+}
+
+function newId(): string {
+  return `site-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+}
+
+/*
+  Сайты: через прокси идут только они (и AI-сервисы), остальное — напрямую.
+  Работает для Chromium-браузеров в режиме «Только сайты» (вход сайтов
+  моста). Список применяется мостом на лету, без перезапуска. «Подсмотреть»
+  показывает, к каким ещё адресам обращается сайт, — их можно добавить.
+*/
+export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
+  const { refresh } = useStatus();
+  const [sites, setSites] = useState<SiteEntry[] | null>(null);
+  const [status, setStatus] = useState<SitesStatus | null>(null);
+  const [pool, setPool] = useState<string[]>([]);
+  const [labels, setLabels] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [addInput, setAddInput] = useState("");
+  const [open, setOpen] = useState<string | null>(null);
+  const [peek, setPeek] = useState<string | null>(null);
+  const [pac, setPac] = useState<SystemPacStatus | null>(null);
+
+  const loadStatus = useCallback(async () => {
+    const [st, p] = await Promise.all([sitesStatus().catch(() => null), systemPacStatus().catch(() => null)]);
+    setStatus(st);
+    setPac(p);
+  }, []);
+
+  /** «Во всех браузерах»: включить/выключить системную автонастройку. */
+  const togglePac = async (enable: boolean) => {
+    setBusy("pac");
+    setError(null);
+    setNote(null);
+    try {
+      setPac(await systemPacSet(enable));
+      setNote(enable ? "Готово — браузеры подхватят за пару секунд" : "Выключено — системные настройки прокси возвращены");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  useEffect(() => {
+    void (async () => {
+      setSites(await sitesGet().catch(() => []));
+      setPool(await proxiesGet().catch(() => []));
+      setLabels(await proxyLabelsGet().catch(() => ({})));
+    })();
+    void loadStatus();
+  }, [loadStatus]);
+
+  const save = async (next: SiteEntry[], key: string, done?: string) => {
+    setBusy(key);
+    setError(null);
+    setNote(null);
+    try {
+      setSites(await sitesSet(next));
+      if (done) setNote(done);
+      return true;
+    } catch (e) {
+      setError(String(e));
+      return false;
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const addSite = async (name: string, domains: string[]) => {
+    if (!sites) return;
+    const site: SiteEntry = { id: newId(), name, domains, proxy: null, enabled: true };
+    if (await save([...sites, site], "add", `«${name}» — через прокси`)) {
+      setAdding(false);
+      setAddInput("");
+      setOpen(site.id);
+    }
+  };
+
+  const handleAdd = async () => {
+    const domain = await sitesNormalize(addInput).catch(() => null);
+    if (!domain) {
+      setError(`«${addInput.trim()}» не похоже на адрес сайта`);
+      return;
+    }
+    if (sites?.some((s) => s.domains.some((d) => covers(d, domain)))) {
+      setError(`${domain} уже в списке`);
+      return;
+    }
+    await addSite(domain, [domain]);
+  };
+
+  const update = (id: string, patch: Partial<SiteEntry>, done?: string) => {
+    if (!sites) return;
+    void save(sites.map((s) => (s.id === id ? { ...s, ...patch } : s)), id, done);
+  };
+
+  const remove = (id: string) => {
+    if (!sites) return;
+    void save(sites.filter((s) => s.id !== id), id, "Удалено");
+  };
+
+  /** Перевести браузер на вход сайтов. Политику «Всегда через мост», если
+      она стоит, переписываем на новый вход — иначе браузер остался бы на
+      старом (весь трафик). Это одно окно прав администратора. */
+  const toSitesMode = async (id: string) => {
+    setBusy(`browser:${id}`);
+    setError(null);
+    setNote(null);
+    try {
+      await appsSettingsSet(id, null, false);
+      const policy = await browserPolicyStatus(id).catch(() => null);
+      if (policy?.configured && policy.server !== SITES_SERVER) {
+        await browserPolicySet(id, true);
+      }
+      await loadStatus();
+      setNote("Готово — перезапустите браузер через мост («Приложения» → «Перезапустить»)");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleBridgeUpdate = async () => {
+    setBusy("bridge");
+    setError(null);
+    try {
+      await bridgeUpdate();
+      await refresh();
+      await loadStatus();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const presetsLeft = PRESETS.filter((p) => !sites?.some((s) => s.name === p.name));
+  const sitesBrowsers = status?.browsers.filter((b) => b.mode === "sites") ?? [];
+  const peekSite = sites?.find((s) => s.id === peek) ?? null;
+
+  return (
+    <motion.div
+      variants={staggerContainer}
+      initial="hidden"
+      animate="show"
+      className="mx-auto flex w-full max-w-[520px] flex-col px-6 py-6"
+    >
+      <motion.header variants={fadeInUp} className="flex items-end justify-between">
+        <div>
+          <h1 className="text-[20px] font-semibold leading-tight tracking-[-0.02em] text-vb-fg">Сайты</h1>
+          <p className="text-[12px] text-vb-silver-faint">
+            Через прокси — только они и AI-сервисы, остальное напрямую
+          </p>
+        </div>
+        <Button variant="secondary" size="sm" onClick={() => setAdding((v) => !v)} disabled={sites === null}>
+          {/* Как в «Приложениях»: плюс поворачивается в крестик */}
+          <Plus
+            className={cn(
+              "h-3.5 w-3.5 transition-transform duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]",
+              adding && "rotate-45",
+            )}
+          />
+          {adding ? "Закрыть" : "Добавить"}
+        </Button>
+      </motion.header>
+
+      {/* ── Старый мост: сайтов не понимает ── */}
+      {status && !status.supported && (
+        <motion.div
+          variants={fadeInUp}
+          className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-vb-warn/35 bg-vb-warn/[0.05] px-4 py-3"
+        >
+          <p className="text-[12px] leading-snug text-vb-warn">
+            Вход сайтов в мосте не запущен. Обновите мост — это пара секунд
+          </p>
+          <Button variant="secondary" size="sm" onClick={handleBridgeUpdate} disabled={busy !== null}>
+            {busy === "bridge" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCw className="h-3.5 w-3.5" />}
+            Обновить мост
+          </Button>
+        </motion.div>
+      )}
+
+      {/* ── Добавление ── */}
+      <AnimatePresence>
+        {adding && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+            className="overflow-hidden"
+          >
+            <div className="surface-card mt-4 p-4">
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (addInput.trim()) void handleAdd();
+                }}
+                className="flex gap-2"
+              >
+                <input
+                  type="text"
+                  value={addInput}
+                  onChange={(e) => {
+                    setAddInput(e.target.value);
+                    setError(null);
+                  }}
+                  placeholder="Адрес или ссылка: example.com"
+                  className="min-w-0 flex-1 rounded-lg border border-vb-border bg-vb-surface-2 px-3 py-2 font-mono text-[13px] text-vb-fg outline-none transition-colors focus:border-vb-emerald/60"
+                  autoFocus
+                />
+                <Button type="submit" size="sm" disabled={!addInput.trim() || busy !== null}>
+                  {busy === "add" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Добавить"}
+                </Button>
+              </form>
+              {presetsLeft.length > 0 && (
+                <>
+                  <div className="mb-1.5 mt-3 text-[11px] text-vb-silver-faint">Готовые — со всеми адресами сайта</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {presetsLeft.map((p) => (
+                      <button
+                        key={p.name}
+                        type="button"
+                        disabled={busy !== null}
+                        onClick={() => void addSite(p.name, p.domains)}
+                        className="rounded-full border border-vb-border px-2.5 py-1 text-[12px] text-vb-silver-dim transition-colors hover:border-vb-emerald/40 hover:text-vb-silver disabled:opacity-40"
+                      >
+                        {p.name}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {(error || note) && (
+        <p className={cn("mt-3 px-1 text-[12px] leading-snug", error ? "text-vb-loss" : "text-vb-silver-dim")}>
+          {error ?? note}
+        </p>
+      )}
+
+      {/* ── Список сайтов ── */}
+      <motion.section variants={fadeInUp} className="mt-4">
+        {sites === null ? (
+          <div className="surface-card flex justify-center p-6">
+            <Loader2 className="h-4 w-4 animate-spin text-vb-silver-dim" />
+          </div>
+        ) : sites.length === 0 ? (
+          <div className="surface-card p-5 text-center">
+            <div className="text-[13px] text-vb-silver">Сайтов пока нет</div>
+            <div className="mt-1 text-[12px] text-vb-silver-faint">
+              Добавьте сайт, который должен открываться через прокси, — например, YouTube
+            </div>
+            {!adding && (
+              <Button variant="secondary" size="sm" className="mt-3" onClick={() => setAdding(true)}>
+                <Plus className="h-3.5 w-3.5" />
+                Добавить сайт
+              </Button>
+            )}
+          </div>
+        ) : (
+          <div className="surface-card divide-y divide-vb-border/70">
+            {sites.map((site) => (
+              <SiteRow
+                key={site.id}
+                site={site}
+                pool={pool}
+                labels={labels}
+                busy={busy}
+                open={open === site.id}
+                onToggleOpen={() => setOpen((v) => (v === site.id ? null : site.id))}
+                onUpdate={(patch, done) => update(site.id, patch, done)}
+                onRemove={() => remove(site.id)}
+                onPeek={() => setPeek(site.id)}
+              />
+            ))}
+          </div>
+        )}
+      </motion.section>
+
+      {/* ── Во всех браузерах: системная автонастройка прокси (Windows) ── */}
+      {pac?.supported && (
+        <motion.section variants={fadeInUp} className="mt-6">
+          <div className="mb-2 px-1">
+            <h2 className="text-[15px] font-semibold text-vb-fg">Браузеры</h2>
+          </div>
+          <div className="surface-card divide-y divide-vb-border/70">
+            <div className="flex items-center justify-between gap-4 px-4 py-3">
+              <div className="min-w-0">
+                <div className="text-[14px] font-semibold text-vb-fg">Во всех браузерах</div>
+                <div
+                  className={cn(
+                    "mt-px text-[11px] leading-snug",
+                    !status?.supported
+                      ? "text-vb-silver-faint"
+                      : pac.enabled && pac.active
+                        ? "text-vb-emerald"
+                        : pac.enabled
+                          ? "text-vb-warn"
+                          : "text-vb-silver-faint",
+                  )}
+                >
+                  {!status?.supported
+                    ? "Сначала обновите мост — кнопка выше"
+                    : pac.enabled && pac.active
+                      ? "Chrome, Edge, Firefox и другие: сайты из списка — через прокси"
+                      : pac.enabled
+                        ? `Настройку сбросила другая программа${pac.foreign ? ` (${pac.foreign})` : ""}`
+                        : "Chrome, Edge, Firefox и другие — без настройки каждого браузера"}
+                </div>
+              </div>
+              {pac.enabled && !pac.active ? (
+                <Button variant="secondary" size="sm" disabled={busy !== null} onClick={() => void togglePac(true)}>
+                  {busy === "pac" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  Вернуть
+                </Button>
+              ) : (
+                <Toggle
+                  checked={pac.enabled}
+                  disabled={busy !== null || (!pac.enabled && !status?.supported)}
+                  onChange={() => void togglePac(!pac.enabled)}
+                  label="Во всех браузерах"
+                />
+              )}
+            </div>
+            {!pac.enabled && pac.foreign && (
+              <p className="px-4 py-2.5 text-[11px] leading-snug text-vb-warn">
+                В Windows уже задан {pac.foreign}. Включение заменит его, выключение — вернёт как было
+              </p>
+            )}
+          </div>
+          <p className="mt-2 px-1 text-[11px] leading-snug text-vb-silver-faint">
+            Обычные сайты идут напрямую, мимо моста. Если в браузере стоит прокси-расширение или VPN, он может
+            перебить эту настройку — тогда закрепите браузер ниже
+          </p>
+        </motion.section>
+      )}
+
+      {/* ── Закрепить в браузере (политика Chromium) ── */}
+      <motion.section variants={fadeInUp} className="mt-6">
+        <div className="mb-2 px-1">
+          <h2 className="text-[15px] font-semibold text-vb-fg">{pac?.supported ? "Закрепить в браузере" : "Браузер"}</h2>
+          <p className="text-[12px] text-vb-silver-faint">
+            {pac?.supported
+              ? "Необязательно: политика браузера главнее расширений и VPN. Chrome, Edge, Brave, Chromium"
+              : "Сайты работают в Chrome, Edge, Brave и Chromium в режиме «Только сайты»"}
+          </p>
+        </div>
+        <div className="surface-card divide-y divide-vb-border/70">
+          {status === null ? (
+            <div className="flex justify-center p-4">
+              <Loader2 className="h-4 w-4 animate-spin text-vb-silver-dim" />
+            </div>
+          ) : status.browsers.length === 0 ? (
+            <div className="flex items-center justify-between gap-3 px-4 py-3">
+              <span className="text-[12px] leading-snug text-vb-silver-faint">
+                {pac?.supported
+                  ? "Чтобы закрепить браузер, добавьте его в «Приложения»"
+                  : "Добавьте браузер в «Приложения» — через него и пойдут сайты"}
+              </span>
+              <Button variant="secondary" size="sm" onClick={onOpenApps}>
+                Приложения
+              </Button>
+            </div>
+          ) : (
+            status.browsers.map((b) => (
+              <div key={b.id} className="flex items-center gap-3 px-4 py-3">
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[14px] font-semibold text-vb-fg">{b.name}</div>
+                  <div
+                    className={cn(
+                      "mt-px text-[11px]",
+                      b.mode === "sites" ? "text-vb-emerald" : "text-vb-silver-faint",
+                    )}
+                  >
+                    {b.mode === "sites"
+                      ? "Только сайты: AI и ваши сайты — через прокси"
+                      : b.mode === "all"
+                        ? "Весь трафик через прокси — список сайтов не нужен"
+                        : "Только AI-сайты — обновите мост"}
+                  </div>
+                </div>
+                {b.mode === "all" && status.supported && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    // Без живого входа сайтов браузер остался бы без сети.
+                    disabled={busy !== null || !status?.supported}
+                    onClick={() => void toSitesMode(b.id)}
+                  >
+                    {busy === `browser:${b.id}` && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                    Только сайты
+                  </Button>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+        <p className="mt-2 px-1 text-[11px] leading-snug text-vb-silver-faint">
+          Открывайте браузер через «Приложения» или включите в его настройках «Всегда через мост» — тогда
+          сайты пойдут через прокси, даже если браузер открыт из «Пуска»
+        </p>
+      </motion.section>
+
+      {peekSite && (
+        <PeekDialog
+          site={peekSite}
+          sites={sites ?? []}
+          browserReady={(!!pac?.enabled && pac.active) || sitesBrowsers.length > 0}
+          pacMode={!!pac?.enabled && pac.active}
+          onAdd={async (domains) => {
+            const next = [...new Set([...peekSite.domains, ...domains])];
+            return save(
+              (sites ?? []).map((s) => (s.id === peekSite.id ? { ...s, domains: next } : s)),
+              peekSite.id,
+              `Добавлено к «${peekSite.name}»: ${domains.length}`,
+            );
+          }}
+          onClose={() => setPeek(null)}
+        />
+      )}
+    </motion.div>
+  );
+}
+
+/* ── Строка сайта: тумблер, прокси; по клику — адреса и действия ── */
+function SiteRow({
+  site,
+  pool,
+  labels,
+  busy,
+  open,
+  onToggleOpen,
+  onUpdate,
+  onRemove,
+  onPeek,
+}: {
+  site: SiteEntry;
+  pool: string[];
+  labels: Record<string, string>;
+  busy: string | null;
+  open: boolean;
+  onToggleOpen: () => void;
+  onUpdate: (patch: Partial<SiteEntry>, done?: string) => void;
+  onRemove: () => void;
+  onPeek: () => void;
+}) {
+  const [domainInput, setDomainInput] = useState("");
+  const [domainError, setDomainError] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const rowBusy = busy === site.id;
+
+  const addDomain = async () => {
+    const d = await sitesNormalize(domainInput).catch(() => null);
+    if (!d) {
+      setDomainError("Не похоже на адрес сайта");
+      return;
+    }
+    setDomainInput("");
+    setDomainError(null);
+    if (!site.domains.includes(d)) onUpdate({ domains: [...site.domains, d] });
+  };
+
+  return (
+    <div className={cn(!site.enabled && "opacity-60")}>
+      <div className="flex items-center gap-3 px-4 py-3">
+        <Toggle
+          checked={site.enabled}
+          disabled={busy !== null}
+          onChange={() => onUpdate({ enabled: !site.enabled }, site.enabled ? "Выключено — сайт идёт напрямую" : "Включено")}
+          label={`${site.name} через прокси`}
+        />
+        <button type="button" onClick={onToggleOpen} className="min-w-0 flex-1 text-left">
+          <div className="flex items-center gap-1.5">
+            <span className="truncate text-[14px] font-semibold text-vb-fg">{site.name}</span>
+            <ChevronDown
+              className={cn("h-3.5 w-3.5 shrink-0 text-vb-silver-faint transition-transform duration-200", open && "rotate-180")}
+            />
+          </div>
+          <div className="mt-px truncate font-mono text-[11px] text-vb-silver-faint">
+            {site.domains[0]}
+            {site.domains.length > 1 && ` +${site.domains.length - 1}`}
+          </div>
+        </button>
+        {rowBusy && <Loader2 className="h-4 w-4 shrink-0 animate-spin text-vb-silver-dim" />}
+        <ProxySelect
+          value={site.proxy ?? -1}
+          pool={pool}
+          labels={labels}
+          disabled={busy !== null || pool.length === 0}
+          onChange={(v) => onUpdate({ proxy: v < 0 ? null : v }, "Сохранено")}
+        />
+      </div>
+
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+            className="overflow-hidden"
+          >
+            <div className="px-4 pb-3">
+              <div className="flex flex-wrap gap-1.5">
+                {site.domains.map((d) => (
+                  <span
+                    key={d}
+                    className="inline-flex items-center gap-1 rounded-full border border-vb-border bg-vb-surface-2/60 py-0.5 pl-2.5 pr-1 font-mono text-[11px] text-vb-silver"
+                  >
+                    {d}
+                    {site.domains.length > 1 && (
+                      <button
+                        type="button"
+                        aria-label={`Убрать ${d}`}
+                        disabled={busy !== null}
+                        onClick={() => onUpdate({ domains: site.domains.filter((x) => x !== d) })}
+                        className="rounded-full p-0.5 text-vb-silver-faint transition-colors hover:text-vb-loss"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    )}
+                  </span>
+                ))}
+              </div>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (domainInput.trim()) void addDomain();
+                }}
+                className="mt-2 flex gap-2"
+              >
+                <input
+                  type="text"
+                  value={domainInput}
+                  onChange={(e) => {
+                    setDomainInput(e.target.value);
+                    setDomainError(null);
+                  }}
+                  placeholder="Ещё адрес: cdn.example.com"
+                  className="min-w-0 flex-1 rounded-lg border border-vb-border bg-vb-surface-2 px-2.5 py-1.5 font-mono text-[12px] text-vb-fg outline-none transition-colors focus:border-vb-emerald/60"
+                />
+                <Button type="submit" variant="secondary" size="sm" disabled={!domainInput.trim() || busy !== null}>
+                  <Plus className="h-3.5 w-3.5" />
+                </Button>
+              </form>
+              {domainError && <p className="mt-1.5 text-[11px] text-vb-loss">{domainError}</p>}
+              <p className="mt-1.5 text-[11px] text-vb-silver-faint">Поддомены входят сами: youtube.com покрывает m.youtube.com</p>
+              <div className="mt-3 flex items-center justify-between gap-2">
+                <Button variant="secondary" size="sm" onClick={onPeek} disabled={!site.enabled}>
+                  <Eye className="h-3.5 w-3.5" />
+                  Подсмотреть адреса
+                </Button>
+                {confirmDelete ? (
+                  <span className="flex items-center gap-2 text-[12px] text-vb-silver-dim">
+                    Удалить?
+                    <button
+                      type="button"
+                      onClick={onRemove}
+                      disabled={busy !== null}
+                      className="rounded-md bg-vb-loss px-2 py-0.5 text-[11px] font-semibold text-white transition-colors hover:bg-vb-loss/85 active:scale-[0.96] disabled:opacity-40"
+                    >
+                      Да
+                    </button>
+                    <button type="button" onClick={() => setConfirmDelete(false)} className="text-[11px] text-vb-silver-faint hover:text-vb-silver">
+                      Нет
+                    </button>
+                  </span>
+                ) : (
+                  <Button variant="ghost" size="sm" onClick={() => setConfirmDelete(true)}>
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Удалить
+                  </Button>
+                )}
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+/* ── «Подсмотреть»: какие адреса сайт открывает, пока идёт запись ── */
+interface HostGroup {
+  domain: string;
+  hosts: SeenHost[];
+  count: number;
+  /** Все адреса группы уже идут через прокси. */
+  proxied: boolean;
+  /** Группа уже покрыта этим сайтом. */
+  inSite: boolean;
+  /** Группа покрыта другим сайтом из списка. */
+  otherSite: string | null;
+}
+
+function PeekDialog({
+  site,
+  sites,
+  browserReady,
+  pacMode,
+  onAdd,
+  onClose,
+}: {
+  site: SiteEntry;
+  sites: SiteEntry[];
+  browserReady: boolean;
+  /** Сайты идут через системный PAC: на время записи весь трафик — через мост. */
+  pacMode: boolean;
+  onAdd: (domains: string[]) => Promise<boolean>;
+  onClose: () => void;
+}) {
+  const [mark, setMark] = useState<number | null>(null);
+  const [hosts, setHosts] = useState<SeenHost[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [adding, setAdding] = useState(false);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+
+  useEffect(() => {
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && closeRef.current();
+    window.addEventListener("keydown", esc);
+    return () => window.removeEventListener("keydown", esc);
+  }, []);
+
+  const start = async () => {
+    setErr(null);
+    setHosts([]);
+    setPicked(new Set());
+    try {
+      // С системным PAC адреса не из списка идут мимо моста — на время
+      // записи PAC ведёт через мост всё (решает мост: чужое — напрямую).
+      if (pacMode) await sitesPeek(true);
+      // since в будущем — пустой список, но с часами моста: от них и считаем.
+      const r = await sitesHosts(Number.MAX_SAFE_INTEGER);
+      setMark(r.now_ms);
+    } catch (e) {
+      setErr(String(e));
+    }
+  };
+
+  // Закрыли окно — запись кончилась, PAC обратно в обычный режим.
+  useEffect(() => {
+    if (mark === null || !pacMode) return;
+    return () => void sitesPeek(false).catch(() => {});
+  }, [mark, pacMode]);
+
+  useEffect(() => {
+    if (mark === null) return;
+    let alive = true;
+    const tick = async () => {
+      try {
+        const r = await sitesHosts(mark);
+        if (alive) {
+          setHosts(r.hosts);
+          setErr(null);
+        }
+      } catch (e) {
+        if (alive) setErr(String(e));
+      }
+    };
+    void tick();
+    const t = window.setInterval(() => void tick(), 1500);
+    return () => {
+      alive = false;
+      window.clearInterval(t);
+    };
+  }, [mark]);
+
+  const groups = useMemo<HostGroup[]>(() => {
+    const map = new Map<string, SeenHost[]>();
+    for (const h of hosts) {
+      const d = baseDomain(h.host);
+      map.set(d, [...(map.get(d) ?? []), h]);
+    }
+    return [...map.entries()]
+      .map(([domain, hs]) => {
+        const other = sites.find((s) => s.id !== site.id && s.enabled && s.domains.some((d) => covers(d, domain)));
+        return {
+          domain,
+          hosts: hs,
+          count: hs.reduce((n, h) => n + h.count, 0),
+          proxied: hs.every((h) => h.via === "proxy"),
+          inSite: site.domains.some((d) => covers(d, domain)),
+          otherSite: other?.name ?? null,
+        };
+      })
+      .sort((a, b) => Number(a.inSite) - Number(b.inSite) || b.count - a.count);
+  }, [hosts, site, sites]);
+
+  const candidates = groups.filter((g) => !g.inSite);
+  const toggle = (d: string) =>
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(d)) next.delete(d);
+      else next.add(d);
+      return next;
+    });
+
+  const add = async () => {
+    setAdding(true);
+    if (await onAdd([...picked])) setPicked(new Set());
+    setAdding(false);
+  };
+
+  return createPortal(
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.18 }}
+      onMouseDown={onClose}
+      className="fixed inset-x-0 bottom-0 top-9 z-[70] flex items-center justify-center bg-black/45 p-5 backdrop-blur-[6px]"
+    >
+      <motion.div
+        initial={{ opacity: 0, scale: 0.94, y: 12 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        transition={{ type: "spring", bounce: 0.18, duration: 0.42 }}
+        onMouseDown={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-label={`Подсмотреть адреса ${site.name}`}
+        className="flex max-h-full w-full max-w-[440px] flex-col overflow-hidden rounded-2xl border border-vb-border bg-vb-surface shadow-[0_24px_64px_rgba(0,0,0,0.6)]"
+      >
+        <div className="flex shrink-0 items-start gap-3 p-4 pb-3">
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[16px] font-semibold text-vb-fg">Подсмотреть: {site.name}</div>
+            <div className="text-[12px] leading-snug text-vb-silver-faint">
+              {mark === null
+                ? "Начните запись, откройте сайт в браузере и полистайте его"
+                : "Записываю — обновите страницу сайта и полистайте, адреса появятся здесь"}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Закрыть"
+            className="rounded-full bg-vb-surface-2 p-1.5 text-vb-silver-faint transition-colors hover:text-vb-silver"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4">
+          {!browserReady && (
+            <p className="mb-3 rounded-lg border border-vb-warn/35 bg-vb-warn/[0.05] px-3 py-2 text-[12px] leading-snug text-vb-warn">
+              Сайты не включены ни в одном браузере — запись будет пустой. Включите «Во всех браузерах» на
+              странице «Сайты»
+            </p>
+          )}
+          {err && <p className="mb-3 text-[12px] text-vb-loss">{err}</p>}
+          {mark === null ? (
+            <div className="flex justify-center py-6">
+              <Button onClick={() => void start()}>
+                <Eye className="h-4 w-4" />
+                Начать запись
+              </Button>
+            </div>
+          ) : groups.length === 0 ? (
+            <div className="flex items-center justify-center gap-2 py-8 text-[12px] text-vb-silver-faint">
+              <span className="relative flex h-2 w-2">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-vb-emerald/60" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-vb-emerald" />
+              </span>
+              Жду запросов браузера…
+            </div>
+          ) : (
+            <div className="divide-y divide-vb-border/60 overflow-hidden rounded-xl bg-vb-surface-2/50">
+              {groups.map((g) => {
+                const selectable = !g.inSite;
+                const on = picked.has(g.domain);
+                return (
+                  <button
+                    key={g.domain}
+                    type="button"
+                    disabled={!selectable}
+                    onClick={() => toggle(g.domain)}
+                    className={cn(
+                      "flex w-full items-center gap-3 px-3 py-2 text-left transition-colors",
+                      selectable && "hover:bg-vb-surface-2/80",
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "flex h-4 w-4 shrink-0 items-center justify-center rounded border",
+                        g.inSite
+                          ? "border-vb-emerald/40 bg-vb-emerald/15"
+                          : on
+                            ? "border-vb-emerald bg-vb-emerald"
+                            : "border-vb-border-strong",
+                      )}
+                    >
+                      {(g.inSite || on) && <Check className={cn("h-3 w-3", on ? "text-black" : "text-vb-emerald")} />}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-mono text-[12px] text-vb-fg">{g.domain}</span>
+                      <span className="block truncate text-[10px] text-vb-silver-faint">
+                        {g.hosts.length > 1 ? `${g.hosts.length} адресов · ` : g.hosts[0].host !== g.domain ? `${g.hosts[0].host} · ` : ""}
+                        {g.count} запр.
+                        {g.inSite ? " · уже в сайте" : g.otherSite ? ` · в «${g.otherSite}»` : ""}
+                      </span>
+                    </span>
+                    <span
+                      className={cn(
+                        "shrink-0 text-[10px]",
+                        g.proxied ? "text-vb-emerald" : "text-vb-warn",
+                      )}
+                    >
+                      {g.proxied ? "через прокси" : "напрямую"}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="flex shrink-0 items-center justify-between gap-2 border-t border-vb-border/70 p-4 pt-3">
+          {mark !== null ? (
+            <button
+              type="button"
+              onClick={() =>
+                setPicked(new Set(candidates.filter((g) => !g.proxied).map((g) => g.domain)))
+              }
+              disabled={candidates.every((g) => g.proxied)}
+              className="text-[12px] text-vb-silver-dim transition-colors hover:text-vb-silver disabled:opacity-40"
+            >
+              Отметить прямые
+            </button>
+          ) : (
+            <span />
+          )}
+          <div className="flex gap-2">
+            {mark !== null && (
+              <Button variant="ghost" size="sm" onClick={() => void start()}>
+                Заново
+              </Button>
+            )}
+            <Button size="sm" disabled={picked.size === 0 || adding} onClick={() => void add()}>
+              {adding && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              Добавить к сайту{picked.size > 0 ? ` (${picked.size})` : ""}
+            </Button>
+          </div>
+        </div>
+      </motion.div>
+    </motion.div>,
+    document.body,
+  );
+}

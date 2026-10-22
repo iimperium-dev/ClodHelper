@@ -1,6 +1,6 @@
 [package]
 name = "clod-bridge"
-version = "1.8.1"
+version = "1.10.0"
 edition = "2021"
 description = "Локальный HTTP-прокси-мост: no-auth localhost → auth upstream, с domain-routing и failover"
 

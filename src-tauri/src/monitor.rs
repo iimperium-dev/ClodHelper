@@ -375,7 +375,8 @@ fn fetch_healthz_port(port: u16, connect: Duration) -> Option<serde_json::Value>
 /// (8891) не HTTP — его статистики в /healthz нет.
 pub(crate) fn other_health_ports() -> Vec<u16> {
     let pool = crate::settings::effective_proxies(&crate::settings::load()).len() as u16;
-    std::iter::once(crate::claude_desktop::PROXY_PORT)
+    [crate::claude_desktop::PROXY_PORT, crate::tasks::SITES_PORT]
+        .into_iter()
         .chain((0..pool.min(5)).map(|i| crate::tasks::PIN_PORT_BASE + i))
         .collect()
 }

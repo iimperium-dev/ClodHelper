@@ -90,7 +90,7 @@ interface SelectProps {
   onChange: (v: number) => void;
 }
 
-function ProxySelect({ value, pool, labels, disabled, onChange }: SelectProps) {
+export function ProxySelect({ value, pool, labels, disabled, onChange }: SelectProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
 

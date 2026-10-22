@@ -503,6 +503,8 @@ pub fn full_proxy_of(p: &AppProfile) -> bool {
 /// Через какой вход моста запускать приложение:
 /// - выбран конкретный прокси → закреплённый вход 8892+N (всё через него);
 /// - «весь трафик» → строгий вход 8890 (без DIRECT);
+/// - Chromium-браузер → вход сайтов 8887 (только AI и сайты пользователя,
+///   что бы ни стояло в глобальном режиме);
 /// - иначе общий умный вход 8889.
 pub fn launch_proxy_url(p: &AppProfile) -> String {
     let pool = crate::settings::effective_proxies(&crate::settings::load()).len();
@@ -512,8 +514,51 @@ pub fn launch_proxy_url(p: &AppProfile) -> String {
             format!("http://127.0.0.1:{}", crate::tasks::PIN_PORT_BASE + i as u16)
         }
         _ if full_proxy_of(p) => crate::claude_policy::PROXY_URL.to_string(),
+        // VS Code и прочие — на общий вход: терминальный режим «всё через
+        // прокси» должен действовать и в их терминалах.
+        _ if is_chromium_browser(p) && sites_listener_available() => {
+            format!("http://127.0.0.1:{}", crate::tasks::SITES_PORT)
+        }
         _ => local_proxy_url(),
     }
+}
+
+/// Профиль — Chromium-браузер (Chrome, Edge, Brave, Chromium).
+pub fn is_chromium_browser(p: &AppProfile) -> bool {
+    p.exe_path.as_deref().and_then(crate::browser_policy::policy_domain).is_some()
+}
+
+/// Режим браузера для раздела «Сайты».
+pub fn browser_mode(p: &AppProfile) -> &'static str {
+    let pool = crate::settings::effective_proxies(&crate::settings::load()).len();
+    if p.proxy.is_some_and(|i| i < pool) || full_proxy_of(p) {
+        "all"
+    } else if sites_listener_available() {
+        "sites"
+    } else {
+        "ai"
+    }
+}
+
+/// Мост поднимает вход сайтов (≥1.9)? Проба версии exe кэшируется.
+pub fn sites_listener_available() -> bool {
+    use std::sync::Mutex;
+    static CACHE: Mutex<Option<(std::time::SystemTime, bool)>> = Mutex::new(None);
+    let Some(exe) = crate::shim::bridge_exe_path().filter(|p| p.exists()) else {
+        return false;
+    };
+    let mtime = std::fs::metadata(&exe).and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
+    if let Ok(mut c) = CACHE.lock() {
+        if let Some((t, v)) = *c {
+            if t == mtime {
+                return v;
+            }
+        }
+        let v = crate::tasks::bridge_supports_sites(&exe);
+        *c = Some((mtime, v));
+        return v;
+    }
+    false
 }
 
 /// WebRTC (звонки, видео в браузере) ходит по UDP к STUN-серверам мимо
