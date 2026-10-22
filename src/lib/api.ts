@@ -426,6 +426,11 @@ export function noticesList(): Promise<NoticeItem[]> {
   return invoke<NoticeItem[]>("notices_list");
 }
 
+/** Проверить рассылки сейчас (окно открыли; не чаще раза в минуту). */
+export function noticesRefresh(): Promise<void> {
+  return invoke<void>("notices_refresh");
+}
+
 /** Отметить прочитанными; пустой список — все. */
 export function noticesMarkRead(ids: string[]): Promise<NoticeItem[]> {
   return invoke<NoticeItem[]>("notices_mark_read", { ids });

@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { Bell, CheckCheck, Download, ExternalLink } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
-import { noticesList, noticesMarkRead, updateLatest } from "../lib/api";
+import { noticesList, noticesMarkRead, noticesRefresh, updateLatest } from "../lib/api";
 import { openUpdateDialog } from "../lib/updateBus";
 import { cn } from "../lib/cn";
 import type { NoticeItem } from "../lib/types";
@@ -28,6 +28,13 @@ export function NotificationBell() {
   const bellRef = useRef<HTMLButtonElement | null>(null);
 
   const reload = useCallback(() => void noticesList().then(setItems).catch(() => {}), []);
+
+  // Окно открыли — проверить рассылки сразу, не дожидаясь фоновой проверки.
+  useEffect(() => {
+    const onFocus = () => void noticesRefresh().catch(() => {});
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, []);
 
   useEffect(() => {
     reload();

@@ -182,6 +182,12 @@ pub fn update_toast_open(app: AppHandle, id: Option<String>) {
     crate::update_notify::open_from_toast(&app, &id);
 }
 
+/// Открыли окно или трей-попап — проверить рассылки (не чаще раза в минуту).
+#[tauri::command]
+pub async fn notices_refresh(app: AppHandle) {
+    crate::update_notify::refresh_notices(&app, false).await;
+}
+
 /// Колокольчик: обновление и рассылки, с отметкой «прочитано».
 #[tauri::command]
 pub async fn notices_list() -> Result<Vec<crate::notices::NoticeItem>, String> {
