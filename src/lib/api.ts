@@ -33,7 +33,9 @@ import type {
   SeenHosts,
   SystemPacStatus,
   BrowserProxyExtensions,
+  BypassApp,
   NoticeItem,
+  SitesScope,
 } from "./types";
 
 export async function detectNode(): Promise<NodeInfo> {
@@ -338,6 +340,33 @@ export function sitesHosts(since: number, reset = false): Promise<SeenHosts> {
 /** Запись «Подсмотреть»: на её время весь трафик браузеров — через мост. */
 export function sitesPeek(active: boolean): Promise<void> {
   return invoke<void>("sites_peek", { active });
+}
+
+/** Где работают сайты: во всех браузерах или только в выбранных. */
+export function sitesScopeGet(): Promise<SitesScope> {
+  return invoke<SitesScope>("sites_scope_get");
+}
+
+/** selected=false — во всех; true — только в browsers (домены политик). Одно окно UAC. */
+export function sitesScopeSet(selected: boolean, browsers: string[]): Promise<SitesScope> {
+  return invoke<SitesScope>("sites_scope_set", { selected, browsers });
+}
+
+/** «Не трогать эти браузеры»: список, кандидаты, добавление по exe, сохранение. */
+export function sitesBypassGet(): Promise<BypassApp[]> {
+  return invoke<BypassApp[]>("sites_bypass_get");
+}
+
+export function sitesBypassCandidates(): Promise<BypassApp[]> {
+  return invoke<BypassApp[]>("sites_bypass_candidates");
+}
+
+export function sitesBypassFromExe(path: string): Promise<BypassApp> {
+  return invoke<BypassApp>("sites_bypass_from_exe", { path });
+}
+
+export function sitesBypassSet(apps: BypassApp[]): Promise<BypassApp[]> {
+  return invoke<BypassApp[]>("sites_bypass_set", { apps });
 }
 
 /** Расширения-перехватчики прокси во всех установленных Chromium-браузерах. */

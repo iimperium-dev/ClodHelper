@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   AlertCircle,
@@ -7,8 +7,8 @@ import {
   Loader2,
   GripVertical,
   Minus,
-  MoreHorizontal,
   Play,
+  Settings2,
 } from "lucide-react";
 import { Button } from "./Button";
 import { AppIcon, IconWithGear } from "./AppTile";
@@ -34,8 +34,6 @@ interface Props {
   status: RowStatus | null;
   /** Главная кнопка, когда нужно действие («Подключить»). Иначе — «Открыть». */
   action?: RowAction | null;
-  /** Пункты меню «…» (ярлыки, отключение, удаление). */
-  menu: RowAction[];
   onLaunch: () => Promise<void>;
   /** Настоящая иконка программы. */
   icon?: string;
@@ -50,13 +48,12 @@ interface Props {
   Строка приложения — одна для всех (Claude, Telegram, VS Code, свои):
   логотип, имя, ОДНА строка статуса по живым соединениям, ОДНА кнопка —
   «Подключить», если трафик идёт мимо моста, иначе «Открыть». Всё
-  второстепенное — в меню «…».
+  второстепенное — в настройках приложения (шестерёнка).
 */
 export function AppRow({
   app,
   status,
   action,
-  menu,
   onLaunch,
   icon,
   editing,
@@ -65,23 +62,12 @@ export function AppRow({
 }: Props) {
   const [hover, setHover] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
   const [flash, setFlash] = useState<{ ok: boolean; text: string } | null>(null);
-  const menuRef = useRef<HTMLDivElement | null>(null);
 
-  // Light dismiss: клик вне меню закрывает его.
-  useEffect(() => {
-    if (!menuOpen) return;
-    const close = (e: MouseEvent) => {
-      if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false);
-    };
-    window.addEventListener("mousedown", close);
-    return () => window.removeEventListener("mousedown", close);
-  }, [menuOpen]);
-
+  // Дополнительные действия (ярлыки, «Отключить прокси Claude»…) — в окне
+  // настроек приложения (шестерёнка на иконке), не в меню «…» строки.
   const run = async (fn: () => Promise<unknown> | void, okText?: string) => {
     setBusy(true);
-    setMenuOpen(false);
     try {
       const res = await fn();
       const text = okText ?? (typeof res === "string" ? res : null);
@@ -179,45 +165,21 @@ export function AppRow({
                 Открыть
               </button>
             )}
-
-            {menu.length > 0 && (
-              <div className="relative" ref={menuRef}>
-                <button
-                  type="button"
-                  onClick={() => setMenuOpen((v) => !v)}
-                  disabled={busy}
-                  aria-label={`Ещё — ${app.name}`}
-                  className="rounded-lg p-1.5 text-vb-silver-faint transition-colors duration-150 hover:bg-vb-surface-2 hover:text-vb-silver active:scale-[0.97]"
-                >
-                  <MoreHorizontal className="h-4 w-4" />
-                </button>
-                <AnimatePresence>
-                  {menuOpen && (
-                    <motion.div
-                      initial={{ opacity: 0, scale: 0.96, y: -4 }}
-                      animate={{ opacity: 1, scale: 1, y: 0 }}
-                      exit={{ opacity: 0, scale: 0.98, y: -2 }}
-                      transition={{ duration: 0.14, ease: [0.22, 1, 0.36, 1] }}
-                      style={{ transformOrigin: "top right" }}
-                      className="z-dropdown absolute right-0 top-full mt-1 w-56 overflow-hidden rounded-lg border border-vb-border bg-vb-surface py-1 shadow-[0_8px_24px_rgba(0,0,0,0.5)]"
-                    >
-                      {menu.map((m) => (
-                        <button
-                          key={m.label}
-                          type="button"
-                          onClick={() => run(m.run)}
-                          className={cn(
-                            "flex w-full items-center px-3 py-2 text-left text-[13px] transition-colors hover:bg-vb-surface-2",
-                            m.danger ? "text-vb-loss" : "text-vb-silver",
-                          )}
-                        >
-                          {m.label}
-                        </button>
-                      ))}
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
+            {/* Настройки — там же, где раньше было «…»: в покое тихо, при
+                наведении на строку заметно, на самой кнопке — зелёным. */}
+            {onSettings && (
+              <button
+                type="button"
+                onClick={onSettings}
+                aria-label={`Настройки — ${app.name}`}
+                title="Настройки"
+                className={cn(
+                  "group/gear rounded-lg p-1.5 transition-colors duration-150 hover:bg-vb-emerald/10 hover:text-vb-emerald active:scale-[0.95]",
+                  hover ? "text-vb-silver" : "text-vb-silver-faint/70",
+                )}
+              >
+                <Settings2 className="h-4 w-4 transition-transform duration-300 group-hover/gear:rotate-45" />
+              </button>
             )}
           </div>
         )}

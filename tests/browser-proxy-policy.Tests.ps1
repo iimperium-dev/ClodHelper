@@ -151,4 +151,45 @@ $null = Enable-BrowserPolicy 'com.brave.Browser' '127.0.0.1:8890'
 Assert-Equal (Get-FixtureValue 'SOFTWARE\Policies\BraveSoftware\Brave' 'ProxySettings').data $ours 'Brave policy key'
 Assert-Equal (Get-BrowserPolicyStatus $chrome).configured $false 'Browsers are independent'
 
+# «Сайты» только в этом браузере: PAC моста, WebRTC не трогаем.
+$pac = 'pac:http://127.0.0.1:8887/proxy.pac'
+$pacJson = '{"ProxyMode":"pac_script","ProxyPacUrl":"http://127.0.0.1:8887/proxy.pac"}'
+Reset-Fixture
+$status = Enable-BrowserPolicy $chrome $pac
+Assert-Equal $status.configured $true 'PAC policy is configured'
+Assert-Equal (Get-FixtureValue $chromeKey 'ProxySettings').data $pacJson 'PAC policy points Chrome to the bridge PAC'
+Assert-Equal $null (Get-FixtureValue $chromeKey 'WebRtcIPHandling') 'PAC mode leaves WebRTC alone (calls on direct sites keep working)'
+Assert-Equal $status.server $pac 'PAC server is reported'
+$status = Disable-BrowserPolicy $chrome
+Assert-Equal $status.configured $false 'PAC policy is removed'
+Assert-Equal $null (Get-FixtureValue $chromeKey 'ProxySettings') 'Nothing remains after removing PAC policy'
+
+# «Весь трафик» → «Сайты»: WebRTC возвращается к исходному, политика — PAC.
+Reset-Fixture
+Set-FixtureValue $chromeKey 'WebRtcIPHandling' 'disable_non_proxied_udp'
+$null = Enable-BrowserPolicy $chrome '127.0.0.1:8890'
+$null = Enable-BrowserPolicy $chrome $pac
+Assert-Equal (Get-FixtureValue $chromeKey 'ProxySettings').data $pacJson 'Switching to PAC rewrites the proxy policy'
+Assert-Equal (Get-FixtureValue $chromeKey 'WebRtcIPHandling').data 'disable_non_proxied_udp' 'Original WebRTC value is kept'
+Assert-Equal (Get-BrowserPolicyStatus $chrome).configured $true 'PAC policy is recognized as ours after switching'
+
+Reset-Fixture
+$null = Enable-BrowserPolicy $chrome '127.0.0.1:8890'
+$null = Enable-BrowserPolicy $chrome $pac
+Assert-Equal $null (Get-FixtureValue $chromeKey 'WebRtcIPHandling') 'Our WebRTC restriction is removed when switching to PAC'
+$null = Disable-BrowserPolicy $chrome
+Assert-Equal $null (Get-FixtureValue $chromeKey 'ProxySettings') 'Disable after switching restores the original'
+# Несколько браузеров за одно окно UAC.
+Reset-Fixture
+$null = Invoke-BrowserPolicyApply 'com.google.Chrome,com.microsoft.Edge' '' $pac
+Assert-Equal (Get-FixtureValue $chromeKey 'ProxySettings').data $pacJson 'Apply enables Chrome'
+Assert-Equal (Get-FixtureValue 'SOFTWARE\Policies\Microsoft\Edge' 'ProxySettings').data $pacJson 'Apply enables Edge in the same run'
+$null = Invoke-BrowserPolicyApply '' 'com.microsoft.Edge' $pac
+Assert-Equal $null (Get-FixtureValue 'SOFTWARE\Policies\Microsoft\Edge' 'ProxySettings') 'Apply disables Edge'
+Assert-Equal (Get-BrowserPolicyStatus $chrome).configured $true 'Chrome keeps its policy'
+Assert-Throws { Invoke-BrowserPolicyApply 'com.evil.Browser' '' $pac } '*Неизвестный браузер*' 'Apply refuses unknown browsers'
+
+Assert-Throws { Enable-BrowserPolicy $chrome 'pac:http://evil.example/proxy.pac' } '*PAC моста*' 'Only the local bridge PAC is accepted'
+Assert-Throws { Enable-BrowserPolicy $chrome 'pac:http://127.0.0.1:8887/x.pac' } '*PAC моста*' 'Only proxy.pac path is accepted'
+
 Write-Output "PASS: $script:Passed browser policy assertions; no real registry or UAC operations."

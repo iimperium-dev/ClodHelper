@@ -1,7 +1,10 @@
 ﻿param(
-    [ValidateSet('Status', 'Enable', 'Disable')][string]$Action = 'Status',
+    [ValidateSet('Status', 'Enable', 'Disable', 'Apply')][string]$Action = 'Status',
     [string]$Domain = '',
     [string]$Server = '',
+    # Apply: несколько браузеров одним окном UAC — домены через запятую.
+    [string]$EnableDomains = '',
+    [string]$DisableDomains = '',
     [string]$ResultPath = '',
     [switch]$LibraryOnly
 )
@@ -99,15 +102,35 @@ function Remove-BrowserPolicyKeyIfEmpty([string]$Key) {
     }
 }
 
+# Server — вход моста «127.0.0.1:порт» (весь трафик через мост) или
+# «pac:http://127.0.0.1:порт/proxy.pac» («Сайты» только в этом браузере:
+# через мост — сайты из списка, остальное напрямую по PAC моста).
+function Test-BrowserPac([string]$Server) {
+    return ($Server -match '^pac:http://127\.0\.0\.1:\d{1,5}/proxy\.pac$')
+}
+
 function Get-BrowserProxySettings([string]$Server) {
+    if (Test-BrowserPac $Server) {
+        return ('{{"ProxyMode":"pac_script","ProxyPacUrl":"{0}"}}' -f $Server.Substring(4))
+    }
     # Строка собирается вручную: ConvertTo-Json превратил бы «<» в <.
     return ('{{"ProxyMode":"fixed_servers","ProxyServer":"{0}","ProxyBypassList":"<local>"}}' -f $Server)
 }
 
 function Test-BrowserServer([string]$Server) {
-    if ($Server -notmatch '^127\.0\.0\.1:(\d{1,5})$') { return $false }
+    if ($Server -notmatch '^(?:pac:http://)?127\.0\.0\.1:(\d{1,5})(?:/proxy\.pac)?$') { return $false }
+    if (($Server -like 'pac:*') -ne ($Server -like '*/proxy.pac')) { return $false }
     $port = [int]$Matches[1]
     return ($port -ge 1 -and $port -le 65535)
+}
+
+# WebRtcIPHandling, который должен стоять при нашей политике. Весь трафик через
+# мост — запрет UDP мимо прокси (иначе WebRTC раскрывает IP). PAC — почти всё
+# идёт напрямую, и запрет сломал бы звонки на обычных сайтах: оставляем
+# исходное значение (как при системной автонастройке «во всех браузерах»).
+function Test-BrowserWebRtcOurs($Value, $State) {
+    if (Test-BrowserPac $State.server) { return (Test-BrowserValueEqual $Value $State.original.WebRtcIPHandling) }
+    return (Test-BrowserString $Value $script:BrowserWebRtc)
 }
 
 function Test-BrowserValueEqual($Left, $Right) {
@@ -157,7 +180,7 @@ function Get-BrowserPolicyStatus([string]$Domain) {
     $legacy = @($script:BrowserLegacyProxy | Where-Object { (Read-BrowserRegistryValue $key $_).exists })
     $state = Get-BrowserOwnedState $Domain
     $ours = $null -ne $state -and (Test-BrowserString $proxy (Get-BrowserProxySettings $state.server)) -and
-        (Test-BrowserString $webrtc $script:BrowserWebRtc)
+        (Test-BrowserWebRtcOurs $webrtc $state)
     $conflict = $null
     if ($legacy.Count -gt 0) {
         $conflict = $script:BrowserForeign
@@ -181,7 +204,7 @@ function Get-BrowserPolicyStatus([string]$Domain) {
 }
 
 function Enable-BrowserPolicy([string]$Domain, [string]$Server) {
-    if (-not (Test-BrowserServer $Server)) { throw 'Ожидался вход моста 127.0.0.1:порт.' }
+    if (-not (Test-BrowserServer $Server)) { throw 'Ожидался вход моста 127.0.0.1:порт или PAC моста.' }
     $status = Get-BrowserPolicyStatus $Domain
     if ($null -ne $status.conflict) { throw $status.conflict }
     $key = Get-BrowserPolicyKey $Domain
@@ -206,10 +229,18 @@ function Enable-BrowserPolicy([string]$Domain, [string]$Server) {
         throw 'Политика браузера изменилась во время настройки. Проверьте её перед повторной попыткой.'
     }
     Write-BrowserRegistryValue $key 'ProxySettings' ([pscustomobject]@{ exists = $true; kind = 'String'; data = (Get-BrowserProxySettings $Server) })
-    Write-BrowserRegistryValue $key 'WebRtcIPHandling' ([pscustomobject]@{ exists = $true; kind = 'String'; data = $script:BrowserWebRtc })
+    if (Test-BrowserPac $Server) {
+        # PAC: WebRTC — как было до Clod Helper (переход с «весь трафик» тоже).
+        if ($state.original.WebRtcIPHandling.exists) { Write-BrowserRegistryValue $key 'WebRtcIPHandling' $state.original.WebRtcIPHandling }
+        else { Remove-BrowserRegistryValue $key 'WebRtcIPHandling' }
+    } else {
+        Write-BrowserRegistryValue $key 'WebRtcIPHandling' ([pscustomobject]@{ exists = $true; kind = 'String'; data = $script:BrowserWebRtc })
+    }
     $status = Get-BrowserPolicyStatus $Domain
     if (-not $status.configured) { throw 'Не удалось подтвердить политику браузера. Запись владения сохранена.' }
-    $status.notice = 'Готово. Перезапустите браузер — дальше он всегда идёт через мост.'
+    $status.notice = $(if (Test-BrowserPac $Server) {
+        'Готово. Перезапустите браузер — сайты из списка пойдут через прокси.'
+    } else { 'Готово. Перезапустите браузер — дальше он всегда идёт через мост.' })
     return $status
 }
 
@@ -248,6 +279,15 @@ function Disable-BrowserPolicy([string]$Domain) {
     return $status
 }
 
+# Несколько браузеров за одно окно UAC: сначала снять, потом поставить.
+# Возвращает статус последнего; вызывающий перечитывает каждый сам.
+function Invoke-BrowserPolicyApply([string]$Enable, [string]$Disable, [string]$Server) {
+    $status = $null
+    foreach ($d in @($Disable -split ',' | Where-Object { $_ })) { $status = Disable-BrowserPolicy $d }
+    foreach ($d in @($Enable -split ',' | Where-Object { $_ })) { $status = Enable-BrowserPolicy $d $Server }
+    return $status
+}
+
 if ($LibraryOnly) { return }
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
@@ -267,6 +307,7 @@ try {
     $status = switch ($Action) {
         'Enable' { Enable-BrowserPolicy $Domain $Server }
         'Disable' { Disable-BrowserPolicy $Domain }
+        'Apply' { Invoke-BrowserPolicyApply $EnableDomains $DisableDomains $Server }
         default { Get-BrowserPolicyStatus $Domain }
     }
     $result = @{ ok = $true; status = $status; error = $null }

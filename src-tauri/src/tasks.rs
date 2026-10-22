@@ -63,7 +63,9 @@ pub fn write_sites_file() -> Result<PathBuf, String> {
             })
         })
         .collect();
-    let text = serde_json::to_string_pretty(&serde_json::json!({ "sites": sites }))
+    // Программы, которые «Сайты» не трогают (мост ≥1.11 шлёт их напрямую).
+    let bypass: Vec<&str> = s.sites_bypass.iter().map(|a| a.dir.as_str()).collect();
+    let text = serde_json::to_string_pretty(&serde_json::json!({ "sites": sites, "bypass_apps": bypass }))
         .map_err(|e| format!("serialize sites: {e}"))?;
     let path = shim::install_dir()
         .map(|d| d.join(SITES_FILE))

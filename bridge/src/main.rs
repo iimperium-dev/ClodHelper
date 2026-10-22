@@ -163,6 +163,11 @@ type SiteTable = Vec<(String, Option<usize>)>;
 struct SitesFile {
     #[serde(default)]
     sites: Vec<SiteFileEntry>,
+    /// Программы, которые Clod Helper не трогает: папки, в которых лежат их
+    /// exe (антидетект-браузер с кучей профилей — одна папка на всех).
+    /// Соединение от такой программы на входе сайтов идёт напрямую.
+    #[serde(default)]
+    bypass_apps: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -177,6 +182,8 @@ struct SiteFileEntry {
 #[derive(Default)]
 struct Sites {
     table: std::sync::RwLock<Arc<SiteTable>>,
+    /// Папки исключённых программ (нижний регистр, с завершающим «\»).
+    bypass: std::sync::RwLock<Arc<Vec<String>>>,
 }
 
 impl Sites {
@@ -188,6 +195,134 @@ impl Sites {
             *g = Arc::new(t);
         }
     }
+    fn bypass(&self) -> Arc<Vec<String>> {
+        self.bypass.read().map(|g| g.clone()).unwrap_or_default()
+    }
+    fn set_bypass(&self, b: Vec<String>) {
+        if let Ok(mut g) = self.bypass.write() {
+            *g = Arc::new(b);
+        }
+    }
+}
+
+/// Папка программы для сравнения путей: нижний регистр, «\», завершающий «\».
+fn norm_dir(p: &str) -> String {
+    let mut s = p.trim().replace('/', "\\").to_lowercase();
+    if !s.ends_with('\\') {
+        s.push('\\');
+    }
+    s
+}
+
+/// Исключённые программы из bridge-sites.json.
+fn parse_bypass(text: &str) -> Result<Vec<String>, String> {
+    let f: SitesFile = serde_json::from_str(text.trim_start_matches('\u{feff}'))
+        .map_err(|e| format!("не парсится: {e}"))?;
+    Ok(f.bypass_apps.iter().map(|p| norm_dir(p)).filter(|p| p.len() > 3).collect())
+}
+
+/// Какой программе (путь к exe, нижний регистр) принадлежит соединение
+/// клиента с портом `client_port` к нашему входу `our_port` на 127.0.0.1.
+#[cfg(windows)]
+mod procmap {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use windows_sys::Win32::Foundation::{CloseHandle, NO_ERROR};
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        GetExtendedTcpTable, MIB_TCPROW_OWNER_PID, TCP_TABLE_OWNER_PID_CONNECTIONS,
+    };
+    use windows_sys::Win32::Networking::WinSock::AF_INET;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    static CACHE: Mutex<Option<HashMap<u32, String>>> = Mutex::new(None);
+
+    fn owner_pid(client_port: u16, our_port: u16) -> Option<u32> {
+        let mut size: u32 = 0;
+        // SAFETY: первый вызов только узнаёт размер буфера.
+        unsafe { GetExtendedTcpTable(std::ptr::null_mut(), &mut size, 0, AF_INET as u32, TCP_TABLE_OWNER_PID_CONNECTIONS, 0) };
+        for _ in 0..3 {
+            let mut buf = vec![0u8; size as usize + 1024];
+            let mut len = buf.len() as u32;
+            // SAFETY: буфер нужного размера; WinAPI пишет MIB_TCPTABLE_OWNER_PID.
+            let rc = unsafe {
+                GetExtendedTcpTable(buf.as_mut_ptr().cast(), &mut len, 0, AF_INET as u32, TCP_TABLE_OWNER_PID_CONNECTIONS, 0)
+            };
+            if rc != NO_ERROR {
+                size = len;
+                continue;
+            }
+            let count = u32::from_ne_bytes(buf[..4].try_into().ok()?) as usize;
+            // Строки идут сразу за dwNumEntries (выравнивание — 4 байта).
+            let rows = buf[4..].as_ptr().cast::<MIB_TCPROW_OWNER_PID>();
+            for i in 0..count {
+                // SAFETY: count строк в пределах буфера, который заполнил WinAPI.
+                let r = unsafe { std::ptr::read_unaligned(rows.add(i)) };
+                let local = u16::from_be(r.dwLocalPort as u16);
+                let remote = u16::from_be(r.dwRemotePort as u16);
+                if local == client_port && remote == our_port {
+                    return Some(r.dwOwningPid);
+                }
+            }
+            return None;
+        }
+        None
+    }
+
+    fn exe_path(pid: u32) -> Option<String> {
+        if let Some(p) = CACHE.lock().ok()?.as_ref().and_then(|c| c.get(&pid)).cloned() {
+            return Some(p);
+        }
+        // SAFETY: открываем процесс только на чтение имени и сразу закрываем.
+        let path = unsafe {
+            let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if h.is_null() {
+                return None;
+            }
+            let mut buf = [0u16; 1024];
+            let mut len = buf.len() as u32;
+            let ok = QueryFullProcessImageNameW(h, 0, buf.as_mut_ptr(), &mut len);
+            CloseHandle(h);
+            if ok == 0 {
+                return None;
+            }
+            String::from_utf16_lossy(&buf[..len as usize]).to_lowercase()
+        };
+        if let Ok(mut c) = CACHE.lock() {
+            let c = c.get_or_insert_with(HashMap::new);
+            // PID переиспользуются — кэш небольшой и время от времени сбрасывается.
+            if c.len() > 256 {
+                c.clear();
+            }
+            c.insert(pid, path.clone());
+        }
+        Some(path)
+    }
+
+    pub fn client_exe(client_port: u16, our_port: u16) -> Option<String> {
+        exe_path(owner_pid(client_port, our_port)?)
+    }
+}
+
+#[cfg(not(windows))]
+mod procmap {
+    pub fn client_exe(_: u16, _: u16) -> Option<String> {
+        None
+    }
+}
+
+/// Соединение пришло от исключённой программы (только вход сайтов).
+fn client_bypassed(state: &State, client: &TcpStream) -> bool {
+    if state.routing_policy != RoutingPolicy::Sites {
+        return false;
+    }
+    let bypass = state.sites.bypass();
+    if bypass.is_empty() {
+        return false;
+    }
+    let (Ok(peer), Ok(local)) = (client.peer_addr(), client.local_addr()) else { return false };
+    procmap::client_exe(peer.port(), local.port()).is_some_and(|exe| bypass.iter().any(|dir| exe.starts_with(dir.as_str())))
 }
 
 /// Хост, к которому ходили через вход сайтов («Подсмотреть»).
@@ -901,6 +1036,12 @@ fn load_sites(path: &str) -> Result<SiteTable, String> {
     }
 }
 
+/// Исключённые программы из файла сайтов; ошибка — пусто (их таблица сайтов
+/// при битом файле и так остаётся прежней, см. watch_sites).
+fn load_bypass(path: &str) -> Vec<String> {
+    std::fs::read_to_string(path).ok().and_then(|t| parse_bypass(&t).ok()).unwrap_or_default()
+}
+
 fn file_mtime(path: &str) -> Option<std::time::SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
@@ -921,6 +1062,7 @@ async fn watch_sites(path: String, sites: Arc<Sites>, log: Arc<State>) {
             Ok(t) => {
                 log.log(&format!("сайты перечитаны: {} доменов", t.len()));
                 sites.set(t);
+                sites.set_bypass(load_bypass(&path));
             }
             Err(e) => log.log_err(&format!("файл сайтов {path} {e} — оставляю прежний список")),
         }
@@ -1572,10 +1714,18 @@ async fn handle(mut client: TcpStream, state: Arc<State>, sem: Arc<Semaphore>) {
     // даже если smart-режим отправил бы его напрямую (или домен попал в
     // direct_domains) — иначе он утёк бы с реальным IP пользователя.
     // Сайты пользователя — следом за назначениями (см. route_plan).
-    let (pin, route, site) = route_plan(&state, &req.host);
-    if pin != Pin::Broken {
-        note_host(&state, &req.host, route == Route::Upstream, site);
-    }
+    // Исключённая программа (антидетект-браузер и т.п.): Clod Helper её не
+    // трогает — напрямую, без прокси, закреплений и записи в «Подсмотреть».
+    let (pin, route, site) = if client_bypassed(&state, &client) {
+        (Pin::None, Route::Direct, None)
+    } else {
+        let plan = route_plan(&state, &req.host);
+        if plan.0 != Pin::Broken {
+            note_host(&state, &req.host, plan.1 == Route::Upstream, plan.2.clone());
+        }
+        plan
+    };
+    let _ = &site;
     let route = match pin {
         Pin::Pinned(_) => Route::Upstream,
         Pin::Broken => {
@@ -2089,6 +2239,7 @@ async fn main() {
     let sites_err = match args.sites.as_deref().map(load_sites) {
         Some(Ok(t)) => {
             sites.set(t);
+            sites.set_bypass(args.sites.as_deref().map(load_bypass).unwrap_or_default());
             None
         }
         Some(Err(e)) => Some(e),
@@ -3248,6 +3399,34 @@ mod tests {
         let plain = test_state(RoutingPolicy::Rules, Vec::new());
         let out = single_request(Arc::new(plain), "GET /hosts HTTP/1.1\r\nHost: x\r\n\r\n".into()).await;
         assert!(String::from_utf8_lossy(&out).starts_with("HTTP/1.1 404"));
+    }
+
+    #[test]
+    fn bypass_dirs_are_normalized() {
+        let b = parse_bypass(r#"{"sites":[],"bypass_apps":["C:/Users/U/AppData/Local/1browser","D:\\Apps\\X\\","",".."]}"#).unwrap();
+        assert_eq!(b, vec![r"c:\users\u\appdata\local\1browser\", r"d:\apps\x\"]);
+        assert!(parse_bypass(r#"{"sites":[]}"#).unwrap().is_empty(), "старый файл без поля");
+    }
+
+    /// Мост узнаёт программу по соединению: тест подключается сам к себе.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn bypassed_app_is_recognized_by_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let our = listener.local_addr().unwrap().port();
+        let client = TcpStream::connect(("127.0.0.1", our)).await.unwrap();
+        let (server_side, _) = listener.accept().await.unwrap();
+        let exe = procmap::client_exe(client.local_addr().unwrap().port(), our).expect("владелец соединения");
+        let me = std::env::current_exe().unwrap().to_string_lossy().to_lowercase();
+        assert_eq!(exe, me);
+
+        let mut st = test_state(RoutingPolicy::Sites, Vec::new());
+        assert!(!client_bypassed(&st, &server_side), "список пуст");
+        let dir = std::path::Path::new(&me).parent().unwrap().to_string_lossy().to_string();
+        st.sites.set_bypass(vec![norm_dir(&dir)]);
+        assert!(client_bypassed(&st, &server_side));
+        st.routing_policy = RoutingPolicy::Rules;
+        assert!(!client_bypassed(&st, &server_side), "только вход сайтов");
     }
 
     #[tokio::test]

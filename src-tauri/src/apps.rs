@@ -1894,7 +1894,7 @@ pub fn icons(paths: &[String]) -> std::collections::HashMap<String, String> {
 #[cfg(not(target_os = "windows"))]
 const ICON_CACHE_DIR: &str = "icons";
 #[cfg(target_os = "windows")]
-const ICON_CACHE_DIR: &str = "icons64";
+const ICON_CACHE_DIR: &str = "icons64-v2";
 
 /// Файл, по дате которого видно, что программа обновилась.
 #[cfg(not(target_os = "windows"))]
@@ -1903,13 +1903,102 @@ fn icon_stamp(p: &str) -> PathBuf {
 }
 #[cfg(target_os = "windows")]
 fn icon_stamp(p: &str) -> PathBuf {
-    PathBuf::from(p)
+    match msix_root(p) {
+        Some((root, _)) => root.join("AppxManifest.xml"),
+        None => PathBuf::from(p),
+    }
 }
 
-/// У пути есть иконка программы: бандл .app (macOS) / файл .exe (Windows).
+/// У пути есть иконка программы: бандл .app (macOS) / файл .exe или
+/// приложение Store по AppUserModelId «Семейство!Приложение» (Windows).
 fn has_icon(p: &str) -> bool {
+    #[cfg(target_os = "windows")]
+    if msix_root(p).is_some() {
+        return true;
+    }
     let ext = if cfg!(target_os = "windows") { ".exe" } else { ".app" };
     p.to_ascii_lowercase().ends_with(ext) && std::path::Path::new(p).exists()
+}
+
+/// Пакет Store, к которому относится путь: AppUserModelId «Семейство!Id»
+/// или exe внутри папки пакета (рядом выше лежит AppxManifest.xml).
+/// Возвращает корень пакета и Id приложения (если известен).
+#[cfg(target_os = "windows")]
+fn msix_root(p: &str) -> Option<(PathBuf, Option<String>)> {
+    if let Some((family, app)) = p.split_once('!') {
+        if !p.contains(['\\', '/']) {
+            return Some((appx_install_location(family)?, Some(app.to_string())));
+        }
+    }
+    let path = std::path::Path::new(p);
+    if !p.to_ascii_lowercase().contains("windowsapps") {
+        return None;
+    }
+    path.ancestors()
+        .skip(1)
+        .take(4)
+        .find(|d| d.join("AppxManifest.xml").exists())
+        .map(|d| (d.to_path_buf(), None))
+}
+
+/// Логотип приложения Store (PNG из пакета): у Claude, Codex и других
+/// MSIX иконка в exe — заглушка, настоящая лежит в Assets пакета.
+#[cfg(target_os = "windows")]
+fn msix_logo(p: &str) -> Option<Vec<u8>> {
+    let (root, app) = msix_root(p)?;
+    let xml = std::fs::read_to_string(root.join("AppxManifest.xml")).ok()?;
+    let block = app
+        .as_deref()
+        .and_then(|id| {
+            xml.split("<Application ")
+                .skip(1)
+                .find(|b| b.split('>').next().is_some_and(|tag| tag.contains(&format!("Id=\"{id}\""))))
+        })
+        .or_else(|| xml.split("<Application ").nth(1))
+        .unwrap_or(&xml);
+    let attr = |name: &str| -> Option<String> {
+        let start = block.find(&format!("{name}=\""))? + name.len() + 2;
+        Some(block[start..].split('"').next()?.to_string())
+    };
+    let rel = attr("Square44x44Logo")
+        .or_else(|| attr("Square150x150Logo"))
+        .or_else(|| Some(xml.split("<Logo>").nth(1)?.split("</Logo>").next()?.trim().to_string()))?;
+    best_logo_variant(&root.join(rel.replace('/', "\\")))
+}
+
+/// Лучший вариант ресурса MSIX: «targetsize-N_altform-unplated» (без
+/// цветной подложки) крупнейший, затем targetsize-N, затем scale-N.
+#[cfg(target_os = "windows")]
+fn best_logo_variant(base: &std::path::Path) -> Option<Vec<u8>> {
+    let dir = base.parent()?;
+    let stem = base.file_stem()?.to_string_lossy().to_ascii_lowercase();
+    let num = |s: &str, key: &str| -> u32 {
+        s.split(key).nth(1).map(|r| r.chars().take_while(|c| c.is_ascii_digit()).collect::<String>()).and_then(|n| n.parse().ok()).unwrap_or(0)
+    };
+    let mut best: Option<(u32, PathBuf)> = None;
+    for e in std::fs::read_dir(dir).ok()?.flatten() {
+        let name = e.file_name().to_string_lossy().to_ascii_lowercase();
+        if !name.ends_with(".png") || !(name == format!("{stem}.png") || name.starts_with(&format!("{stem}."))) {
+            continue;
+        }
+        // Светлая тема (lightunplated) — тёмный глиф, на нашем фоне не виден.
+        if name.contains("lightunplated") || name.contains("contrast-") {
+            continue;
+        }
+        let score = if name.contains("targetsize-") {
+            // Больше 256 не нужно; без подложки — лучше всего.
+            let n = num(&name, "targetsize-").min(256);
+            if name.contains("altform-unplated") { 3000 + n } else { 2000 + n }
+        } else if name.contains("scale-") {
+            1000 + num(&name, "scale-")
+        } else {
+            1
+        };
+        if best.as_ref().is_none_or(|(s, _)| score > *s) {
+            best = Some((score, e.path()));
+        }
+    }
+    std::fs::read(best?.1).ok()
 }
 
 /// macOS: PNG 64×64 иконок бандлов (JXA, NSWorkspace): путь → base64.
@@ -1941,7 +2030,7 @@ fn extract_icons(paths: &[&String]) -> std::collections::HashMap<String, String>
     paths
         .iter()
         .filter_map(|p| {
-            let png = crate::win::exe_icon_png(p, 64)?;
+            let png = msix_logo(p).or_else(|| crate::win::exe_icon_png(p, 64))?;
             Some((p.to_string(), base64::engine::general_purpose::STANDARD.encode(png)))
         })
         .collect()

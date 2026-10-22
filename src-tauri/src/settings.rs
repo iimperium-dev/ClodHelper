@@ -94,6 +94,13 @@ pub struct Settings {
     /// Рассылки, уже всплывавшие в углу экрана (повторно не всплывают).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notices_toasted: Vec<String>,
+    /// «Сайты» только в выбранных браузерах (PAC их политикой), а не во всех
+    /// (системная автонастройка). Какие выбраны — видно по их политикам.
+    #[serde(default)]
+    pub sites_scope_selected: bool,
+    /// Программы, которые «Сайты» не трогают (антидетект-браузеры и т.п.).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sites_bypass: Vec<crate::browser_ext::BypassApp>,
     /// «Сайты во всех браузерах»: системная автонастройка прокси (PAC моста).
     #[serde(default)]
     pub system_pac: bool,
@@ -359,6 +366,20 @@ pub fn set_saved_proxy_env(
 ) -> Result<Settings, String> {
     with_settings(|s| {
         s.saved_proxy_env = value;
+        Ok(())
+    })
+}
+
+pub fn set_sites_scope_selected(selected: bool) -> Result<Settings, String> {
+    with_settings(|s| {
+        s.sites_scope_selected = selected;
+        Ok(())
+    })
+}
+
+pub fn set_sites_bypass(apps: Vec<crate::browser_ext::BypassApp>) -> Result<Settings, String> {
+    with_settings(|s| {
+        s.sites_bypass = apps;
         Ok(())
     })
 }

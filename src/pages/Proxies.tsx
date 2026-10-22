@@ -50,19 +50,19 @@ const MAX_POOL = 5;
 const GEO_CACHE_KEY = "clod-proxy-geo-v2";
 
 /** host:port из URL пула (без схемы и логина-пароля — эстетика и ключ кэша). */
-function hostPort(url: string): string {
+export function hostPort(url: string): string {
   const rest = url.includes("://") ? url.split("://")[1] : url;
   return rest.includes("@") ? rest.slice(rest.lastIndexOf("@") + 1) : rest;
 }
 
 /** Хост прокси без порта — так его показываем и копируем. */
-function hostOnly(url: string): string {
+export function hostOnly(url: string): string {
   const hp = hostPort(url);
   const colon = hp.lastIndexOf(":");
   return colon > 0 ? hp.slice(0, colon) : hp;
 }
 
-function loadGeoCache(): Record<string, ProxyCheckResult> {
+export function loadGeoCache(): Record<string, ProxyCheckResult> {
   try {
     const v: unknown = JSON.parse(localStorage.getItem(GEO_CACHE_KEY) ?? "{}");
     return v && typeof v === "object" && !Array.isArray(v)
@@ -73,7 +73,7 @@ function loadGeoCache(): Record<string, ProxyCheckResult> {
   }
 }
 
-function saveGeoCache(cache: Record<string, ProxyCheckResult>) {
+export function saveGeoCache(cache: Record<string, ProxyCheckResult>) {
   try {
     localStorage.setItem(GEO_CACHE_KEY, JSON.stringify(cache));
   } catch {
@@ -788,7 +788,7 @@ export function Proxies() {
 }
 
 /** IP прокси: при наведении — значок копирования, по клику — в буфер обмена. */
-function CopyIp({ text, copy, className }: { text: string; copy: string; className?: string }) {
+export function CopyIp({ text, copy, className }: { text: string; copy: string; className?: string }) {
   const [copied, setCopied] = useState(false);
   const onCopy = async () => {
     try {
@@ -802,7 +802,12 @@ function CopyIp({ text, copy, className }: { text: string; copy: string; classNa
   return (
     <button
       type="button"
-      onClick={() => void onCopy()}
+      onClick={(e) => {
+        // Внутри кликабельной строки (выбор прокси в настройках приложения)
+        // копирование не должно выбирать строку.
+        e.stopPropagation();
+        void onCopy();
+      }}
       title={copied ? "Скопировано" : "Скопировать IP"}
       className={cn(
         "group/ip inline-flex min-w-0 items-center gap-1 rounded font-mono transition-colors hover:text-vb-silver",

@@ -104,6 +104,30 @@ export interface SitesStatus {
   browsers: SitesBrowser[];
 }
 
+/** Браузер в режиме «Только в выбранных» (mirror commands::sites::ScopeBrowser). */
+export interface ScopeBrowser {
+  domain: string;
+  name: string;
+  /** pac — сайты в этом браузере; bridge — весь трафик через мост; off; conflict. */
+  state: "pac" | "bridge" | "off" | "conflict";
+  conflict: string | null;
+}
+
+export interface SitesScope {
+  supported: boolean;
+  /** true — «Только в выбранных», false — «Во всех браузерах». */
+  selected: boolean;
+  browsers: ScopeBrowser[];
+}
+
+/** Программа, которую «Сайты» не трогают (mirror browser_ext::BypassApp). */
+export interface BypassApp {
+  name: string;
+  /** Папка программы — правило действует на все её exe и профили. */
+  dir: string;
+  running: boolean;
+}
+
 /** Браузер, в котором расширения перехватывают прокси (сайты в нём не работают). */
 export interface BrowserProxyExtensions {
   name: string;

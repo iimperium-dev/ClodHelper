@@ -72,7 +72,9 @@ export function IconWithGear({
   onSettings?: () => void;
   children: React.ReactNode;
 }) {
-  const g = Math.round(Math.max(16, size * 0.42));
+  // Крупнее, чем раньше (была 42% иконки — терялась), и с мягкой зелёной
+  // вспышкой при появлении: заметно, но не пёстро.
+  const g = Math.round(Math.max(20, size * 0.56));
   return (
     <div className="relative shrink-0" style={{ width: size, height: size }}>
       {children}
@@ -80,10 +82,16 @@ export function IconWithGear({
         {show && onSettings && (
           <motion.button
             type="button"
-            initial={{ opacity: 0, y: g * 0.6, rotate: -120, scale: 0.6 }}
-            animate={{ opacity: 1, y: 0, rotate: 0, scale: 1 }}
+            initial={{ opacity: 0, y: g * 0.6, rotate: -120, scale: 0.6, boxShadow: "0 0 0 0 rgba(16,185,129,0)" }}
+            animate={{
+              opacity: 1,
+              y: 0,
+              rotate: 0,
+              scale: 1,
+              boxShadow: ["0 0 0 0 rgba(16,185,129,0.45)", "0 0 0 6px rgba(16,185,129,0)", "0 4px 10px rgba(0,0,0,0.45)"],
+            }}
             exit={{ opacity: 0, y: g * 0.5, rotate: -90, scale: 0.7 }}
-            transition={{ type: "spring", bounce: 0.35, duration: 0.38 }}
+            transition={{ type: "spring", bounce: 0.35, duration: 0.38, boxShadow: { duration: 0.7, ease: "easeOut" } }}
             onPointerDown={(e) => e.stopPropagation()}
             onPointerUp={(e) => e.stopPropagation()}
             onClick={(e) => {
@@ -93,7 +101,7 @@ export function IconWithGear({
             aria-label={`Настройки — ${name}`}
             title="Настройки"
             style={{ width: g, height: g, left: (size - g) / 2, bottom: -g / 2 }}
-            className="absolute z-10 flex items-center justify-center rounded-full border border-vb-border bg-vb-surface text-vb-silver shadow-[0_4px_10px_rgba(0,0,0,0.45)] transition-colors hover:border-vb-emerald/60 hover:text-vb-emerald"
+            className="absolute z-10 flex items-center justify-center rounded-full border border-vb-border-strong bg-vb-surface text-vb-fg transition-colors hover:border-vb-emerald/70 hover:bg-vb-emerald/15 hover:text-vb-emerald"
           >
             <Settings style={{ width: g * 0.62, height: g * 0.62 }} strokeWidth={2} />
           </motion.button>
