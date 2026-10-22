@@ -11,7 +11,7 @@ import {
   Settings2,
 } from "lucide-react";
 import { Button } from "./Button";
-import { AppIcon, IconWithGear } from "./AppTile";
+import { AppIcon } from "./AppTile";
 import { cn } from "../lib/cn";
 import type { AppProfileStatus } from "../lib/types";
 
@@ -114,9 +114,8 @@ export function AppRow({
             </motion.button>
           )}
         </AnimatePresence>
-        <IconWithGear show={hover && !editing} size={32} onSettings={onSettings} name={app.name}>
-          <AppIcon name={app.name} icon={icon} size={32} dim={!app.installed} />
-        </IconWithGear>
+        {/* В списке настройки — кнопкой справа; шестерёнка на иконке — только у плиток */}
+        <AppIcon name={app.name} icon={icon} size={32} dim={!app.installed} />
 
         <div className="min-w-0 flex-1">
           <div

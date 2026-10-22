@@ -262,6 +262,8 @@ export interface BridgeUpstreamHealth {
   fail: number;
   /** Отказов подряд (мост 1.5.0+). */
   fail_streak?: number;
+  /** Резервы этого прокси — индексы в списке моста (мост 1.12.0+). */
+  backups?: number[];
 }
 
 /** Автозапуск приложения при входе в систему. */
@@ -331,18 +333,27 @@ export interface BridgeHealth {
   via_direct: number;
   errors: number;
   upstreams: BridgeUpstreamHealth[];
+  /** «Весь трафик»: прокси, через который идёт всё (без failover). */
+  strict_upstream_index?: number | null;
   /** Последние ошибки (мост 1.1.0+; у старых может отсутствовать). */
   last_errors?: BridgeErrorEntry[];
 }
 
 // ─── Прокси-пул ──────────────────────────────────────────────────
 
-/** TCP-пинг одного прокси из пула. ms=null — не подключились. */
+/** Проверка одного прокси из пула: TCP-пинг и настоящий запрос через него. */
 export interface ProxyPing {
   url: string;
   host: string;
   port: number;
+  /** TCP-connect, мс; null — порт не ответил. */
   ms: number | null;
+  /** Запрос через прокси прошёл; null/нет — не проверяли. */
+  alive?: boolean | null;
+  /** Почему не работает. */
+  error?: string | null;
+  /** Резерв какого прокси пула (индекс); нет — сам прокси пула. */
+  backup_of?: number | null;
 }
 
 /** Группы сервисов для назначений (mirror tasks::SERVICE_GROUPS). */

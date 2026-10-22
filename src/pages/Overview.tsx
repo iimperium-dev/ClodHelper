@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   AlertCircle,
@@ -23,9 +23,13 @@ import {
   shimStop,
   shimTest,
   privacyCheck,
+  appsList,
+  proxyAssignmentsGet,
+  proxyLabelsGet,
+  sitesGet,
 } from "../lib/api";
-import { formatUptime, useStatus } from "../lib/status";
-import type { PrivacyReport, ShimTestResult } from "../lib/types";
+import { formatUptime, isUsable, useStatus, type ProxyState } from "../lib/status";
+import type { AppProfileStatus, PrivacyReport, ShimTestResult, SiteEntry } from "../lib/types";
 import { fadeInUp, staggerContainer } from "../lib/motion";
 import { cn } from "../lib/cn";
 
@@ -34,10 +38,57 @@ interface Props {
   onOpenProxies: () => void;
 }
 
-/** host:port из masked-URL пула ("http://user:****@host:port"). */
-function chipLabel(masked: string): string {
-  const rest = masked.includes("://") ? masked.split("://")[1] : masked;
-  return rest.includes("@") ? rest.slice(rest.lastIndexOf("@") + 1) : rest;
+/** Названия сервисов назначений — как в «Прокси». */
+const SERVICE_NAMES: Record<string, string> = {
+  anthropic: "Claude",
+  openai: "ChatGPT",
+  google: "Gemini",
+  other_ai: "остальные AI",
+  telegram: "Telegram",
+};
+
+/** Кто закреплён за прокси пула: сервисы, сайты, приложения. */
+interface Pins {
+  assign: Record<string, number>;
+  sites: SiteEntry[];
+  apps: AppProfileStatus[];
+  labels: Record<string, string>;
+}
+
+function pinnedTo(pins: Pins | null, i: number): string[] {
+  if (!pins) return [];
+  return [
+    ...Object.entries(pins.assign)
+      .filter(([, v]) => v === i)
+      .map(([k]) => SERVICE_NAMES[k] ?? k),
+    ...pins.sites.filter((s) => s.enabled && s.proxy === i).map((s) => s.name),
+    ...pins.apps.filter((a) => !a.hidden && a.proxy === i).map((a) => a.name),
+  ];
+}
+
+/** Что значит отказ прокси для пользователя — одной строкой. */
+function impactOf(p: ProxyState, i: number, exit: number | null, allMode: boolean, pins: Pins | null, proxies: ProxyState[]): string {
+  // Резерв: сейчас ничего не ломает, но подстраховки у своего прокси нет.
+  if (p.backupOf !== undefined) {
+    const owner = proxies[p.backupOf];
+    return owner ? `Резерв для ${owner.host}: если тот упадёт, этот не подхватит` : "Резервный прокси";
+  }
+  const users = pinnedTo(pins, i);
+  // Подменён живым резервом — всё работает, но с другого IP.
+  if (p.coveredBy !== undefined) {
+    const sub = proxies[p.coveredBy];
+    return `Подменяет резерв ${sub?.host ?? ""}${users.length ? ` — ${users.slice(0, 4).join(", ")} работают через него` : ""}`;
+  }
+  const parts: string[] = [];
+  if (exit === i) {
+    parts.push(allMode ? "Через него идёт весь трафик — сейчас он стоит" : "Через него сейчас выход в интернет");
+  } else if (i === 0 && !allMode) {
+    const alt = exit !== null ? proxies[exit] : undefined;
+    parts.push(alt ? `Основной: «Авто» сейчас идёт через ${alt.host}` : "Основной, а запасных живых нет");
+  }
+  if (users.length) parts.push(`${p.state === "down" ? "Не работают" : "Сбоят"}: ${users.slice(0, 4).join(", ")}${users.length > 4 ? "…" : ""}`);
+  if (!parts.length) parts.push("Сейчас через него ничего не идёт");
+  return parts.join(" · ");
 }
 
 /** "N сек/мин/ч назад" для списка ошибок (t — секунды-от-старта моста). */
@@ -100,10 +151,9 @@ export function Overview({ onOpenProxies }: Props) {
     task,
     exeLegacy,
     versions,
-    quality,
+    proxies,
     orb,
     history,
-    poolPing,
     refresh,
     refreshPoolPing,
   } = useStatus();
@@ -118,10 +168,31 @@ export function Overview({ onOpenProxies }: Props) {
 
   const loading = status === null;
   const running = status?.running ?? false;
-  // Прокси, у которых за последнюю минуту часть подключений не прошла.
-  const shaky = quality.filter((q) => q.state !== "ok");
-  const shakyFails = shaky.reduce((a, q) => a + q.recentFail, 0);
-  const shakyTotal = shaky.reduce((a, q) => a + q.recentOk + q.recentFail, 0);
+  // Прокси с проблемами: каждый — отдельной строкой с последствиями.
+  const issues = proxies.map((p, i) => ({ p, i })).filter(({ p }) => p.state === "down" || p.state === "unstable");
+  const issueKey = issues.map(({ i, p }) => `${i}:${p.state}`).join(",");
+  // Подпись под заголовком: что с прокси — одной фразой.
+  const lostCount = issues.filter(({ p }) => p.backupOf === undefined && p.coveredBy === undefined).length;
+  const issuesNote = !issues.length
+    ? ""
+    : lostCount > 1
+      ? ` · ${lostCount} прокси с проблемами`
+      : lostCount === 1
+        ? ` · прокси ${issues.find(({ p }) => p.backupOf === undefined && p.coveredBy === undefined)!.p.state === "down" ? "не работает" : "сбоит"}`
+        : issues.some(({ p }) => p.coveredBy !== undefined)
+          ? " · работает резервный прокси"
+          : " · резервный прокси не отвечает";
+  // Кто за каким прокси закреплён — нужно только при проблемах.
+  const [pins, setPins] = useState<Pins | null>(null);
+  useEffect(() => {
+    if (!issueKey) return;
+    void Promise.all([
+      proxyAssignmentsGet().catch(() => ({})),
+      sitesGet().catch(() => [] as SiteEntry[]),
+      appsList().catch(() => [] as AppProfileStatus[]),
+      proxyLabelsGet().catch(() => ({})),
+    ]).then(([assign, sites, apps, labels]) => setPins({ assign, sites, apps, labels }));
+  }, [issueKey]);
   const bridgeOutdated = running && (versions?.outdated ?? false);
 
   const oldBridge =
@@ -197,22 +268,32 @@ export function Overview({ onOpenProxies }: Props) {
     }
   };
 
-  // Прокси, через который сейчас выходим: основной из пула. IP — ровно
-  // одно место на экране; после «Проверить» — реальный выходной IP.
-  const primaryHost = poolPing[0]
-    ? poolPing[0].host
-    : health?.upstreams[0]
-      ? chipLabel(health.upstreams[0].url).split(":")[0]
-      : null;
-  const primaryState = quality[0]?.state ?? (health?.upstreams[0]?.healthy === false ? "down" : "ok");
+  // Через какой прокси реально идёт трафик моста. «Весь трафик» — строго
+  // через один (закреплённый за Claude, иначе основной), без запасных.
+  // Умный режим («Авто») — первый работающий по порядку пула (мост так и
+  // переключается). IP — ровно одно место на экране; после «Проверить» —
+  // реальный выходной IP.
+  const allMode = health?.mode === "all";
+  // Сам прокси пула (по индексу моста) или резерв, который его подменяет.
+  const viaCover = (i: number) => proxies[i]?.coveredBy ?? i;
+  const poolIdx = proxies.map((p, i) => (p.backupOf === undefined ? i : -1)).filter((i) => i >= 0);
+  const exitIndex: number | null = !poolIdx.length
+    ? null
+    : allMode && typeof health?.strict_upstream_index === "number"
+      ? viaCover(health.strict_upstream_index)
+      : allMode
+        ? viaCover(0)
+        : viaCover(poolIdx.find((i) => isUsable(proxies[i].state)) ?? 0);
+  const exitProxy = exitIndex !== null ? proxies[exitIndex] : undefined;
   const exitIp =
-    report?.exit?.ip ?? (testResult?.ok && testResult.external_ip ? testResult.external_ip : primaryHost);
+    report?.exit?.ip ?? (testResult?.ok && testResult.external_ip ? testResult.external_ip : exitProxy?.host ?? null);
   // «мс» — всегда TCP-пинг прокси, как в «Прокси». Время запроса из
   // «Проверить» (TLS до сайта через прокси + ответ сервиса, секунды) сюда
   // не годится: рядом с IP его читали как пинг. Выход не совпал ни с одним
   // прокси пула (у провайдера выходной IP другой) — пинг не показываем.
-  const exitMs = poolPing.find((p) => p.host === exitIp)?.ms ?? undefined;
-  const spare = Math.max(0, (health?.upstreams.length ?? poolPing.length) - 1);
+  const exitMs = proxies.find((p) => p.host === exitIp)?.ms ?? undefined;
+  const exitState = testResult && !testResult.ok ? "down" : (exitProxy?.state ?? "unknown");
+  const spare = allMode ? 0 : poolIdx.filter((i) => i !== exitIndex && isUsable(proxies[i].state)).length;
 
   return (
     <motion.div
@@ -230,7 +311,7 @@ export function Overview({ onOpenProxies }: Props) {
           </h1>
           <p className="tnum text-[12px] text-vb-silver-faint">
             {running
-              ? `работает ${formatUptime(health?.uptime_sec ?? status?.uptime_sec)}`
+              ? `работает ${formatUptime(health?.uptime_sec ?? status?.uptime_sec)}${issuesNote}`
               : loading
                 ? " "
                 : "Трафик не проксируется"}
@@ -296,18 +377,18 @@ export function Overview({ onOpenProxies }: Props) {
               <span
                 className={cn(
                   "h-2 w-2 shrink-0 rounded-full",
-                  testResult && !testResult.ok
+                  exitState === "down"
                     ? "bg-vb-loss"
-                    : primaryState === "ok"
-                      ? "bg-vb-emerald"
-                      : primaryState === "unstable"
-                        ? "bg-vb-warn"
-                        : "bg-vb-loss",
+                    : exitState === "unstable" || exitState === "slow"
+                      ? "bg-vb-warn"
+                      : exitState === "unknown"
+                        ? "bg-vb-silver-faint"
+                        : "bg-vb-emerald",
                 )}
               />
               <span className="min-w-0">
                 <span className="block text-[11px] text-vb-silver-faint">
-                  Выход через мост{spare > 0 && ` · +${spare} запасн.`}
+                  Выход через мост{allMode ? " · весь трафик" : spare > 0 ? ` · +${spare} запасн.` : ""}
                 </span>
                 <span className="flex items-baseline gap-2">
                   <span className="truncate font-mono text-[14px] text-vb-fg">
@@ -341,19 +422,49 @@ export function Overview({ onOpenProxies }: Props) {
               </motion.div>
             )}
           </AnimatePresence>
-          {!report && (testResult?.error || shaky.length > 0) && (
-            <p
-              className={cn(
-                "border-t border-vb-border/70 px-4 py-2.5 text-[12px] leading-snug",
-                testResult?.error ? "text-vb-loss" : "text-vb-warn",
-              )}
-            >
-              {testResult?.error
-                ? testResult.error
-                : shaky.some((q) => q.state === "down")
-                  ? "Прокси не отвечает — мост ждёт его, IP не меняется"
-                  : `Нестабилен: ${shakyFails} из ${shakyTotal} подключений за минуту не прошли`}
+          {!report && testResult?.error && (
+            <p className="border-t border-vb-border/70 px-4 py-2.5 text-[12px] leading-snug text-vb-loss">
+              {testResult.error}
             </p>
+          )}
+          {/* Прокси с проблемами — каждый отдельно: что с ним и кого задевает */}
+          {issues.length > 0 && (
+            <ul className="divide-y divide-vb-border/50 border-t border-vb-border/70">
+              {issues.map(({ p, i }) => {
+                const name = pins?.labels[p.url];
+                return (
+                  <li key={p.url || i} className="flex items-start gap-2.5 px-4 py-2.5">
+                    <AlertCircle
+                      className={cn(
+                        "mt-0.5 h-3.5 w-3.5 shrink-0",
+                        p.state === "down" && p.coveredBy === undefined && p.backupOf === undefined
+                          ? "text-vb-loss"
+                          : "text-vb-warn",
+                      )}
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-[12px] text-vb-fg">
+                        {name ? `${name} · ` : ""}
+                        {p.backupOf !== undefined && "резерв "}
+                        <span className="font-mono">{p.host}</span>{" "}
+                        {p.state === "down" ? "не работает" : "нестабилен"}
+                      </span>
+                      {p.reason && <span className="block text-[11px] leading-snug text-vb-silver-faint">{p.reason}</span>}
+                      <span className="block text-[11px] leading-snug text-vb-silver">
+                        {impactOf(p, i, exitIndex, allMode, pins, proxies)}
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={onOpenProxies}
+                      className="shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-vb-silver-dim transition-colors hover:bg-vb-surface-2 hover:text-vb-silver"
+                    >
+                      Прокси →
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
           )}
         </motion.section>
       )}

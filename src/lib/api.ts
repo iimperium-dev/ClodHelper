@@ -396,6 +396,16 @@ export async function proxyLabelsGet(): Promise<Record<string, string>> {
   return invoke<Record<string, string>>("proxy_labels_get");
 }
 
+/** Резервы прокси пула: URL прокси → его резервы по порядку. */
+export async function proxyBackupsGet(): Promise<Record<string, string[]>> {
+  return invoke<Record<string, string[]>>("proxy_backups_get");
+}
+
+/** Задать резервы прокси (пустой список — убрать). Перезапускает мост. */
+export async function proxyBackupsSet(parent: string, backups: string[]): Promise<Record<string, string[]>> {
+  return invoke<Record<string, string[]>>("proxy_backups_set", { parent, backups });
+}
+
 /** Задать/убрать имя прокси (пустое = убрать). */
 export async function proxyLabelSet(
   url: string,

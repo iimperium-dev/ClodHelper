@@ -357,6 +357,8 @@ struct RulesFile {
     /// простоя: AI-сервисы (особенно Anthropic) флагают аккаунты за скачки
     /// IP. Failover работает только для доменов без назначения («Авто»).
     assignments: Option<std::collections::HashMap<String, usize>>,
+    /// Резервы прокси: индекс прокси → индексы резервов по порядку.
+    fallbacks: Option<std::collections::HashMap<String, Vec<usize>>>,
 }
 
 struct Upstream {
@@ -379,6 +381,13 @@ struct Upstream {
     /// Отлёжка после фейла коннекта: до этого момента upstream пропускается
     /// (passive failover). None — здоров.
     bad_until: Mutex<Option<Instant>>,
+    /// Резервы этого прокси (индексы в пуле) по порядку — их задаёт
+    /// пользователь явно. Закреплённое за прокси (сервис, сайт, приложение)
+    /// уходит на резерв, пока прокси не работает, и возвращается, когда он
+    /// оживёт. Пусто — строгое закрепление, как раньше: IP не меняется.
+    backups: Vec<usize>,
+    /// Сам резерв чьего-то прокси: в «Авто» идёт после всех обычных.
+    is_backup: bool,
 }
 
 impl Upstream {
@@ -402,6 +411,13 @@ impl Upstream {
         let old = self.ewma_ms.load(Ordering::Relaxed);
         let new = if old == 0 { ms } else { (old * 7 + ms * 3) / 10 };
         self.ewma_ms.store(new.max(1), Ordering::Relaxed);
+    }
+    /// Продлить отлёжку без счёта отказа (фоновая проверка — не трафик
+    /// пользователя, в статистику ok/fail её не пишем).
+    fn extend_cooling(&self) {
+        if let Ok(mut g) = self.bad_until.lock() {
+            *g = Some(Instant::now() + UPSTREAM_COOLDOWN);
+        }
     }
     fn mark_fail(&self) {
         self.fail.fetch_add(1, Ordering::Relaxed);
@@ -623,7 +639,87 @@ fn parse_upstream(raw: &str) -> Result<Upstream, String> {
         fail: AtomicU64::new(0),
         streak: AtomicU64::new(0),
         bad_until: Mutex::new(None),
+        backups: Vec::new(),
+        is_backup: false,
     })
+}
+
+/// Резервы из rules-файла: `"fallbacks": {"0": [2, 3]}` — у прокси №0
+/// резервы №2 и №3. Отсутствие файла/поля — резервов нет. Битый файл сюда
+/// не доходит: load_rules уже отказался запускаться.
+fn load_fallbacks(path: Option<&str>) -> Vec<(usize, Vec<usize>)> {
+    let Some(text) = path.and_then(|p| std::fs::read_to_string(p).ok()) else {
+        return Vec::new();
+    };
+    let Ok(r) = serde_json::from_str::<RulesFile>(text.trim_start_matches('\u{feff}')) else {
+        return Vec::new();
+    };
+    let mut v: Vec<(usize, Vec<usize>)> = r
+        .fallbacks
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(k, list)| Some((k.trim().parse().ok()?, list)))
+        .collect();
+    v.sort_by_key(|(k, _)| *k);
+    v
+}
+
+/// Привязать резервы к прокси пула. Чужие индексы, ссылки на себя и дубли
+/// отбрасываются; резерв не может иметь своих резервов (цепочка — один
+/// уровень: так предсказуемо, куда уйдёт трафик).
+fn apply_fallbacks(ups: &mut [Upstream], fallbacks: &[(usize, Vec<usize>)]) {
+    let n = ups.len();
+    let backup_set: std::collections::HashSet<usize> = fallbacks
+        .iter()
+        .flat_map(|(p, l)| l.iter().copied().filter(move |i| i != p))
+        .filter(|&i| i < n)
+        .collect();
+    for (parent, list) in fallbacks {
+        if *parent >= n || backup_set.contains(parent) {
+            continue;
+        }
+        let mut chain: Vec<usize> = Vec::new();
+        for &i in list {
+            if i < n && i != *parent && !chain.contains(&i) {
+                chain.push(i);
+            }
+        }
+        ups[*parent].backups = chain;
+    }
+    for i in backup_set {
+        ups[i].is_backup = true;
+    }
+}
+
+/// Запрос фоновой перепроверки упавшего прокси: CONNECT к стабильному хосту.
+const PROBE_HEAD: &[u8] = b"CONNECT cp.cloudflare.com:443 HTTP/1.1\r\nHost: cp.cloudflare.com:443\r\n\r\n";
+/// Как часто перепроверять упавшие прокси.
+const PROBE_INTERVAL: Duration = Duration::from_secs(15);
+
+/// Фоновая перепроверка упавших прокси. Без неё возврат на ожившего ждал
+/// бы живого клиента — и тот платил бы таймаутом за каждую проверку.
+/// Пока прокси мёртв, его отлёжка продлевается (трафик идёт через резерв
+/// или другой прокси, никто не ждёт); ожил — отлёжка снимается, и
+/// закреплённое за ним сразу возвращается на свой IP.
+async fn probe_loop(state: Arc<State>) {
+    loop {
+        tokio::time::sleep(PROBE_INTERVAL).await;
+        for u in state.upstreams.iter() {
+            if u.streak.load(Ordering::Relaxed) == 0 {
+                continue;
+            }
+            let alive = match attempt_upstream(u, PROBE_HEAD, true).await {
+                Ok(conn) => matches!(conn.reply.as_deref().map(status_code), None | Some(Some(200..=299))),
+                Err(_) => false,
+            };
+            if alive {
+                u.mark_ok();
+                state.log(&format!("прокси {} снова отвечает", u.masked));
+            } else {
+                u.extend_cooling();
+            }
+        }
+    }
 }
 
 fn load_rules(path: Option<&str>) -> (Mode, Vec<String>, Vec<String>, Vec<(String, usize)>) {
@@ -1405,6 +1501,10 @@ async fn connect_upstream(
 ) -> Option<(UpstreamConn, usize)> {
     let n = state.upstreams.len();
     let (order, is_pin): (Vec<usize>, bool) = match pinned {
+        // Закреплённый с резервами — цепочка: сам, затем резервы по порядку.
+        Some(p) if p < n && !state.upstreams[p].backups.is_empty() => {
+            return connect_chain(state, p, head, is_connect).await;
+        }
         Some(p) if p < n => (vec![p], true),
         Some(_) => return None, // битый индекс — сюда не должен дойти (Pin::Broken отсекается раньше)
         None => {
@@ -1414,7 +1514,8 @@ async fn connect_upstream(
             idx.sort_by_key(|&i| {
                 let u = &state.upstreams[i];
                 let ms = u.ewma_ms.load(Ordering::Relaxed);
-                (u.streak.load(Ordering::Relaxed).min(UNHEALTHY_STREAK), if ms == 0 { u64::MAX / 2 } else { ms }, i)
+                // Резервы — после всех обычных прокси: они для своих «хозяев».
+                (u.is_backup, u.streak.load(Ordering::Relaxed).min(UNHEALTHY_STREAK), if ms == 0 { u64::MAX / 2 } else { ms }, i)
             });
             (idx, false)
         }
@@ -1444,6 +1545,37 @@ async fn connect_upstream(
     None
 }
 
+/// Закреплённый прокси с резервами: сам, затем резервы по порядку.
+/// Остывающих (недавно упавших) пропускаем — соединение сразу идёт через
+/// живой резерв, без таймаута на мёртвом; фоновая проверка вернёт трафик,
+/// когда прокси оживёт. Остыли все — пробуем всех по порядку. Повтор (тот
+/// же IP) — только у самого прокси: случайное зависание одного коннекта не
+/// должно уводить сервис на другой IP.
+async fn connect_chain(
+    state: &State,
+    p: usize,
+    head: &[u8],
+    is_connect: bool,
+) -> Option<(UpstreamConn, usize)> {
+    let chain: Vec<usize> = std::iter::once(p).chain(state.upstreams[p].backups.iter().copied()).collect();
+    let mut skipped: Vec<usize> = Vec::new();
+    for &i in &chain {
+        if state.upstreams[i].cooling() {
+            skipped.push(i);
+            continue;
+        }
+        if let Some(c) = try_upstream(state, i, false, i == p, head, is_connect).await {
+            return Some((c, i));
+        }
+    }
+    for &i in &skipped {
+        if let Some(c) = try_upstream(state, i, false, false, head, is_connect).await {
+            return Some((c, i));
+        }
+    }
+    None
+}
+
 // ─── /healthz ────────────────────────────────────────────────────
 
 fn healthz_json(state: &State) -> String {
@@ -1461,6 +1593,7 @@ fn healthz_json(state: &State) -> String {
                 "fail": u.fail.load(Ordering::Relaxed),
                 "fail_streak": u.streak.load(Ordering::Relaxed),
                 "latency_ms": u.ewma_ms.load(Ordering::Relaxed),
+                "backups": u.backups,
             })
         })
         .collect();
@@ -2234,6 +2367,7 @@ async fn main() {
     }
 
     let (mode, proxy_domains, direct_domains, assignments) = load_rules(args.rules.as_deref());
+    apply_fallbacks(&mut upstreams, &load_fallbacks(args.rules.as_deref()));
     let sites = Arc::new(Sites::default());
     // Битый файл сайтов при старте — не повод не стартовать (см. watch_sites).
     let sites_err = match args.sites.as_deref().map(load_sites) {
@@ -2332,6 +2466,8 @@ async fn main() {
             state.mode.as_str(),
         ));
     }
+
+    tokio::spawn(probe_loop(state.clone()));
 
     // Семафор — как в python-мосте: лишние соединения не валят процесс.
     // Свой пул у каждого входа: браузерный трафик на общем входе не должен
@@ -3001,6 +3137,61 @@ mod tests {
         (addr, accepted)
     }
 
+    #[tokio::test]
+    async fn pinned_proxy_with_backup_fails_over_and_skips_the_dead_one_next_time() {
+        // №0 молчит (мёртв у провайдера), №1 — его резерв, отвечает.
+        let (dead, dead_accepted) = scripted_proxy(vec![None; 8]).await;
+        let (alive, alive_accepted) = scripted_proxy(vec![
+            Some(b"HTTP/1.1 200 Connection Established\r\n\r\none"),
+            Some(b"HTTP/1.1 200 Connection Established\r\n\r\ntwo"),
+        ])
+        .await;
+        let mut ups = vec![
+            parse_upstream(&format!("http://{dead}")).unwrap(),
+            parse_upstream(&format!("http://{alive}")).unwrap(),
+        ];
+        apply_fallbacks(&mut ups, &[(0, vec![1])]);
+        assert!(ups[1].is_backup && ups[0].backups == vec![1]);
+        let state = Arc::new(test_state(RoutingPolicy::Fixed(0), ups));
+        let req = "CONNECT claude.ai:443 HTTP/1.1\r\n\r\n";
+        let first = String::from_utf8_lossy(&single_request(state.clone(), req.into()).await).to_string();
+        assert!(first.starts_with("HTTP/1.1 200") && first.ends_with("one"), "{first}");
+        assert_eq!(dead_accepted.load(Ordering::Relaxed), 2, "свой прокси — с повтором (тот же IP)");
+        // Мёртвый остывает — следующее соединение сразу через резерв, без таймаута.
+        let second = String::from_utf8_lossy(&single_request(state.clone(), req.into()).await).to_string();
+        assert!(second.ends_with("two"), "{second}");
+        assert_eq!(dead_accepted.load(Ordering::Relaxed), 2, "остывающий мёртвый не трогаем");
+        assert_eq!(alive_accepted.load(Ordering::Relaxed), 2);
+    }
+
+    #[tokio::test]
+    async fn pinned_proxy_without_backup_stays_strict() {
+        let (dead, _) = scripted_proxy(vec![None; 4]).await;
+        let (alive, alive_accepted) =
+            scripted_proxy(vec![Some(b"HTTP/1.1 200 Connection Established\r\n\r\n")]).await;
+        let ups = vec![
+            parse_upstream(&format!("http://{dead}")).unwrap(),
+            parse_upstream(&format!("http://{alive}")).unwrap(),
+        ];
+        let state = Arc::new(test_state(RoutingPolicy::Fixed(0), ups));
+        let resp = single_request(state, "CONNECT claude.ai:443 HTTP/1.1\r\n\r\n".into()).await;
+        assert!(resp.starts_with(b"HTTP/1.1 502"), "без резервов IP не меняется");
+        assert_eq!(alive_accepted.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn fallbacks_are_parsed_and_sanitized() {
+        let path = std::env::temp_dir().join(format!("clod-fallbacks-{}.json", std::process::id()));
+        std::fs::write(&path, r#"{"fallbacks":{"0":[2,2,0,9],"2":[1],"1":[3]}}"#).unwrap();
+        let fb = load_fallbacks(path.to_str());
+        std::fs::remove_file(&path).unwrap();
+        let mut ups: Vec<Upstream> = (1..=4).map(|p| parse_upstream(&format!("http://127.0.0.1:{p}")).unwrap()).collect();
+        apply_fallbacks(&mut ups, &fb);
+        assert_eq!(ups[0].backups, vec![2], "дубли, ссылка на себя и чужой индекс отброшены");
+        assert!(ups[2].backups.is_empty(), "резерв не может иметь своих резервов");
+        assert!(ups[1].backups.is_empty(), "№1 сам резерв (у №2) — своих резервов нет");
+        assert!(ups[1].is_backup && ups[2].is_backup && ups[3].is_backup && !ups[0].is_backup);
+    }
     #[tokio::test]
     async fn silent_upstream_is_retried_on_the_same_proxy() {
         let (addr, accepted) = scripted_proxy(vec![

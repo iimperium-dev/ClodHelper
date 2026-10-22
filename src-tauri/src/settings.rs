@@ -76,6 +76,11 @@ pub struct Settings {
     /// Пользовательские имена (тэги) прокси: URL → имя («Немецкий», «Резерв»).
     #[serde(default)]
     pub proxy_labels: std::collections::HashMap<String, String>,
+    /// Резервы прокси: URL прокси пула → его резервы по порядку (до 5).
+    /// Ключ — URL, а не индекс: при перестановке пула резервы едут вместе
+    /// со своим прокси.
+    #[serde(default)]
+    pub proxy_backups: std::collections::HashMap<String, Vec<String>>,
     /// Версия, о которой уже показали уведомление «Доступно обновление»:
     /// фоновая проверка не повторяет его каждые несколько часов.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -142,6 +147,80 @@ pub fn effective_proxies(s: &Settings) -> Vec<String> {
     } else {
         s.proxy_url.clone().into_iter().collect()
     }
+}
+
+/// Сколько резервов можно привязать к одному прокси.
+pub const MAX_BACKUPS: usize = 5;
+
+/// Прокси для моста: пул (индексы 0..n — как в назначениях и закреплённых
+/// входах), затем резервы всех прокси по порядку пула. Резервы — в конце,
+/// чтобы индексы пула не сдвигались. Один и тот же URL — один раз.
+pub fn bridge_upstreams(s: &Settings) -> Vec<String> {
+    let mut list = effective_proxies(s);
+    let pool = list.clone();
+    for parent in &pool {
+        for b in s.proxy_backups.get(parent).into_iter().flatten() {
+            if !list.contains(b) {
+                list.push(b.clone());
+            }
+        }
+    }
+    list
+}
+
+/// Резервы для rules-файла моста: индекс прокси пула → индексы его
+/// резервов в списке bridge_upstreams.
+pub fn bridge_fallbacks(s: &Settings) -> std::collections::BTreeMap<String, Vec<usize>> {
+    let all = bridge_upstreams(s);
+    effective_proxies(s)
+        .iter()
+        .enumerate()
+        .filter_map(|(i, parent)| {
+            let idx: Vec<usize> = s
+                .proxy_backups
+                .get(parent)?
+                .iter()
+                .filter_map(|b| all.iter().position(|u| u == b))
+                .filter(|&j| j != i)
+                .collect();
+            (!idx.is_empty()).then(|| (i.to_string(), idx))
+        })
+        .collect()
+}
+
+/// Задать резервы прокси пула (пустой список — убрать все).
+pub fn set_proxy_backups(parent: String, backups: Vec<String>) -> Result<Settings, String> {
+    if backups.len() > MAX_BACKUPS {
+        return Err(format!("У прокси может быть до {MAX_BACKUPS} резервов"));
+    }
+    with_settings(|s| {
+        let pool = effective_proxies(s);
+        if !pool.contains(&parent) {
+            return Err("Этого прокси уже нет в списке".into());
+        }
+        let mut clean: Vec<String> = Vec::new();
+        for b in backups {
+            if b == parent || pool.contains(&b) {
+                return Err("Этот прокси уже есть в списке — резервом его сделать нельзя".into());
+            }
+            if !clean.contains(&b) {
+                clean.push(b);
+            }
+        }
+        if clean.is_empty() {
+            s.proxy_backups.remove(&parent);
+        } else {
+            s.proxy_backups.insert(parent, clean);
+        }
+        retain_labels(s);
+        Ok(())
+    })
+}
+
+/// Имена — только у прокси пула и их резервов.
+fn retain_labels(s: &mut Settings) {
+    let keep = bridge_upstreams(s);
+    s.proxy_labels.retain(|u, _| keep.contains(u));
 }
 
 fn settings_path() -> Result<PathBuf, String> {
@@ -231,9 +310,10 @@ pub fn set_proxy_url(url: String) -> Result<Settings, String> {
             new_pool[0] = url.clone();
         }
         remap_assignments(s, &old_pool, &new_pool);
-        s.proxy_labels.retain(|u, _| new_pool.contains(u));
+        s.proxy_backups.retain(|u, _| new_pool.contains(u));
         s.proxy_url = Some(url);
         s.proxies = new_pool;
+        retain_labels(s);
         Ok(())
     })
 }
@@ -245,13 +325,25 @@ pub fn set_proxies(urls: Vec<String>) -> Result<Settings, String> {
         return Err("Пул прокси: от 1 до 5 адресов".into());
     }
     with_settings(|s| {
-        let old_pool = effective_proxies(s);
-        remap_assignments(s, &old_pool, &urls);
-        s.proxy_labels.retain(|url, _| urls.contains(url));
-        s.proxy_url = Some(urls[0].clone());
-        s.proxies = urls;
+        replace_pool(s, urls);
         Ok(())
     })
+}
+
+/// Новый пул в настройках: назначения и сайты — по URL, резервы едут со
+/// своим прокси (ключ — URL); удалённый прокси уносит свои резервы, а
+/// прокси, ставший обычным, резервом больше не числится.
+fn replace_pool(s: &mut Settings, urls: Vec<String>) {
+    let old_pool = effective_proxies(s);
+    remap_assignments(s, &old_pool, &urls);
+    s.proxy_backups.retain(|u, _| urls.contains(u));
+    for list in s.proxy_backups.values_mut() {
+        list.retain(|b| !urls.contains(b));
+    }
+    s.proxy_backups.retain(|_, list| !list.is_empty());
+    s.proxy_url = urls.first().cloned();
+    s.proxies = urls;
+    retain_labels(s);
 }
 
 /// Задать/убрать имя (тэг) прокси. Пустое имя = убрать.
@@ -490,6 +582,33 @@ pub fn set_route_mode(mode: String) -> Result<Settings, String> {
 mod tests {
     use super::*;
     use crate::apps::LaunchKind;
+
+    #[test]
+    fn backups_go_after_the_pool_and_keep_pool_indexes() {
+        let mut s = Settings::default();
+        s.proxies = vec!["a".into(), "b".into()];
+        s.proxy_backups.insert("b".into(), vec!["b1".into(), "b2".into()]);
+        s.proxy_backups.insert("a".into(), vec!["b1".into()]);
+        // Пул на своих местах, резервы — после, общий резерв — один раз.
+        assert_eq!(bridge_upstreams(&s), vec!["a", "b", "b1", "b2"]);
+        let fb = bridge_fallbacks(&s);
+        assert_eq!(fb.get("0"), Some(&vec![2]));
+        assert_eq!(fb.get("1"), Some(&vec![2, 3]));
+    }
+
+    #[test]
+    fn removed_proxy_takes_its_backups_and_promoted_backup_stops_being_one() {
+        let mut s = Settings::default();
+        s.proxies = vec!["a".into(), "b".into()];
+        s.proxy_backups.insert("a".into(), vec!["x".into()]);
+        s.proxy_backups.insert("b".into(), vec!["y".into(), "a2".into()]);
+        s.proxy_labels.insert("y".into(), "Резерв B".into());
+        // «b» убрали, его резерв «a2» сделали обычным прокси.
+        replace_pool(&mut s, vec!["a".into(), "a2".into()]);
+        assert_eq!(bridge_upstreams(&s), vec!["a", "a2", "x"]);
+        assert!(!s.proxy_backups.contains_key("b"));
+        assert!(!s.proxy_labels.contains_key("y"), "имя ушедшего резерва убрано");
+    }
 
     #[test]
     fn whats_new_only_after_real_update() {
