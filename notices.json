@@ -1,3 +1,10 @@
 {
-  "notices": []
+  "notices": [
+    {
+      "id": "2026-10-22-test",
+      "date": "2026-10-22",
+      "title": "TEST",
+      "body": ""
+    }
+  ]
 }
