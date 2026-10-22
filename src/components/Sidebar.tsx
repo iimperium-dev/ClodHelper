@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { StatusOrb } from "./StatusOrb";
 import { BrandMark } from "./BrandMark";
-import { formatUptime, useStatus } from "../lib/status";
+import { formatUptime, poolOnly, useStatus, type ProxyState } from "../lib/status";
 import { cn } from "../lib/cn";
 import type { AppView } from "../lib/types";
 
@@ -78,8 +78,25 @@ interface Props {
   перетекает в иконку «раскрыть», по клику панель выезжает пружиной,
   подписи проявляются со сдвигом. Выбор запоминается.
 */
+/** Короткая подпись проблемы с прокси: какой именно и что с ним. */
+function proxyProblemLabel(proxies: ProxyState[]): string | null {
+  const pool = poolOnly(proxies);
+  const down = pool.filter((p) => p.state === "down");
+  // Упавший, но подменённый живым резервом — трафик идёт, это не «не отвечает».
+  const lost = down.filter((p) => p.coveredBy === undefined);
+  if (pool.length > 0 && lost.length === pool.length) {
+    return pool.length > 1 ? "Прокси не отвечают" : "Прокси не отвечает";
+  }
+  if (lost.length > 1) return `${lost.length} прокси не отвечают`;
+  if (lost.length === 1) return pool[0] === lost[0] ? "Основной прокси не отвечает" : "Запасной прокси не отвечает";
+  if (down.length > 0) return "Работает резервный прокси";
+  if (pool.some((p) => p.state === "unstable")) return "Прокси нестабилен";
+  if (proxies.some((p) => p.backupOf !== undefined && p.state === "down")) return "Резервный прокси не отвечает";
+  return null;
+}
+
 export function Sidebar({ view, onNavigate }: Props) {
-  const { status, health, healthErr, exeLegacy, orb, quality } = useStatus();
+  const { status, health, healthErr, exeLegacy, orb, proxies } = useStatus();
   const [expanded, setExpanded] = useState(readExpanded);
   const [logoHover, setLogoHover] = useState(false);
 
@@ -100,11 +117,7 @@ export function Sidebar({ view, onNavigate }: Props) {
     ? "Проверяю…"
     : !running
       ? "Мост остановлен"
-      : quality.some((q) => q.state === "down")
-        ? "Прокси не отвечает"
-        : orb === "warn"
-          ? "Прокси нестабилен"
-          : "Мост активен";
+      : proxyProblemLabel(proxies) ?? "Мост активен";
   const statusSub =
     !loading && running
       ? health

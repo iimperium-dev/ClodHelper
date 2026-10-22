@@ -187,6 +187,8 @@ pub fn run() {
             commands::proxies_get,
             commands::proxies_set,
             commands::proxy_assignments_get,
+            commands::proxy_backups_get,
+            commands::proxy_backups_set,
             commands::proxy_assignments_set,
             commands::sites_get,
             commands::sites_set,

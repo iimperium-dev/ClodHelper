@@ -27,7 +27,7 @@ import type { AppFolder } from "../lib/appLayout";
 import type { AppProfileStatus, BrowserPolicyStatus, LeakGuardStatus, ProxyCheckResult } from "../lib/types";
 import { cn } from "../lib/cn";
 import { isMac } from "../lib/platform";
-import { useStatus } from "../lib/status";
+import { useStatus, type ProxyState } from "../lib/status";
 
 type CodeMode = "off" | "ai" | "all";
 const CODE_MODES: { id: CodeMode; title: string; sub: string }[] = [
@@ -62,7 +62,7 @@ function ProxyChoice({
   badge,
   url,
   geo,
-  ms,
+  live,
   selected,
   busy,
   disabled,
@@ -74,15 +74,23 @@ function ProxyChoice({
   badge?: string;
   url?: string;
   geo?: ProxyCheckResult;
-  ms?: number | null;
+  live?: ProxyState;
   selected: boolean;
   busy: boolean;
   disabled: boolean;
   onPick: () => void;
   shown?: string;
 }) {
+  const ms = live?.ms;
+  const state = live?.state ?? "unknown";
   const dot =
-    ms === undefined ? "bg-vb-silver-faint" : ms === null ? "bg-vb-loss" : ms > 1500 ? "bg-vb-warn" : "bg-vb-emerald";
+    state === "down"
+      ? "bg-vb-loss"
+      : state === "unstable" || state === "slow"
+        ? "bg-vb-warn"
+        : state === "ok"
+          ? "bg-vb-emerald"
+          : "bg-vb-silver-faint";
   return (
     <div
       role="radio"
@@ -147,10 +155,11 @@ function ProxyChoice({
         <span
           className={cn(
             "tnum flex shrink-0 items-center gap-1.5 whitespace-nowrap font-mono text-[11px]",
-            ms === null ? "text-vb-loss" : ms !== undefined && ms > 1500 ? "text-vb-warn" : "text-vb-silver-dim",
+            state === "down" ? "text-vb-loss" : state === "unstable" || state === "slow" ? "text-vb-warn" : "text-vb-silver-dim",
           )}
+          title={live?.reason}
         >
-          {ms === undefined ? "" : ms === null ? "нет связи" : `${ms} мс`}
+          {state === "down" ? "не работает" : ms === undefined || ms === null ? "" : `${ms} мс`}
           <span className={cn("h-1.5 w-1.5 rounded-full", dot)} />
         </span>
       )}
@@ -201,7 +210,7 @@ export function AppSettingsModal({
   // Тело прокручено — под закреплённой шапкой появляется линия.
   const [scrolled, setScrolled] = useState(false);
   // Системные переменные прокси (Claude Code в терминале) — общее состояние.
-  const { env, setEnv, health, refresh, poolPing } = useStatus();
+  const { env, setEnv, health, refresh, proxies } = useStatus();
   // Гео прокси — общий с экраном «Прокси» кэш; недостающее проверяем фоном.
   const [geo, setGeo] = useState<Record<string, ProxyCheckResult>>(loadGeoCache);
   const envOn = !!env?.present && !!env.points_to_bridge;
@@ -328,7 +337,7 @@ export function AppSettingsModal({
     }
   };
 
-  const pingOf = (url: string) => poolPing.find((p) => p.url === url)?.ms;
+  const liveOf = (url: string) => proxies.find((p) => p.url === url);
   // Один IP на разных портах — показываем с портом, иначе строки неотличимы.
   const shownOf = (url: string) =>
     pool.filter((u) => hostOnly(u) === hostOnly(url)).length > 1 ? hostPort(url) : hostOnly(url);
@@ -424,7 +433,7 @@ export function AppSettingsModal({
                         url={o.url}
                         shown={o.url ? shownOf(o.url) : undefined}
                         geo={o.url ? geo[hostPort(o.url)] : undefined}
-                        ms={o.url ? pingOf(o.url) : undefined}
+                        live={o.url ? liveOf(o.url) : undefined}
                         selected={o.v === current}
                         busy={busy}
                         disabled={busy}

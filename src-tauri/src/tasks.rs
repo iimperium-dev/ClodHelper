@@ -208,7 +208,13 @@ pub fn write_rules_file_if_changed() -> Result<(PathBuf, bool), String> {
     let mut proxy_domains: Vec<&str> = SERVICE_GROUPS.iter().flat_map(|(_, d)| d.iter().copied()).collect();
     proxy_domains.sort_unstable();
     proxy_domains.dedup();
-    let json = serde_json::json!({ "mode": mode, "proxy_domains": proxy_domains, "assignments": assignments });
+    let fallbacks = crate::settings::bridge_fallbacks(&s);
+    let json = serde_json::json!({
+        "mode": mode,
+        "proxy_domains": proxy_domains,
+        "assignments": assignments,
+        "fallbacks": fallbacks,
+    });
     let path = shim::install_dir()
         .map(|d| d.join(RULES_FILE))
         .ok_or_else(|| "Не нашёл папку ClaudeDesktopProxy".to_string())?;
@@ -241,12 +247,20 @@ pub fn is_registered() -> bool {
 /// proxy_url — только fallback для пустого пула (легаси-установка).
 fn upstream_pool(proxy_url: &str) -> Vec<String> {
     let s = crate::settings::load();
-    let list = crate::settings::effective_proxies(&s);
+    // Пул, затем резервы (в конце — индексы пула не сдвигаются).
+    let list = crate::settings::bridge_upstreams(&s);
     if list.is_empty() {
         vec![proxy_url.to_string()]
     } else {
         list
     }
+}
+
+/// Сколько закреплённых входов (8892+N) нужно: по одному на прокси пула.
+/// Резервам своих входов не положено — они в списке моста после пула.
+fn pin_count(upstreams: &[String]) -> usize {
+    let parents = crate::settings::effective_proxies(&crate::settings::load()).len().max(1);
+    parents.min(upstreams.len())
 }
 
 /// Задача — по её ключу в кэше Планировщика (HKLM): сам ключ закрыт для
@@ -509,7 +523,7 @@ pub fn register(proxy_url: &str) -> Result<(), String> {
         parts.push(format!("\"{}\"", rules_path.to_string_lossy()));
         parts.push("--quiet".into());
         if bridge_supports_pin_listen(&exe) {
-            for i in 0..pool.len() {
+            for i in 0..pin_count(&pool) {
                 parts.push("--pin-listen".into());
                 parts.push(format!("127.0.0.1:{}={i}", PIN_PORT_BASE + i as u16));
             }
@@ -705,7 +719,7 @@ mod launchd {
 
     use super::{
         bridge_supports_pin_listen, bridge_supports_rules, bridge_supports_upstream_file, sites_args,
-        upstream_pool, write_rules_file, write_upstream_file, BridgeTaskStatus, PIN_PORT_BASE,
+        pin_count, upstream_pool, write_rules_file, write_upstream_file, BridgeTaskStatus, PIN_PORT_BASE,
     };
     use crate::macos;
     use crate::shim::{self, LISTEN_PORT};
@@ -750,7 +764,7 @@ mod launchd {
             format!("127.0.0.1:{LISTEN_PORT}"),
         ];
         let pool = upstream_pool(proxy_url);
-        let pool_len = pool.len();
+        let pins = pin_count(&pool);
         let modern = bridge_supports_upstream_file(&exe);
         if modern {
             // Пул — файлом 0600: argv процесса видит любой пользователь Mac
@@ -768,7 +782,7 @@ mod launchd {
         args.push(rules_path.to_string_lossy().to_string());
         args.push("--quiet".into());
         if bridge_supports_pin_listen(&exe) {
-            for i in 0..pool_len {
+            for i in 0..pins {
                 args.push("--pin-listen".into());
                 args.push(format!("127.0.0.1:{}={i}", PIN_PORT_BASE + i as u16));
             }
