@@ -6,6 +6,7 @@ import { Button } from "./Button";
 import { updateCheck } from "../lib/api";
 import { openUpdateDialog } from "../lib/updateBus";
 import type { UpdateInfo } from "../lib/types";
+import { cn } from "../lib/cn";
 
 const SESSION_KEY = "clod.update.checked";
 
@@ -17,17 +18,22 @@ function remember(r: UpdateInfo | null) {
   }
 }
 
-/** Одна проверка за сеанс приложения (GitHub API не дёргаем на каждый заход). */
-async function checkOnce(force: boolean): Promise<UpdateInfo | null> {
+/** Одна проверка за сеанс приложения (GitHub API не дёргаем на каждый заход).
+    Ошибку не кэшируем и не выдаём за «последнюю версию» — показываем её. */
+async function checkOnce(force: boolean): Promise<{ info: UpdateInfo | null; error: string | null }> {
   try {
     const cached = sessionStorage.getItem(SESSION_KEY);
-    if (!force && cached) return JSON.parse(cached) as UpdateInfo | null;
+    if (!force && cached) return { info: JSON.parse(cached) as UpdateInfo | null, error: null };
   } catch {
     /* нет sessionStorage — просто проверим */
   }
-  const r = await updateCheck().catch(() => null);
-  remember(r);
-  return r;
+  try {
+    const r = await updateCheck();
+    remember(r);
+    return { info: r, error: null };
+  } catch (e) {
+    return { info: null, error: String(e) };
+  }
 }
 
 /*
@@ -39,16 +45,19 @@ export function UpdateBanner({ compact }: { compact?: boolean }) {
   const [info, setInfo] = useState<UpdateInfo | null>(null);
   const [checked, setChecked] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     void checkOnce(false).then((r) => {
-      setInfo(r);
+      setInfo(r.info);
+      setError(r.error);
       setChecked(true);
     });
     // Фоновая проверка (раз в несколько часов) нашла новую версию.
     const un = listen<UpdateInfo>("update:available", (e) => {
       remember(e.payload);
       setInfo(e.payload);
+      setError(null);
       setChecked(true);
     });
     return () => void un.then((f) => f());
@@ -56,7 +65,10 @@ export function UpdateBanner({ compact }: { compact?: boolean }) {
 
   const check = async () => {
     setBusy(true);
-    setInfo(await checkOnce(true));
+    setError(null);
+    const r = await checkOnce(true);
+    setInfo(r.info);
+    setError(r.error);
     setChecked(true);
     setBusy(false);
   };
@@ -75,12 +87,16 @@ export function UpdateBanner({ compact }: { compact?: boolean }) {
             <div className="text-[13px] font-medium text-vb-fg">
               {info ? `Доступна версия ${info.version}` : "Обновления"}
             </div>
-            <div className="truncate text-[12px] text-vb-silver-faint">
+            <div className={cn("text-[12px]", error && !info ? "text-vb-warn" : "truncate text-vb-silver-faint")}>
               {info
                 ? "Посмотрите, что нового, — обновление в один клик"
-                : checked
-                  ? "У вас последняя версия"
-                  : "Проверяю…"}
+                : busy
+                  ? "Проверяю…"
+                  : error
+                    ? `${error.replace(/^Не удалось проверить обновления:\s*/, "Не удалось проверить: ")}`
+                    : checked
+                      ? "У вас последняя версия"
+                      : "Проверяю…"}
             </div>
           </div>
           {info ? (
@@ -91,7 +107,7 @@ export function UpdateBanner({ compact }: { compact?: boolean }) {
             !compact && (
               <Button variant="secondary" size="sm" onClick={check} disabled={busy}>
                 {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                Проверить
+                {error ? "Повторить" : "Проверить"}
               </Button>
             )
           )}

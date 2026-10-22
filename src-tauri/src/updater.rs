@@ -1,8 +1,13 @@
 //! Обновление Clod Helper в один клик (без подписи Apple и Microsoft).
 //!
-//! Проверка: последний релиз GitHub (iimperium-dev/ClodHelper). Если он
-//! новее — по кнопке скачиваем установщик своей ОС и сверяем SHA-256 с
-//! `SHA256SUMS.txt` того же релиза (CI публикует его рядом):
+//! Проверка — по манифесту `latest.json` последнего релиза GitHub
+//! (iimperium-dev/ClodHelper): ссылка `releases/latest/download/…` идёт
+//! через сайт и CDN, а не через API — без лимита «60 запросов в час на IP».
+//! Манифест подписан ключом разработчика (ed25519, `latest.json.sig`;
+//! подписывает scripts/publish-release.mjs на его машине — на GitHub
+//! закрытого ключа нет). Подпись не сошлась — обновление не ставим: так не
+//! пройдёт подмена файлов релиза (утёкший токен, взлом аккаунта, зеркало).
+//! В манифесте — SHA-256 установщиков; скачанный файл сверяется с ним:
 //!   - macOS: `*_universal.dmg` — новая версия встаёт на место текущей,
 //!     старая уходит в ~/Library/Application Support/ClodHelper-backup;
 //!   - Windows: `*_x64-setup.exe` (NSIS) — тихая установка поверх текущей
@@ -12,24 +17,33 @@ use serde::{Deserialize, Serialize};
 
 const REPO: &str = "iimperium-dev/ClodHelper";
 
-/// Установщик этой ОС среди файлов релиза.
+/// Открытые ключи подписи манифеста (ed25519, base64 сырых 32 байт).
+/// Несколько — на время смены ключа: новый добавить сюда заранее, выпустить
+/// версию, и только потом подписывать новым.
+const UPDATE_KEYS: &[&str] = &["dkN/Vz8GRDntm9Ra94VI+slYMi3kgsIv2rbZoB8hjow="];
+
+const MANIFEST: &str = "latest.json";
+
+/// Платформа этой сборки в манифесте.
 #[cfg(not(target_os = "windows"))]
-const INSTALLER_SUFFIX: &str = "_universal.dmg";
+const PLATFORM: &str = "darwin-universal";
 #[cfg(target_os = "windows")]
-const INSTALLER_SUFFIX: &str = "_x64-setup.exe";
+const PLATFORM: &str = "windows-x86_64";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateInfo {
     pub version: String,
+    #[serde(default)]
     pub notes: String,
     /// Установщик для этой ОС (.dmg или -setup.exe).
     pub url: String,
-    pub sums_url: String,
-    /// Пункты «Что нового» из описания релиза (секция `## Что нового`).
+    /// SHA-256 установщика из подписанного манифеста.
+    #[serde(default)]
+    pub sha256: String,
+    /// Пункты «Что нового» этой версии.
     #[serde(default)]
     pub highlights: Vec<String>,
 }
-
 /// Ход установки для UI: событие `update:progress`.
 #[derive(Debug, Clone, Serialize)]
 pub struct UpdateProgress {
@@ -40,22 +54,21 @@ pub struct UpdateProgress {
     pub total: u64,
 }
 
-#[derive(Deserialize)]
-struct Release {
-    tag_name: String,
+/// Манифест обновления (latest.json; собирает CI, подписывает разработчик).
+#[derive(Debug, Deserialize)]
+struct Manifest {
+    version: String,
+    tag: String,
     #[serde(default)]
-    body: Option<String>,
-    #[serde(default)]
-    draft: bool,
-    #[serde(default)]
-    prerelease: bool,
-    assets: Vec<Asset>,
+    highlights: Vec<String>,
+    platforms: std::collections::HashMap<String, ManifestFile>,
 }
 
-#[derive(Deserialize)]
-struct Asset {
-    name: String,
-    browser_download_url: String,
+#[derive(Debug, Deserialize)]
+struct ManifestFile {
+    /// Имя файла в релизе (как его назвал GitHub — пробелы стали точками).
+    file: String,
+    sha256: String,
 }
 
 /// "0.6.0" / "v0.6.1" → (0, 6, 1).
@@ -74,84 +87,71 @@ fn client() -> Result<reqwest::Client, String> {
 
 /// Есть ли версия новее текущей. None — уже последняя.
 pub async fn check() -> Result<Option<UpdateInfo>, String> {
-    let r: Release = client()?
-        .get(format!("https://api.github.com/repos/{REPO}/releases/latest"))
-        .send()
-        .await
-        .map_err(|e| format!("Не удалось проверить обновления: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("Не удалось проверить обновления: {e}"))?
-        .json()
-        .await
-        .map_err(|e| format!("Обновления: {e}"))?;
-    Ok(pick_update(r, env!("CARGO_PKG_VERSION"), INSTALLER_SUFFIX))
+    let m = fetch_manifest().await.map_err(|e| format!("Не удалось проверить обновления: {e}"))?;
+    Ok(update_from(m, env!("CARGO_PKG_VERSION"), PLATFORM))
 }
 
-/// Обновление из релиза: только опубликованный, новее `current` и с
-/// установщиком `suffix` и контрольными суммами рядом.
-fn pick_update(r: Release, current: &str, suffix: &str) -> Option<UpdateInfo> {
-    if r.draft || r.prerelease {
+/// Манифест последнего релиза — только с верной подписью.
+async fn fetch_manifest() -> Result<Manifest, String> {
+    let c = client()?;
+    let base = format!("https://github.com/{REPO}/releases/latest/download");
+    let get = |url: String| {
+        let c = c.clone();
+        async move {
+            let r = c.get(&url).send().await.map_err(|e| format!("нет связи с GitHub ({e})"))?;
+            if r.status() == reqwest::StatusCode::NOT_FOUND {
+                return Err("в последнем релизе нет подписанного манифеста".to_string());
+            }
+            let r = r.error_for_status().map_err(|e| format!("GitHub: {e}"))?;
+            r.bytes().await.map_err(|e| format!("GitHub: {e}"))
+        }
+    };
+    let body = get(format!("{base}/{MANIFEST}")).await?;
+    let sig = get(format!("{base}/{MANIFEST}.sig")).await?;
+    verify_manifest(&body, &sig, UPDATE_KEYS)?;
+    serde_json::from_slice(&body).map_err(|e| format!("манифест не читается: {e}"))
+}
+
+/// Подпись манифеста (base64 64 байт ed25519) — одним из наших ключей.
+fn verify_manifest(body: &[u8], sig: &[u8], keys: &[&str]) -> Result<(), String> {
+    use base64::Engine;
+    use ed25519_dalek::{Signature, VerifyingKey};
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let bad = || "Подпись обновления не сошлась — не ставлю (файлы релиза могли подменить)".to_string();
+    let sig = b64.decode(String::from_utf8_lossy(sig).trim()).map_err(|_| bad())?;
+    let sig = Signature::from_slice(&sig).map_err(|_| bad())?;
+    let ok = keys.iter().any(|k| {
+        let Ok(raw) = b64.decode(k) else { return false };
+        let Ok(raw): Result<[u8; 32], _> = raw.try_into() else { return false };
+        VerifyingKey::from_bytes(&raw).is_ok_and(|vk| vk.verify_strict(body, &sig).is_ok())
+    });
+    if ok { Ok(()) } else { Err(bad()) }
+}
+
+/// Обновление из проверенного манифеста: новее `current`, со своим
+/// установщиком. Ссылка — на файл того же релиза.
+fn update_from(m: Manifest, current: &str, platform: &str) -> Option<UpdateInfo> {
+    if parse_ver(&m.version)? <= parse_ver(current)? {
         return None;
     }
-    if parse_ver(&r.tag_name)? <= parse_ver(current)? {
+    // Тег и версия подписаны вместе — должны совпадать.
+    if m.tag.trim_start_matches('v') != m.version {
         return None;
     }
-    let find = |pred: &dyn Fn(&str) -> bool| r.assets.iter().find(|a| pred(&a.name)).map(|a| a.browser_download_url.clone());
-    // Без контрольной суммы не ставим — нечем проверить целостность.
-    let url = find(&|n| n.ends_with(suffix))?;
-    let sums_url = find(&|n| n == "SHA256SUMS.txt")?;
-    let body = r.body.unwrap_or_default();
+    let f = m.platforms.get(platform)?;
+    let sha = f.sha256.to_lowercase();
+    let safe_name = !f.file.is_empty() && !f.file.contains(['/', '\\']) && !f.file.contains("..");
+    if !safe_name || sha.len() != 64 || !sha.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
     Some(UpdateInfo {
-        version: r.tag_name.trim_start_matches('v').to_string(),
-        highlights: highlights(&body),
-        notes: body.chars().take(600).collect(),
-        url,
-        sums_url,
+        url: format!("https://github.com/{REPO}/releases/download/{}/{}", m.tag, f.file),
+        version: m.version,
+        notes: String::new(),
+        sha256: sha,
+        highlights: m.highlights.into_iter().take(12).collect(),
     })
 }
-
-/// Пункты списка из секции «Что нового» описания релиза (её пишет CI из
-/// src/whats-new.json). Остальное описание — инструкция по установке, для
-/// окна обновления оно бесполезно.
-fn highlights(body: &str) -> Vec<String> {
-    let mut inside = false;
-    let mut out = Vec::new();
-    for line in body.lines() {
-        let t = line.trim();
-        if t.starts_with('#') {
-            inside = t.trim_start_matches('#').trim().to_lowercase().starts_with("что нового");
-            continue;
-        }
-        if !inside {
-            continue;
-        }
-        let Some(item) = ["- ", "* ", "• "].iter().find_map(|m| t.strip_prefix(m)) else { continue };
-        let item = item.replace("**", "").replace('`', "");
-        if !item.trim().is_empty() {
-            out.push(item.trim().to_string());
-        }
-        if out.len() == 12 {
-            break;
-        }
-    }
-    out
-}
-
-/// Сумма файла из SHA256SUMS: строки «<hex>  <имя>» (sha256sum; «*» перед
-/// именем — бинарный режим). Имя — весь остаток строки: в нём бывают
-/// пробелы. GitHub заменяет пробелы в именах файлов релиза точками («Clod
-/// Helper_0.7.0_x64-setup.exe» → «Clod.Helper_…»), а суммы считаются до
-/// загрузки — поэтому имена сравниваются без этой разницы.
-pub fn expected_sum(sums: &str, file: &str) -> Option<String> {
-    let norm = |s: &str| s.trim().replace(' ', ".");
-    sums.lines().find_map(|l| {
-        let (sum, name) = l.trim().split_once(char::is_whitespace)?;
-        let name = name.trim_start().trim_start_matches('*');
-        (sum.len() == 64 && sum.chars().all(|c| c.is_ascii_hexdigit()) && norm(name) == norm(file))
-            .then(|| sum.to_lowercase())
-    })
-}
-
 /// Скачать установщик и проверить его SHA-256. Возвращает имя файла и байты.
 /// Качаем кусками и сообщаем ход в `progress`: без этого окно минутами
 /// крутило спиннер, и обновление выглядело зависшим.
@@ -160,20 +160,17 @@ async fn download_verified(
     progress: &(dyn Fn(UpdateProgress) + Send + Sync),
 ) -> Result<(String, Vec<u8>), String> {
     use sha2::{Digest, Sha256};
+    // Адресу и сумме из окна не доверяем: заново берём подписанный манифест
+    // и ставим ровно то, что в нём (и ту же версию, что видел пользователь).
+    let trusted = check()
+        .await?
+        .filter(|t| t.version == info.version)
+        .ok_or("Обновление на сервере изменилось — проверьте ещё раз")?;
     let c = client()?;
-    let sums = c
-        .get(&info.sums_url)
-        .send()
-        .await
-        .and_then(|r| r.error_for_status())
-        .map_err(|e| format!("Контрольные суммы: {e}"))?
-        .text()
-        .await
-        .map_err(|e| format!("Контрольные суммы: {e}"))?;
-    let file = urlencoding_decode(info.url.rsplit('/').next().unwrap_or_default());
-    let want = expected_sum(&sums, &file).ok_or("В релизе нет контрольной суммы установщика")?;
+    let file = urlencoding_decode(trusted.url.rsplit('/').next().unwrap_or_default());
+    let want = trusted.sha256.clone();
     let mut resp = c
-        .get(&info.url)
+        .get(&trusted.url)
         .timeout(std::time::Duration::from_secs(300))
         .send()
         .await
@@ -336,66 +333,73 @@ fn urlencoding_decode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine;
+    use ed25519_dalek::{Signer, SigningKey};
 
-    #[test]
-    fn versions_and_sums() {
-        assert!(parse_ver("v0.7.0") > parse_ver("0.6.0"));
-        assert!(parse_ver("0.6.10") > parse_ver("0.6.9"));
-        let sums = "aa11  Clod.Helper_0.6.0_x64-setup.exe\n\
-                    0123456789abcdef0123456789abcdef0123456789abcdef0123456789ABCDEF  Clod.Helper_0.6.0_universal.dmg\n";
-        assert_eq!(
-            expected_sum(sums, "Clod.Helper_0.6.0_universal.dmg").as_deref(),
-            Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
-        );
-        assert_eq!(expected_sum(sums, "Clod.Helper_0.6.0_x64-setup.exe"), None, "короткая сумма — не сумма");
-        assert_eq!(urlencoding_decode("Clod%20Helper_0.6.0.dmg"), "Clod Helper_0.6.0.dmg");
+    fn keypair(seed: u8) -> (SigningKey, String) {
+        let sk = SigningKey::from_bytes(&[seed; 32]);
+        let pk = base64::engine::general_purpose::STANDARD.encode(sk.verifying_key().to_bytes());
+        (sk, pk)
     }
 
-    /// Суммы CI считает до загрузки: в SHA256SUMS имя с пробелом, а в релизе
-    /// GitHub — с точкой (и так же в адресе скачивания).
-    #[test]
-    fn sums_match_names_renamed_by_github() {
-        let exe = "a".repeat(64);
-        let dmg = "b".repeat(64);
-        let sums = format!(
-            "{exe}  Clod Helper_0.7.0_x64-setup.exe\r\n{dmg} *Clod Helper_0.7.0_universal.dmg\r\n"
-        );
-        assert_eq!(expected_sum(&sums, "Clod.Helper_0.7.0_x64-setup.exe"), Some(exe.clone()));
-        assert_eq!(expected_sum(&sums, "Clod.Helper_0.7.0_universal.dmg"), Some(dmg));
-        assert_eq!(expected_sum(&sums, "Clod Helper_0.7.0_x64-setup.exe"), Some(exe));
-        assert_eq!(expected_sum(&sums, "Clod.Helper_0.7.0_x64-setup.exe.sig"), None);
-        assert_eq!(expected_sum(&format!("{}  x.exe", "g".repeat(64)), "x.exe"), None, "не hex");
+    fn signed(sk: &SigningKey, body: &[u8]) -> Vec<u8> {
+        base64::engine::general_purpose::STANDARD.encode(sk.sign(body).to_bytes()).into_bytes()
     }
 
-    fn release(tag: &str, assets: &[&str]) -> Release {
-        Release {
-            tag_name: tag.into(),
-            body: Some("notes".into()),
-            draft: false,
-            prerelease: false,
-            assets: assets
-                .iter()
-                .map(|n| Asset { name: n.to_string(), browser_download_url: format!("https://x/{n}") })
-                .collect(),
+    #[test]
+    fn manifest_signature_is_required_and_checked() {
+        let (sk, pk) = keypair(7);
+        let (other, other_pk) = keypair(9);
+        let body = br#"{"version":"0.9.0"}"#;
+        assert!(verify_manifest(body, &signed(&sk, body), &[&pk]).is_ok());
+        // Ключ на смену: годится любой из списка.
+        assert!(verify_manifest(body, &signed(&sk, body), &[&other_pk, &pk]).is_ok());
+        // Чужой ключ, изменённый манифест, мусор вместо подписи — отказ.
+        assert!(verify_manifest(body, &signed(&other, body), &[&pk]).is_err());
+        assert!(verify_manifest(br#"{"version":"9.9.9"}"#, &signed(&sk, body), &[&pk]).is_err());
+        assert!(verify_manifest(body, b"not base64!", &[&pk]).is_err());
+        assert!(verify_manifest(body, b"", &[&pk]).is_err());
+    }
+
+    #[test]
+    fn real_update_key_is_valid() {
+        for k in UPDATE_KEYS {
+            let raw = base64::engine::general_purpose::STANDARD.decode(k).unwrap();
+            let raw: [u8; 32] = raw.try_into().unwrap();
+            assert!(ed25519_dalek::VerifyingKey::from_bytes(&raw).is_ok());
         }
     }
 
+    fn manifest(version: &str, tag: &str, file: &str, sha: &str) -> Manifest {
+        serde_json::from_value(serde_json::json!({
+            "version": version, "tag": tag, "highlights": ["Новое"],
+            "platforms": {
+                "windows-x86_64": { "file": file, "sha256": sha },
+                "darwin-universal": { "file": "Clod.Helper_0.9.0_universal.dmg", "sha256": "b".repeat(64) },
+            }
+        }))
+        .unwrap()
+    }
+
     #[test]
-    fn picks_installer_of_this_os_with_checksums() {
-        let full = ["Clod.Helper_0.8.0_universal.dmg", "Clod.Helper_0.8.0_x64-setup.exe", "SHA256SUMS.txt"];
-        let win = pick_update(release("v0.8.0", &full), "0.7.0", "_x64-setup.exe").unwrap();
-        assert_eq!(win.version, "0.8.0");
-        assert_eq!(win.url, "https://x/Clod.Helper_0.8.0_x64-setup.exe");
-        assert_eq!(win.sums_url, "https://x/SHA256SUMS.txt");
-        let mac = pick_update(release("v0.8.0", &full), "0.7.0", "_universal.dmg").unwrap();
+    fn update_comes_only_from_a_consistent_newer_manifest() {
+        let sha = "A".repeat(64);
+        let exe = "Clod.Helper_0.9.0_x64-setup.exe";
+        let win = update_from(manifest("0.9.0", "v0.9.0", exe, &sha), "0.8.8", "windows-x86_64").unwrap();
+        assert_eq!(win.url, format!("https://github.com/{REPO}/releases/download/v0.9.0/{exe}"));
+        assert_eq!(win.sha256, "a".repeat(64));
+        assert_eq!(win.highlights, ["Новое"]);
+        let mac = update_from(manifest("0.9.0", "v0.9.0", exe, &sha), "0.8.8", "darwin-universal").unwrap();
         assert!(mac.url.ends_with("_universal.dmg"));
-        // Не новее, без сумм, без установщика своей ОС — не предлагаем.
-        assert!(pick_update(release("v0.7.0", &full), "0.7.0", "_x64-setup.exe").is_none());
-        assert!(pick_update(release("v0.8.0", &full[..2]), "0.7.0", "_x64-setup.exe").is_none());
-        assert!(pick_update(release("v0.8.0", &[full[0], full[2]]), "0.7.0", "_x64-setup.exe").is_none());
-        let mut pre = release("v0.8.0", &full);
-        pre.prerelease = true;
-        assert!(pick_update(pre, "0.7.0", "_x64-setup.exe").is_none());
+        // Не новее; тег не тот; путь в имени файла; не сумма; нет своей ОС.
+        assert!(update_from(manifest("0.8.8", "v0.8.8", exe, &sha), "0.8.8", "windows-x86_64").is_none());
+        assert!(update_from(manifest("0.9.0", "v0.9.1", exe, &sha), "0.8.8", "windows-x86_64").is_none());
+        assert!(update_from(manifest("0.9.0", "v0.9.0", "../evil.exe", &sha), "0.8.8", "windows-x86_64").is_none());
+        assert!(update_from(manifest("0.9.0", "v0.9.0", exe, "abc"), "0.8.8", "windows-x86_64").is_none());
+        assert!(update_from(manifest("0.9.0", "v0.9.0", exe, &sha), "0.8.8", "linux").is_none());
+        assert!(parse_ver("v0.7.0") > parse_ver("0.6.0"));
+        assert!(parse_ver("0.6.10") > parse_ver("0.6.9"));
+        assert_eq!(urlencoding_decode("Clod%20Helper_0.6.0.dmg"), "Clod Helper_0.6.0.dmg");
     }
 
     #[test]
@@ -403,18 +407,7 @@ mod tests {
         assert_eq!(NSIS_UPDATE_ARGS, ["/S", "/UPDATE", "/R"]);
     }
 
-    #[test]
-    fn highlights_come_only_from_whats_new_section() {
-        let body = "## Что нового\n\n- Раздел **«Сайты»**\n* Звук и `уведомление`\n\nтекст\n\
-                    ## Установка\n\n1. Скачайте\n- не пункт новостей\n";
-        assert_eq!(highlights(body), ["Раздел «Сайты»", "Звук и уведомление"]);
-        assert!(highlights("## Установка\n- шаг").is_empty());
-        let mut r = release("v0.8.0", &["a_x64-setup.exe", "SHA256SUMS.txt"]);
-        r.body = Some(body.into());
-        assert_eq!(pick_update(r, "0.7.0", "_x64-setup.exe").unwrap().highlights.len(), 2);
-    }
-
-    /// Живая проверка: cargo test live_update_check -- --ignored --nocapture
+    /// Живая проверка: cargo test --lib live_update_check -- --ignored --nocapture
     #[tokio::test]
     #[ignore]
     async fn live_update_check() {
