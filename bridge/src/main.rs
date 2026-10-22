@@ -1417,6 +1417,14 @@ async fn serve_local(client: &mut TcpStream, path: &str, state: &State) {
         return;
     }
     let (code, body) = if path == "/hosts" && state.seen.is_some() {
+        // «Подсмотреть» начинает запись с чистого листа: тогда first_ms —
+        // когда хост появился ПОСЛЕ старта записи, и по нему видно, какие
+        // адреса пришли вместе со страницей сайта, а какие — фон.
+        if query.split('&').any(|kv| kv == "reset=1") {
+            if let Some(Ok(mut map)) = state.seen.as_ref().map(|m| m.lock()) {
+                map.clear();
+            }
+        }
         let since = query
             .split('&')
             .find_map(|kv| kv.strip_prefix("since="))
@@ -3240,6 +3248,17 @@ mod tests {
         let plain = test_state(RoutingPolicy::Rules, Vec::new());
         let out = single_request(Arc::new(plain), "GET /hosts HTTP/1.1\r\nHost: x\r\n\r\n".into()).await;
         assert!(String::from_utf8_lossy(&out).starts_with("HTTP/1.1 404"));
+    }
+
+    #[tokio::test]
+    async fn hosts_reset_starts_a_clean_recording() {
+        let mut st = test_state(RoutingPolicy::Sites, Vec::new());
+        st.seen = Some(Mutex::new(std::collections::HashMap::new()));
+        note_host(&st, "old.invalid", false, None);
+        let st = Arc::new(st);
+        let out = single_request(st.clone(), "GET /hosts?reset=1&since=0 HTTP/1.1\r\nHost: x\r\n\r\n".into()).await;
+        assert!(!String::from_utf8_lossy(&out).contains("old.invalid"));
+        assert!(st.seen.as_ref().unwrap().lock().unwrap().is_empty());
     }
 
     #[test]

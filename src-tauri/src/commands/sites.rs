@@ -202,15 +202,18 @@ pub struct SeenHosts {
 
 /// «Подсмотреть»: хосты со входа сайтов, к которым ходили с момента `since`
 /// (миллисекунды по часам моста — их отдаёт тот же ответ в now_ms).
+/// `reset` — начать запись с чистого листа (мост ≥1.10.2 забывает прежние
+/// хосты; старый параметр игнорирует).
 #[tauri::command]
-pub async fn sites_hosts(since: u64) -> Result<SeenHosts, String> {
+pub async fn sites_hosts(since: u64, reset: Option<bool>) -> Result<SeenHosts, String> {
+    let reset = if reset.unwrap_or(false) { "&reset=1" } else { "" };
     let client = reqwest::Client::builder()
         .no_proxy()
         .timeout(std::time::Duration::from_secs(3))
         .build()
         .map_err(|e| format!("client: {e}"))?;
     client
-        .get(format!("http://127.0.0.1:{}/hosts?since={since}", crate::tasks::SITES_PORT))
+        .get(format!("http://127.0.0.1:{}/hosts?since={since}{reset}", crate::tasks::SITES_PORT))
         .send()
         .await
         .map_err(|_| "Вход сайтов моста не отвечает — обновите мост или перезапустите его".to_string())?
