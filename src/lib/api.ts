@@ -329,8 +329,9 @@ export function sitesStatus(): Promise<SitesStatus> {
 }
 
 /** «Подсмотреть»: хосты со входа сайтов с момента since (часы моста, мс). */
-export function sitesHosts(since: number): Promise<SeenHosts> {
-  return invoke<SeenHosts>("sites_hosts", { since });
+/** reset — начать запись «Подсмотреть» с чистого листа. */
+export function sitesHosts(since: number, reset = false): Promise<SeenHosts> {
+  return invoke<SeenHosts>("sites_hosts", { since, reset });
 }
 
 /** Запись «Подсмотреть»: на её время весь трафик браузеров — через мост. */
