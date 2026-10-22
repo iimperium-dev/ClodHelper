@@ -24,8 +24,12 @@ const MARGIN: f64 = 8.0;
 /// мгновенно. Но и не поздно: рассылку, пропущенную с выключенным
 /// компьютером, человек должен увидеть вскоре после запуска.
 const FIRST_CHECK: Duration = Duration::from_secs(15);
-/// Обновления — редко: у GitHub API лимит 60 запросов в час на IP.
-const CHECK_EVERY: Duration = Duration::from_secs(6 * 3600);
+/// Обновления — каждые 30 минут: у GitHub API лимит 60 запросов в час на
+/// IP, 2 в час (+ по открытию окна, не чаще UPDATE_MIN_GAP) — с запасом.
+/// В 0.8.4 было 6 часов, и вышедшую версию ждали полдня.
+const CHECK_EVERY: Duration = Duration::from_secs(30 * 60);
+/// По открытию окна обновления проверяем не чаще раза в 10 минут.
+const UPDATE_MIN_GAP: Duration = Duration::from_secs(10 * 60);
 /// Рассылки — часто: файл с raw.githubusercontent.com лёгкий и без лимита,
 /// а человек ждёт, что сообщение дойдёт за минуты, а не за часы.
 const NOTICES_EVERY: Duration = Duration::from_secs(10 * 60);
@@ -53,21 +57,7 @@ pub fn spawn_watcher(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(FIRST_CHECK).await;
         loop {
-            match crate::updater::check().await {
-                Ok(found) => {
-                    remember(&found);
-                    if let Some(info) = found {
-                        let _ = handle.emit("update:available", &info);
-                        let notified = crate::settings::load().update_notified;
-                        if notified.as_deref() != Some(info.version.as_str()) {
-                            let _ = crate::settings::set_update_notified(&info.version);
-                            show_toast(&handle, &crate::notices::update_id(&info.version));
-                        }
-                    }
-                    let _ = handle.emit("notices:changed", crate::notices::unread());
-                }
-                Err(e) => tracing::info!("фоновая проверка обновлений: {e}"),
-            }
+            check_update(&handle, true).await;
             tokio::time::sleep(CHECK_EVERY).await;
         }
     });
@@ -81,6 +71,34 @@ pub fn spawn_watcher(app: AppHandle) {
             tokio::time::sleep(NOTICES_EVERY).await;
         }
     });
+}
+
+static UPDATE_AT: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
+/// Проверить обновление; новое — всплыть в углу (один раз на версию).
+/// `forced` — фоновый цикл; по фокусу окна — не чаще UPDATE_MIN_GAP.
+pub async fn check_update(app: &AppHandle, forced: bool) {
+    if let Ok(mut at) = UPDATE_AT.lock() {
+        if !forced && at.is_some_and(|t| t.elapsed() < UPDATE_MIN_GAP) {
+            return;
+        }
+        *at = Some(std::time::Instant::now());
+    }
+    match crate::updater::check().await {
+        Ok(found) => {
+            remember(&found);
+            if let Some(info) = found {
+                let _ = app.emit("update:available", &info);
+                let notified = crate::settings::load().update_notified;
+                if notified.as_deref() != Some(info.version.as_str()) {
+                    let _ = crate::settings::set_update_notified(&info.version);
+                    show_toast(app, &crate::notices::update_id(&info.version));
+                }
+            }
+            let _ = app.emit("notices:changed", crate::notices::unread());
+        }
+        Err(e) => tracing::info!("проверка обновлений: {e}"),
+    }
 }
 
 /// Последняя проверка рассылок — чтобы фокус окна не качал файл каждый раз.

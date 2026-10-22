@@ -186,6 +186,7 @@ pub fn update_toast_open(app: AppHandle, id: Option<String>) {
 #[tauri::command]
 pub async fn notices_refresh(app: AppHandle) {
     crate::update_notify::refresh_notices(&app, false).await;
+    crate::update_notify::check_update(&app, false).await;
 }
 
 /// Колокольчик: обновление и рассылки, с отметкой «прочитано».
