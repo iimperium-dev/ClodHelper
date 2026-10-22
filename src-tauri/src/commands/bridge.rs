@@ -139,9 +139,11 @@ pub async fn bridge_versions(app: AppHandle) -> Result<BridgeVersions, String> {
 
 /// Есть ли новая версия Clod Helper (последний релиз GitHub).
 #[tauri::command]
-pub async fn update_check() -> Result<Option<crate::updater::UpdateInfo>, String> {
+pub async fn update_check(app: AppHandle) -> Result<Option<crate::updater::UpdateInfo>, String> {
     let found = crate::updater::check().await?;
     crate::update_notify::remember(&found);
+    // Колокольчик и трей узнают об обновлении и от ручной проверки.
+    let _ = app.emit("notices:changed", crate::notices::unread());
     Ok(found)
 }
 
@@ -171,10 +173,38 @@ pub async fn update_install(app: AppHandle, info: crate::updater::UpdateInfo) ->
     Ok(())
 }
 
-/// Клик по уведомлению «Доступно обновление».
+/// Клик по уведомлению в углу экрана (обновление или рассылка).
 #[tauri::command]
-pub fn update_toast_open(app: AppHandle) {
-    crate::update_notify::open_from_toast(&app);
+pub fn update_toast_open(app: AppHandle, id: Option<String>) {
+    let id = id
+        .or_else(|| crate::update_notify::latest().map(|u| crate::notices::update_id(&u.version)))
+        .unwrap_or_default();
+    crate::update_notify::open_from_toast(&app, &id);
+}
+
+/// Колокольчик: обновление и рассылки, с отметкой «прочитано».
+#[tauri::command]
+pub async fn notices_list() -> Result<Vec<crate::notices::NoticeItem>, String> {
+    tokio::task::spawn_blocking(crate::notices::list)
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))
+}
+
+/// Отметить прочитанными (пустой список — все).
+#[tauri::command]
+pub async fn notices_mark_read(app: AppHandle, ids: Vec<String>) -> Result<Vec<crate::notices::NoticeItem>, String> {
+    tokio::task::spawn_blocking(move || -> Result<Vec<crate::notices::NoticeItem>, String> {
+        let ids = if ids.is_empty() {
+            crate::notices::list().into_iter().map(|i| i.id).collect()
+        } else {
+            ids
+        };
+        crate::settings::mark_notices_read(&ids)?;
+        let _ = app.emit("notices:changed", crate::notices::unread());
+        Ok(crate::notices::list())
+    })
+    .await
+    .map_err(|e| format!("Внутренняя ошибка: {e}"))?
 }
 
 #[tauri::command]

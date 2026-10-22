@@ -1,6 +1,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Minus, Square, X } from "lucide-react";
 import { isMac } from "../lib/platform";
+import { NotificationBell } from "./NotificationBell";
 
 /*
   Кастомный titlebar вместо нативной «брови» Windows (decorations: false).
@@ -14,15 +15,17 @@ import { isMac } from "../lib/platform";
   Overlay в tauri.macos.conf.json) — свои кнопки не рисуем, бар остаётся
   только drag-областью той же высоты.
 */
-export function Titlebar() {
+export function Titlebar({ bell = true }: { bell?: boolean }) {
   const win = getCurrentWindow();
 
   if (isMac) {
     return (
       <header
         data-tauri-drag-region
-        className="z-sticky h-9 shrink-0 select-none border-b border-vb-border/60 bg-vb-bg/90"
-      />
+        className="z-sticky flex h-9 shrink-0 select-none items-stretch justify-end border-b border-vb-border/60 bg-vb-bg/90"
+      >
+        {bell && <NotificationBell />}
+      </header>
     );
   }
 
@@ -36,6 +39,7 @@ export function Titlebar() {
       <div data-tauri-drag-region className="flex-1" />
 
       <div className="flex h-full items-stretch">
+        {bell && <NotificationBell />}
         <button
           type="button"
           aria-label="Свернуть"

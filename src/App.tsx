@@ -101,7 +101,7 @@ function App() {
     return (
       <StatusProvider>
         <div className="flex h-screen w-screen flex-col overflow-hidden">
-          <Titlebar />
+          <Titlebar bell={false} />
           <div className="min-h-0 flex-1">
             <WizardShell step={step}>
               {step === "proxy" && (

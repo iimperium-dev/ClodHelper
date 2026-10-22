@@ -5,6 +5,7 @@ mod claude_policy;
 mod claude_proxy;
 mod commands;
 mod diagnostics;
+mod notices;
 #[cfg(target_os = "windows")]
 mod elevate;
 mod env_proxy;
@@ -124,6 +125,8 @@ pub fn run() {
             commands::whats_new_take,
             commands::play_chime,
             commands::diagnostics_report,
+            commands::notices_list,
+            commands::notices_mark_read,
             commands::browser_policy_status,
             commands::browser_policy_set,
             commands::leak_guard_status,

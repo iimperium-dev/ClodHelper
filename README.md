@@ -131,6 +131,28 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/claude-proxy-polic
 cargo test --manifest-path src-tauri/Cargo.toml --lib detects_installed_desktop -- --ignored
 ```
 
+### Уведомления всем пользователям
+
+Рассылка — файл [`notices.json`](notices.json) в ветке `main`. Приложение (0.8.3+) скачивает его при запуске и раз в 6 часов: новое всплывает в углу экрана со звуком и ложится в колокольчик в заголовке окна. Кто был офлайн, увидит при следующем запуске. Добавьте запись и запушьте в `main` — релиз не нужен:
+
+```json
+{
+  "notices": [
+    {
+      "id": "2026-10-23-maintenance",
+      "date": "2026-10-23",
+      "title": "Прокси будет недоступен 10 минут",
+      "body": "Сегодня в 22:00 по Москве — плановые работы у провайдера.",
+      "link": "https://t.me/your_channel",
+      "platforms": ["windows"],
+      "min_version": "0.8.3"
+    }
+  ]
+}
+```
+
+`id` — уникальный и неизменный (по нему помнится «прочитано»). Необязательные поля: `link` (только `https://`), `platforms` (`windows` / `macos`), `min_version` / `max_version`. Удалённая из файла запись пропадает из колокольчика.
+
 ### Структура проекта
 
 ```
