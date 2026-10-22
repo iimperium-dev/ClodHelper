@@ -194,6 +194,14 @@ pub fn play_chime() {
     crate::sound::chime();
 }
 
+/// «Отчёт для поддержки»: состояние программы текстом, без паролей.
+#[tauri::command]
+pub async fn diagnostics_report() -> Result<String, String> {
+    tokio::task::spawn_blocking(crate::diagnostics::report)
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))
+}
+
 /// При запуске: встроенный мост новее установленного → обновить сразу.
 /// Без этого после обновления приложения мост оставался старым до ручного
 /// «Обновить мост» (а новые возможности — SOCKS, закреплённые входы —

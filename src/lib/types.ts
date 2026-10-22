@@ -104,6 +104,14 @@ export interface SitesStatus {
   browsers: SitesBrowser[];
 }
 
+/** Браузер, в котором расширения перехватывают прокси (сайты в нём не работают). */
+export interface BrowserProxyExtensions {
+  name: string;
+  /** Путь к exe/.app — для «Открыть расширение». */
+  path: string;
+  extensions: { id: string; name: string }[];
+}
+
 /** «Сайты во всех браузерах» — системная автонастройка прокси (mirror system_pac.rs). */
 export interface SystemPacStatus {
   /** Есть в этой ОС (пока только Windows). */

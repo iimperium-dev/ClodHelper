@@ -32,6 +32,7 @@ import type {
   SitesStatus,
   SeenHosts,
   SystemPacStatus,
+  BrowserProxyExtensions,
 } from "./types";
 
 export async function detectNode(): Promise<NodeInfo> {
@@ -337,6 +338,15 @@ export function sitesPeek(active: boolean): Promise<void> {
   return invoke<void>("sites_peek", { active });
 }
 
+/** Расширения-перехватчики прокси во всех установленных Chromium-браузерах. */
+export function sitesProxyExtensions(): Promise<BrowserProxyExtensions[]> {
+  return invoke<BrowserProxyExtensions[]>("sites_proxy_extensions");
+}
+
+export function sitesOpenExtension(path: string, extId: string): Promise<void> {
+  return invoke<void>("sites_open_extension", { path, extId });
+}
+
 export function systemPacStatus(): Promise<SystemPacStatus> {
   return invoke<SystemPacStatus>("system_pac_status");
 }
@@ -420,6 +430,11 @@ export function whatsNewTake(): Promise<string | null> {
 
 export function playChime(): Promise<void> {
   return invoke<void>("play_chime");
+}
+
+/** «Отчёт для поддержки» — текст без паролей. */
+export function diagnosticsReport(): Promise<string> {
+  return invoke<string>("diagnostics_report");
 }
 
 export function leakGuardStatus(): Promise<LeakGuardStatus> {

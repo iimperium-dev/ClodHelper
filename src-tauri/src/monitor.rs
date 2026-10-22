@@ -356,7 +356,7 @@ fn fetch_healthz() -> Option<(Health, serde_json::Value)> {
     Some((h, raw))
 }
 
-fn fetch_healthz_port(port: u16, connect: Duration) -> Option<serde_json::Value> {
+pub(crate) fn fetch_healthz_port(port: u16, connect: Duration) -> Option<serde_json::Value> {
     let addr: SocketAddr = format!("127.0.0.1:{port}").parse().ok()?;
     let mut s = TcpStream::connect_timeout(&addr, connect).ok()?;
     s.set_read_timeout(Some(Duration::from_secs(2))).ok()?;

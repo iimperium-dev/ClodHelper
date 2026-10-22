@@ -1199,9 +1199,21 @@ async fn try_upstream(
                 match conn.reply.as_deref().map(status_code) {
                     // 2xx (или plain HTTP) — прокси жив и пустил нас.
                     None | Some(Some(200..=299)) => u.mark_ok(),
-                    // Прокси ответил, но отказал (407 — логин/пароль, 5xx — не
-                    // достучался до сайта). Повторяем 5xx один раз; ответ
-                    // отдаём клиенту как есть — молча менять IP нельзя.
+                    // 5xx — прокси ЖИВ, но не достучался до сайта (видеосервер
+                    // YouTube, недоступный из страны прокси, и т.п.). Это беда
+                    // сайта, не прокси: здоровье прокси не трогаем — иначе
+                    // пара недоступных адресов красила весь дашборд в красный
+                    // при работающем Claude. Повторяем один раз; ответ отдаём
+                    // клиенту как есть — молча менять IP нельзя.
+                    Some(Some(code @ 500..=599)) => {
+                        if attempt + 1 < attempts {
+                            last_err = format!("ответил {code}");
+                            continue;
+                        }
+                        let host = parse_request(head).map(|r| r.host).unwrap_or_default();
+                        state.log(&format!("прокси {}: {host} недоступен ({code})", u.masked));
+                    }
+                    // Прокси отказал сам (407 — логин/пароль и т.п.) — это его беда.
                     Some(code) => {
                         u.mark_fail();
                         let code = code.map(|c| c.to_string()).unwrap_or_else(|| "?".into());
@@ -1210,9 +1222,6 @@ async fn try_upstream(
                                 "прокси {} отклонил логин/пароль (407) — проверьте данные прокси",
                                 u.masked
                             ));
-                        } else if code.starts_with('5') && attempt + 1 < attempts {
-                            last_err = format!("ответил {code}");
-                            continue;
                         } else {
                             state.log_err(&format!("прокси {} ответил {code} на CONNECT", u.masked));
                         }
@@ -2867,6 +2876,28 @@ mod tests {
         assert_eq!(accepted.load(Ordering::Relaxed), 1);
         assert_eq!(state.upstreams[0].fail.load(Ordering::Relaxed), 1);
         assert_eq!(state.via_direct.load(Ordering::Relaxed), 0);
+    }
+
+    /// Прокси ответил 502 — недоступен сайт, а не прокси: ответ клиенту как
+    /// есть, но прокси остаётся здоровым, сколько бы таких сайтов ни было
+    /// (видеосерверы YouTube красили дашборд в красный при живом Claude).
+    #[tokio::test]
+    async fn unreachable_site_does_not_make_proxy_unhealthy() {
+        let (addr, accepted) = scripted_proxy(vec![Some(b"HTTP/1.1 502 Bad Gateway\r\n\r\n"); 8]).await;
+        let state = Arc::new(test_state(
+            RoutingPolicy::UpstreamOnly,
+            vec![parse_upstream(&format!("http://{addr}")).unwrap()],
+        ));
+        let request = "CONNECT rr1---sn-x.googlevideo.invalid:443 HTTP/1.1\r\n\r\n";
+        for _ in 0..4 {
+            let response = single_request(state.clone(), request.into()).await;
+            assert!(response.starts_with(b"HTTP/1.1 502"));
+        }
+        assert_eq!(accepted.load(Ordering::Relaxed), 8, "повтор 5xx один раз на запрос");
+        let u = &state.upstreams[0];
+        assert!(u.healthy(), "сайт недоступен — прокси здоров");
+        assert_eq!(u.fail.load(Ordering::Relaxed), 0);
+        assert!(state.last_errors.lock().unwrap().is_empty(), "не «перебои» в дашборде");
     }
 
     #[tokio::test]
