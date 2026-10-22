@@ -126,6 +126,7 @@ pub fn run() {
             commands::play_chime,
             commands::diagnostics_report,
             commands::notices_list,
+            commands::notices_refresh,
             commands::notices_mark_read,
             commands::browser_policy_status,
             commands::browser_policy_set,

@@ -16,6 +16,7 @@ import { NumberTicker } from "../components/NumberTicker";
 import { listen } from "@tauri-apps/api/event";
 import {
   noticesList,
+  noticesRefresh,
   quitApp,
   shimRestart,
   shimStart,
@@ -94,7 +95,11 @@ export function TrayPopup() {
     const subs = [
       listen("notices:changed", reload),
       listen("update:available", reload),
-      getCurrentWindow().onFocusChanged(({ payload }) => payload && reload()),
+      getCurrentWindow().onFocusChanged(({ payload }) => {
+        if (!payload) return;
+        reload();
+        void noticesRefresh().catch(() => {});
+      }),
     ];
     return () => subs.forEach((s) => void s.then((f) => f()));
   }, []);

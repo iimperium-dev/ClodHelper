@@ -24,7 +24,13 @@ const MARGIN: f64 = 8.0;
 /// мгновенно. Но и не поздно: рассылку, пропущенную с выключенным
 /// компьютером, человек должен увидеть вскоре после запуска.
 const FIRST_CHECK: Duration = Duration::from_secs(15);
+/// Обновления — редко: у GitHub API лимит 60 запросов в час на IP.
 const CHECK_EVERY: Duration = Duration::from_secs(6 * 3600);
+/// Рассылки — часто: файл с raw.githubusercontent.com лёгкий и без лимита,
+/// а человек ждёт, что сообщение дойдёт за минуты, а не за часы.
+const NOTICES_EVERY: Duration = Duration::from_secs(10 * 60);
+/// Не чаще раза в минуту по фокусу окна (открыл-закрыл — не повод качать).
+const NOTICES_MIN_GAP: Duration = Duration::from_secs(60);
 
 /// Последнее найденное обновление — окно-уведомление и главное окно берут
 /// его отсюда, а не проверяют GitHub ещё раз.
@@ -42,43 +48,67 @@ pub fn remember(info: &Option<UpdateInfo>) {
 }
 
 pub fn spawn_watcher(app: AppHandle) {
+    // Обновления — раз в 6 часов.
+    let handle = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(FIRST_CHECK).await;
         loop {
-            // Всплывает одно уведомление за проверку (самое важное): обновление
-            // главнее рассылки; остальное ждёт в колокольчике.
-            let mut toast: Option<String> = None;
             match crate::updater::check().await {
                 Ok(found) => {
                     remember(&found);
                     if let Some(info) = found {
-                        let _ = app.emit("update:available", &info);
+                        let _ = handle.emit("update:available", &info);
                         let notified = crate::settings::load().update_notified;
                         if notified.as_deref() != Some(info.version.as_str()) {
-                            toast = Some(crate::notices::update_id(&info.version));
                             let _ = crate::settings::set_update_notified(&info.version);
+                            show_toast(&handle, &crate::notices::update_id(&info.version));
                         }
                     }
+                    let _ = handle.emit("notices:changed", crate::notices::unread());
                 }
                 Err(e) => tracing::info!("фоновая проверка обновлений: {e}"),
-            }
-            match crate::notices::fetch().await {
-                Ok(fresh) => {
-                    if let Some(n) = fresh.iter().find(|n| crate::notices::worth_toast(n)) {
-                        toast.get_or_insert_with(|| n.id.clone());
-                    }
-                    let ids: Vec<String> = fresh.iter().map(|n| n.id.clone()).collect();
-                    let _ = crate::settings::mark_notices_toasted(&ids);
-                }
-                Err(e) => tracing::info!("рассылки: {e}"),
-            }
-            let _ = app.emit("notices:changed", crate::notices::unread());
-            if let Some(id) = toast {
-                show_toast(&app, &id);
             }
             tokio::time::sleep(CHECK_EVERY).await;
         }
     });
+    // Рассылки — каждые 10 минут (и по открытию окна — refresh_notices).
+    tauri::async_runtime::spawn(async move {
+        // Чуть позже обновлений: если есть и то, и другое, первым всплывёт
+        // обновление, рассылка — следом, а не перекроет его.
+        tokio::time::sleep(FIRST_CHECK + Duration::from_secs(20)).await;
+        loop {
+            refresh_notices(&app, true).await;
+            tokio::time::sleep(NOTICES_EVERY).await;
+        }
+    });
+}
+
+/// Последняя проверка рассылок — чтобы фокус окна не качал файл каждый раз.
+static NOTICES_AT: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
+/// Скачать рассылки; новое свежее — всплыть в углу (если `toast`). По фокусу
+/// окна вызывается без всплытия: человек и так смотрит в программу —
+/// колокольчик загорится сам.
+pub async fn refresh_notices(app: &AppHandle, toast: bool) {
+    if let Ok(mut at) = NOTICES_AT.lock() {
+        if !toast && at.is_some_and(|t| t.elapsed() < NOTICES_MIN_GAP) {
+            return;
+        }
+        *at = Some(std::time::Instant::now());
+    }
+    match crate::notices::fetch().await {
+        Ok(fresh) => {
+            let ids: Vec<String> = fresh.iter().map(|n| n.id.clone()).collect();
+            let _ = crate::settings::mark_notices_toasted(&ids);
+            let _ = app.emit("notices:changed", crate::notices::unread());
+            if toast {
+                if let Some(n) = fresh.iter().find(|n| crate::notices::worth_toast(n)) {
+                    show_toast(app, &n.id);
+                }
+            }
+        }
+        Err(e) => tracing::info!("рассылки: {e}"),
+    }
 }
 
 /// Показать уведомление `id` (обновление «update-X» или рассылка): Windows —
