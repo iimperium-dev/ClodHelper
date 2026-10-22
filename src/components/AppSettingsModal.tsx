@@ -175,6 +175,16 @@ export function AppSettingsModal({
     }
   };
 
+  /** Сохранить прокси/режим трафика. Браузер с политикой «Всегда через мост»
+      переводим на новый вход моста сразу: политика главнее флагов запуска,
+      и без этого браузер остался бы на прежнем входе. */
+  const saveTraffic = async (proxy: number | null, full: boolean | null) => {
+    if (!app) return null;
+    const r = await appsSettingsSet(app.id, proxy, full);
+    if (policy?.configured) setPolicy(await browserPolicySet(app.id, true));
+    return r;
+  };
+
   const pickProxy = (v: number) => {
     if (!app || v === current) return;
     if (group) {
@@ -184,7 +194,7 @@ export function AppSettingsModal({
       setAssign(next);
       void run(() => proxyAssignmentsSet(next), "Сохранено — мост перезапущен");
     } else {
-      void run(() => appsSettingsSet(app.id, v < 0 ? null : v, app.full_proxy ?? null), "Сохранено");
+      void run(() => saveTraffic(v < 0 ? null : v, app.full_proxy ?? null), "Сохранено");
     }
   };
 
@@ -334,17 +344,18 @@ export function AppSettingsModal({
                     <span className="min-w-0">
                       <span className="block text-[13px] text-vb-fg">Весь трафик через прокси</span>
                       <span className="block text-[11px] text-vb-silver-faint">
-                        {current >= 0 ? "С выбранным прокси — всегда весь" : "Иначе через прокси только AI-сайты"}
+                        {current >= 0
+                          ? "С выбранным прокси — всегда весь"
+                          : policy
+                            ? "Иначе через прокси только AI и ваши сайты («Сайты»)"
+                            : "Иначе через прокси только AI-сайты"}
                       </span>
                     </span>
                     <Toggle
                       checked={current >= 0 || app.full_proxy}
                       disabled={busy || current >= 0}
                       onChange={() =>
-                        void run(
-                          () => appsSettingsSet(app.id, current < 0 ? null : current, !app.full_proxy),
-                          "Сохранено",
-                        )
+                        void run(() => saveTraffic(current < 0 ? null : current, !app.full_proxy), "Сохранено")
                       }
                       label="Весь трафик через прокси"
                     />

@@ -76,11 +76,46 @@ pub struct Settings {
     /// Пользовательские имена (тэги) прокси: URL → имя («Немецкий», «Резерв»).
     #[serde(default)]
     pub proxy_labels: std::collections::HashMap<String, String>,
+    /// Версия, о которой уже показали уведомление «Доступно обновление»:
+    /// фоновая проверка не повторяет его каждые несколько часов.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_notified: Option<String>,
+    /// Последняя запущенная версия приложения: запуск более новой = окно
+    /// «Что нового». None — сборки до этого поля (или первый запуск).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_version_seen: Option<String>,
+    /// «Сайты во всех браузерах»: системная автонастройка прокси (PAC моста).
+    #[serde(default)]
+    pub system_pac: bool,
+    /// Системные настройки прокси до включения — вернуть при выключении.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_pac_saved: Option<crate::system_pac::ProxyConf>,
     /// Чужие прокси-переменные (корпоративный прокси, свой VPN-тул), которые
     /// мы перезаписали при включении системного проксирования. «Выключить»
     /// возвращает их, а не стирает настройку пользователя насовсем.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub saved_proxy_env: Option<std::collections::HashMap<String, String>>,
+    /// Сайты, которые ходят через прокси (раздел «Сайты»): мост читает их из
+    /// bridge-sites.json на лету, без перезапуска.
+    #[serde(default)]
+    pub sites: Vec<SiteEntry>,
+}
+
+/// Сайт пользователя: имя, его домены (с поддоменами) и прокси.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct SiteEntry {
+    pub id: String,
+    pub name: String,
+    pub domains: Vec<String>,
+    /// Индекс прокси в пуле; None — «Авто» (основной + failover).
+    #[serde(default)]
+    pub proxy: Option<usize>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Полный пул прокси: proxies, а для легаси-установок — единственный proxy_url.
@@ -141,6 +176,27 @@ fn remap_assignments(s: &mut Settings, old_pool: &[String], new_pool: &[String])
             Some((svc, new_idx))
         })
         .collect();
+    // Прокси сайтов — так же по URL; исчезнувший → «Авто».
+    for site in &mut s.sites {
+        site.proxy = site
+            .proxy
+            .and_then(|idx| old_pool.get(idx))
+            .and_then(|url| new_pool.iter().position(|u| u == url));
+    }
+}
+
+pub fn set_sites(sites: Vec<SiteEntry>) -> Result<Settings, String> {
+    with_settings(|s| {
+        let pool_len = effective_proxies(s).len();
+        s.sites = sites
+            .into_iter()
+            .map(|mut site| {
+                site.proxy = site.proxy.filter(|i| *i < pool_len);
+                site
+            })
+            .collect();
+        Ok(())
+    })
 }
 
 pub fn set_proxy_url(url: String) -> Result<Settings, String> {
@@ -297,6 +353,54 @@ pub fn set_saved_proxy_env(
     })
 }
 
+pub fn set_system_pac(enabled: bool) -> Result<Settings, String> {
+    with_settings(|s| {
+        s.system_pac = enabled;
+        Ok(())
+    })
+}
+
+pub fn set_system_pac_saved(conf: Option<crate::system_pac::ProxyConf>) -> Result<Settings, String> {
+    with_settings(|s| {
+        s.system_pac_saved = conf;
+        Ok(())
+    })
+}
+
+pub fn set_update_notified(version: &str) -> Result<Settings, String> {
+    with_settings(|s| {
+        s.update_notified = Some(version.to_string());
+        Ok(())
+    })
+}
+
+/// Запомнить текущую версию как увиденную. Возвращает версию, о которой
+/// стоит показать «Что нового», — если приложение только что обновилось.
+/// Без записанной версии (обновление со сборки до этого поля) обновлением
+/// считается уже настроенная установка; первый запуск — нет.
+pub fn take_whats_new(current: &str) -> Result<Option<String>, String> {
+    let mut news = None;
+    with_settings(|s| {
+        let configured = s.proxy_url.is_some() || !s.proxies.is_empty();
+        if just_updated(s.last_version_seen.as_deref(), configured, current) {
+            news = Some(current.to_string());
+        }
+        s.last_version_seen = Some(current.to_string());
+        Ok(())
+    })?;
+    Ok(news)
+}
+
+fn just_updated(seen: Option<&str>, configured: bool, current: &str) -> bool {
+    match seen {
+        Some(seen) => matches!(
+            (crate::updater::parse_ver(seen), crate::updater::parse_ver(current)),
+            (Some(a), Some(b)) if b > a
+        ),
+        None => configured,
+    }
+}
+
 pub fn set_killswitch(enabled: bool) -> Result<Settings, String> {
     with_settings(|s| {
         s.killswitch_enabled = enabled;
@@ -315,6 +419,16 @@ pub fn set_route_mode(mode: String) -> Result<Settings, String> {
 mod tests {
     use super::*;
     use crate::apps::LaunchKind;
+
+    #[test]
+    fn whats_new_only_after_real_update() {
+        assert!(just_updated(Some("0.7.1"), true, "0.8.0"));
+        assert!(!just_updated(Some("0.8.0"), true, "0.8.0"), "повторный запуск");
+        assert!(!just_updated(Some("0.9.0"), true, "0.8.0"), "откат версии");
+        // Сборки до поля: обновлением считается только настроенная установка.
+        assert!(just_updated(None, true, "0.8.0"));
+        assert!(!just_updated(None, false, "0.8.0"), "первый запуск после установки");
+    }
 
     fn claude_preset(kind: LaunchKind, exe_path: Option<&str>, app_id: Option<&str>) -> AppProfile {
         AppProfile {
@@ -379,6 +493,17 @@ mod tests {
         assert!(!profiles[2].enabled);
         assert!(!merge_presets(&mut profiles, presets));
         assert_eq!(profiles.len(), 3);
+    }
+
+    #[test]
+    fn site_proxy_follows_url_when_pool_changes() {
+        let site = |proxy| SiteEntry { id: "s".into(), name: "s".into(), domains: vec!["x.com".into()], proxy, enabled: true };
+        let mut s = Settings { sites: vec![site(Some(1)), site(Some(2)), site(None)], ..Default::default() };
+        let old = vec!["a".to_string(), "b".into(), "c".into()];
+        let new = vec!["b".to_string(), "a".into()];
+        remap_assignments(&mut s, &old, &new);
+        let got: Vec<Option<usize>> = s.sites.iter().map(|x| x.proxy).collect();
+        assert_eq!(got, vec![Some(0), None, None], "тот же прокси по URL; удалённый — «Авто»");
     }
 
     #[test]

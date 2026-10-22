@@ -4,10 +4,11 @@ import App from "./App";
 import "./index.css";
 import { startUiWatchdog } from "./lib/uiWatchdog";
 
-// Трей-попап живёт в прозрачном окне: помечаем body, чтобы CSS убрал фон
-// (само окно с transparent:true, скругление и тень рисует контент).
-if (new URLSearchParams(window.location.search).get("view") === "tray") {
-  document.body.dataset.view = "tray";
+// Трей-попап и уведомление об обновлении живут в прозрачных окнах: помечаем
+// body, чтобы CSS убрал фон (скругление и тень рисует контент).
+const view = new URLSearchParams(window.location.search).get("view");
+if (view === "tray" || view === "toast" || view === "updating") {
+  document.body.dataset.view = view;
 }
 
 // Нативное контекстное меню WebView2 («Назад/Печать/Проверить») чужеродно для

@@ -25,6 +25,19 @@ pub struct UpdateInfo {
     /// Установщик для этой ОС (.dmg или -setup.exe).
     pub url: String,
     pub sums_url: String,
+    /// Пункты «Что нового» из описания релиза (секция `## Что нового`).
+    #[serde(default)]
+    pub highlights: Vec<String>,
+}
+
+/// Ход установки для UI: событие `update:progress`.
+#[derive(Debug, Clone, Serialize)]
+pub struct UpdateProgress {
+    /// download → verify → install → restart.
+    pub stage: &'static str,
+    pub received: u64,
+    /// Размер установщика; 0 — сервер не сообщил.
+    pub total: u64,
 }
 
 #[derive(Deserialize)]
@@ -87,12 +100,41 @@ fn pick_update(r: Release, current: &str, suffix: &str) -> Option<UpdateInfo> {
     // Без контрольной суммы не ставим — нечем проверить целостность.
     let url = find(&|n| n.ends_with(suffix))?;
     let sums_url = find(&|n| n == "SHA256SUMS.txt")?;
+    let body = r.body.unwrap_or_default();
     Some(UpdateInfo {
         version: r.tag_name.trim_start_matches('v').to_string(),
-        notes: r.body.unwrap_or_default().chars().take(600).collect(),
+        highlights: highlights(&body),
+        notes: body.chars().take(600).collect(),
         url,
         sums_url,
     })
+}
+
+/// Пункты списка из секции «Что нового» описания релиза (её пишет CI из
+/// src/whats-new.json). Остальное описание — инструкция по установке, для
+/// окна обновления оно бесполезно.
+fn highlights(body: &str) -> Vec<String> {
+    let mut inside = false;
+    let mut out = Vec::new();
+    for line in body.lines() {
+        let t = line.trim();
+        if t.starts_with('#') {
+            inside = t.trim_start_matches('#').trim().to_lowercase().starts_with("что нового");
+            continue;
+        }
+        if !inside {
+            continue;
+        }
+        let Some(item) = ["- ", "* ", "• "].iter().find_map(|m| t.strip_prefix(m)) else { continue };
+        let item = item.replace("**", "").replace('`', "");
+        if !item.trim().is_empty() {
+            out.push(item.trim().to_string());
+        }
+        if out.len() == 12 {
+            break;
+        }
+    }
+    out
 }
 
 /// Сумма файла из SHA256SUMS: строки «<hex>  <имя>» (sha256sum; «*» перед
@@ -111,7 +153,12 @@ pub fn expected_sum(sums: &str, file: &str) -> Option<String> {
 }
 
 /// Скачать установщик и проверить его SHA-256. Возвращает имя файла и байты.
-async fn download_verified(info: &UpdateInfo) -> Result<(String, Vec<u8>), String> {
+/// Качаем кусками и сообщаем ход в `progress`: без этого окно минутами
+/// крутило спиннер, и обновление выглядело зависшим.
+async fn download_verified(
+    info: &UpdateInfo,
+    progress: &(dyn Fn(UpdateProgress) + Send + Sync),
+) -> Result<(String, Vec<u8>), String> {
     use sha2::{Digest, Sha256};
     let c = client()?;
     let sums = c
@@ -125,20 +172,34 @@ async fn download_verified(info: &UpdateInfo) -> Result<(String, Vec<u8>), Strin
         .map_err(|e| format!("Контрольные суммы: {e}"))?;
     let file = urlencoding_decode(info.url.rsplit('/').next().unwrap_or_default());
     let want = expected_sum(&sums, &file).ok_or("В релизе нет контрольной суммы установщика")?;
-    let bytes = c
+    let mut resp = c
         .get(&info.url)
         .timeout(std::time::Duration::from_secs(300))
         .send()
         .await
         .and_then(|r| r.error_for_status())
-        .map_err(|e| format!("Загрузка: {e}"))?
-        .bytes()
-        .await
         .map_err(|e| format!("Загрузка: {e}"))?;
-    if format!("{:x}", Sha256::digest(&bytes)) != want {
+    let total = resp.content_length().unwrap_or(0);
+    let mut bytes = Vec::with_capacity(total as usize);
+    let mut hasher = Sha256::new();
+    progress(UpdateProgress { stage: "download", received: 0, total });
+    let mut last = std::time::Instant::now();
+    while let Some(chunk) = resp.chunk().await.map_err(|e| format!("Загрузка: {e}"))? {
+        hasher.update(&chunk);
+        bytes.extend_from_slice(&chunk);
+        // Не чаще ~12 раз в секунду: событие на каждый кусок в 16 КБ
+        // забивало бы IPC без пользы для глаза.
+        if last.elapsed() >= std::time::Duration::from_millis(80) {
+            last = std::time::Instant::now();
+            progress(UpdateProgress { stage: "download", received: bytes.len() as u64, total });
+        }
+    }
+    let got = bytes.len() as u64;
+    progress(UpdateProgress { stage: "verify", received: got, total: total.max(got) });
+    if format!("{:x}", hasher.finalize()) != want {
         return Err("Файл обновления повреждён (контрольная сумма не совпала) — не ставлю".into());
     }
-    Ok((file, bytes.to_vec()))
+    Ok((file, bytes))
 }
 
 /// Чистая папка для скачанного обновления.
@@ -155,7 +216,10 @@ fn work_dir() -> Result<std::path::PathBuf, String> {
 /// Скачать, проверить, поставить и перезапуститься (после вызова приложение
 /// должно завершиться — новую версию запустит фоновый скрипт).
 #[cfg(not(target_os = "windows"))]
-pub async fn install(info: &UpdateInfo) -> Result<(), String> {
+pub async fn install(
+    info: &UpdateInfo,
+    progress: &(dyn Fn(UpdateProgress) + Send + Sync),
+) -> Result<(), String> {
     use std::path::PathBuf;
 
     // Где стоит текущее приложение: …/Clod Helper.app/Contents/MacOS/clod-helper
@@ -166,7 +230,9 @@ pub async fn install(info: &UpdateInfo) -> Result<(), String> {
         .map(PathBuf::from)
         .ok_or("Обновление работает только для установленного приложения (.app)")?;
 
-    let (_, bytes) = download_verified(info).await?;
+    let (_, bytes) = download_verified(info, progress).await?;
+    let size = bytes.len() as u64;
+    progress(UpdateProgress { stage: "install", received: size, total: size });
     let work = work_dir()?;
     let dmg = work.join("update.dmg");
     std::fs::write(&dmg, &bytes).map_err(|e| e.to_string())?;
@@ -224,27 +290,38 @@ pub async fn install(info: &UpdateInfo) -> Result<(), String> {
     Ok(())
 }
 
-/// Ключи тихой установки NSIS-установщика Tauri (как у его штатного
-/// апдейтера): /S — без окон; /UPDATE — поверх текущей версии, без её
-/// удаления и без пересоздания ярлыков, которые пользователь мог убрать;
-/// /R — запустить новую версию после установки.
+/// Ключи NSIS-установщика Tauri (как у его штатного апдейтера): /S — без
+/// окон (белое окно /P выглядело чужеродно — вместо него наша заставка,
+/// update_splash.rs); /UPDATE — поверх текущей версии, без её удаления и
+/// без пересоздания ярлыков, которые пользователь мог убрать; /R —
+/// запустить новую версию после установки.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 const NSIS_UPDATE_ARGS: [&str; 3] = ["/S", "/UPDATE", "/R"];
 
-/// Windows: скачать и проверить установщик, запустить его тихо. Установка
+/// Windows: скачать и проверить установщик, запустить его. Установка
 /// в профиль пользователя (currentUser) — без UAC. Приложение сразу после
 /// этого выходит (update_install); установщик дождётся выхода — запущенную
 /// копию он и сам закрывает — и запустит новую версию. Мост работает из
 /// своей папки и обновится при первом старте новой версии.
 #[cfg(target_os = "windows")]
-pub async fn install(info: &UpdateInfo) -> Result<(), String> {
-    let (_, bytes) = download_verified(info).await?;
-    let setup = work_dir()?.join("clod-helper-setup.exe");
+pub async fn install(
+    info: &UpdateInfo,
+    progress: &(dyn Fn(UpdateProgress) + Send + Sync),
+) -> Result<(), String> {
+    let (_, bytes) = download_verified(info, progress).await?;
+    let size = bytes.len() as u64;
+    progress(UpdateProgress { stage: "install", received: size, total: size });
+    let work = work_dir()?;
+    let setup = work.join("clod-helper-setup.exe");
     std::fs::write(&setup, &bytes).map_err(|e| format!("Не удалось сохранить установщик: {e}"))?;
-    std::process::Command::new(&setup)
+    let child = std::process::Command::new(&setup)
         .args(NSIS_UPDATE_ARGS)
         .spawn()
         .map_err(|e| format!("Не удалось запустить установщик: {e}"))?;
+    // Заставка — украшение: не запустилась, обновление всё равно идёт.
+    if let Err(e) = crate::update_splash::spawn(&work, child.id(), &info.version) {
+        tracing::warn!("{e}");
+    }
     Ok(())
 }
 
@@ -324,6 +401,17 @@ mod tests {
     #[test]
     fn windows_update_is_silent_in_place_and_restarts() {
         assert_eq!(NSIS_UPDATE_ARGS, ["/S", "/UPDATE", "/R"]);
+    }
+
+    #[test]
+    fn highlights_come_only_from_whats_new_section() {
+        let body = "## Что нового\n\n- Раздел **«Сайты»**\n* Звук и `уведомление`\n\nтекст\n\
+                    ## Установка\n\n1. Скачайте\n- не пункт новостей\n";
+        assert_eq!(highlights(body), ["Раздел «Сайты»", "Звук и уведомление"]);
+        assert!(highlights("## Установка\n- шаг").is_empty());
+        let mut r = release("v0.8.0", &["a_x64-setup.exe", "SHA256SUMS.txt"]);
+        r.body = Some(body.into());
+        assert_eq!(pick_update(r, "0.7.0", "_x64-setup.exe").unwrap().highlights.len(), 2);
     }
 
     /// Живая проверка: cargo test live_update_check -- --ignored --nocapture

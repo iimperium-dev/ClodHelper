@@ -40,6 +40,77 @@ pub const TASK_NAME: &str = "ClodBridge";
 const RUNNER_VBS: &str = "clod-bridge-task.vbs";
 /// Правила маршрутизации моста (mode smart/all) — читает clod-bridge при старте.
 const RULES_FILE: &str = "bridge-rules.json";
+/// Сайты пользователя — мост перечитывает этот файл на лету (≥1.9).
+const SITES_FILE: &str = "bridge-sites.json";
+/// Вход сайтов моста ≥1.9: браузер в режиме «только сайты» — через прокси
+/// только AI и сайты пользователя, остальное напрямую. Порты моста: 8887
+/// сайты, 8889 общий, 8890 строгий (Claude), 8891 SOCKS, 8892+N закреплённые.
+pub const SITES_PORT: u16 = 8887;
+
+/// Записать bridge-sites.json из settings (только включённые сайты).
+/// Атомарно: мост может перечитать файл в любой момент.
+pub fn write_sites_file() -> Result<PathBuf, String> {
+    let s = crate::settings::load();
+    let pool_len = crate::settings::effective_proxies(&s).len();
+    let sites: Vec<serde_json::Value> = s
+        .sites
+        .iter()
+        .filter(|x| x.enabled && !x.domains.is_empty())
+        .map(|x| {
+            serde_json::json!({
+                "domains": x.domains,
+                "proxy": x.proxy.filter(|i| *i < pool_len),
+            })
+        })
+        .collect();
+    let text = serde_json::to_string_pretty(&serde_json::json!({ "sites": sites }))
+        .map_err(|e| format!("serialize sites: {e}"))?;
+    let path = shim::install_dir()
+        .map(|d| d.join(SITES_FILE))
+        .ok_or_else(|| "Не нашёл папку ClaudeDesktopProxy".to_string())?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create dir {}: {e}", parent.display()))?;
+    }
+    if std::fs::read_to_string(&path).is_ok_and(|old| old == text) {
+        return Ok(path);
+    }
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, text).map_err(|e| format!("write {}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("replace {}: {e}", path.display()))?;
+    Ok(path)
+}
+
+/// Мост ≥1.9 умеет сайты (`--sites`, `--sites-listen`).
+pub fn bridge_supports_sites(exe: &std::path::Path) -> bool {
+    exe_version(exe)
+        .and_then(|v| parse_version(&v))
+        .is_some_and(|v| v >= (1, 9, 0))
+}
+
+/// Вход сайтов реально слушается (лёгкий TCP-коннект). Версии exe мало:
+/// мост 1.9 мог быть поставлен поверх с задачей, зарегистрированной со
+/// старыми аргументами, — тогда браузер на 8887 остался бы без сети.
+pub fn sites_listener_up() -> bool {
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], SITES_PORT));
+    std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(400)).is_ok()
+}
+
+/// Мост работает, умеет сайты, но запущен без входа сайтов (устаревшие
+/// аргументы задачи) — нужна перерегистрация.
+pub fn sites_args_stale() -> bool {
+    let Some(exe) = shim::bridge_exe_path().filter(|p| p.exists()) else { return false };
+    let main = std::net::SocketAddr::from(([127, 0, 0, 1], crate::shim::LISTEN_PORT));
+    let bridge_up = std::net::TcpStream::connect_timeout(&main, std::time::Duration::from_millis(400)).is_ok();
+    bridge_up && bridge_supports_sites(&exe) && !sites_listener_up()
+}
+
+/// Аргументы сайтов для моста ≥1.9 (без кавычек — вызывающий оборачивает путь).
+fn sites_args(exe: &std::path::Path) -> Result<Option<(PathBuf, String)>, String> {
+    if !bridge_supports_sites(exe) {
+        return Ok(None);
+    }
+    Ok(Some((write_sites_file()?, format!("127.0.0.1:{SITES_PORT}"))))
+}
 
 /// Статус задачи автозапуска для UI.
 #[derive(Debug, Clone, Serialize)]
@@ -441,6 +512,12 @@ pub fn register(proxy_url: &str) -> Result<(), String> {
                 parts.push(format!("127.0.0.1:{}={i}", PIN_PORT_BASE + i as u16));
             }
         }
+        if let Some((file, listen)) = sites_args(&exe)? {
+            parts.push("--sites".into());
+            parts.push(format!("\"{}\"", file.to_string_lossy()));
+            parts.push("--sites-listen".into());
+            parts.push(listen);
+        }
         // Старый runner-vbs больше не нужен — подчищаем, чтобы не смущал AV.
         if vbs_path.exists() {
             let _ = std::fs::remove_file(&vbs_path);
@@ -625,7 +702,7 @@ mod launchd {
     use std::path::PathBuf;
 
     use super::{
-        bridge_supports_pin_listen, bridge_supports_rules, bridge_supports_upstream_file,
+        bridge_supports_pin_listen, bridge_supports_rules, bridge_supports_upstream_file, sites_args,
         upstream_pool, write_rules_file, write_upstream_file, BridgeTaskStatus, PIN_PORT_BASE,
     };
     use crate::macos;
@@ -693,6 +770,12 @@ mod launchd {
                 args.push("--pin-listen".into());
                 args.push(format!("127.0.0.1:{}={i}", PIN_PORT_BASE + i as u16));
             }
+        }
+        if let Some((file, listen)) = sites_args(&exe)? {
+            args.push("--sites".into());
+            args.push(file.to_string_lossy().to_string());
+            args.push("--sites-listen".into());
+            args.push(listen);
         }
 
         let plist = plist_path().ok_or_else(|| "Не нашёл домашнюю папку".to_string())?;

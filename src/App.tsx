@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Titlebar } from "./components/Titlebar";
 import { Sidebar, NAV_ORDER } from "./components/Sidebar";
 import { WizardShell } from "./components/WizardShell";
@@ -8,14 +8,23 @@ import { StepDone } from "./wizard/StepDone";
 import { Overview } from "./pages/Overview";
 import { Proxies } from "./pages/Proxies";
 import { Apps } from "./pages/Apps";
+import { Sites } from "./pages/Sites";
 import { Settings } from "./pages/Settings";
 import { TrayPopup } from "./pages/TrayPopup";
+import { UpdateToast } from "./pages/UpdateToast";
+import { UpdateSplash } from "./pages/UpdateSplash";
+import { UpdateDialog } from "./components/UpdateDialog";
+import { WhatsNewModal } from "./components/WhatsNewModal";
 import { StatusProvider } from "./lib/status";
-import { settingsGet, shimScriptPath, shimStatus } from "./lib/api";
+import { settingsGet, shimScriptPath, shimStatus, whatsNewTake } from "./lib/api";
 import type { AppView, WizardInstallResult, WizardStep } from "./lib/types";
 
 /** Окно трей-попапа рендерит тот же bundle с ?view=tray. */
 const IS_TRAY = new URLSearchParams(window.location.search).get("view") === "tray";
+/** Уведомление «Доступно обновление» в углу экрана — ?view=toast. */
+const IS_TOAST = new URLSearchParams(window.location.search).get("view") === "toast";
+/** Заставка на время установки обновления (отдельный процесс) — ?view=updating. */
+const IS_SPLASH = new URLSearchParams(window.location.search).get("view") === "updating";
 
 /*
   Переход между разделами — CSS-анимация появления (index.css, .view-enter):
@@ -32,9 +41,14 @@ function App() {
   const [view, setView] = useState<AppView | null>(IS_TRAY ? "overview" : null);
   const prevIndex = useRef(0);
   const [direction, setDirection] = useState(1);
+  // Версия для окна «Что нового» (приложение только что обновилось).
+  const [whatsNew, setWhatsNew] = useState<string | null>(null);
 
   useEffect(() => {
-    if (IS_TRAY) return;
+    if (IS_TRAY || IS_TOAST || IS_SPLASH) return;
+    // До выбора мастер/Обзор: первый запуск после установки ещё без прокси —
+    // это не обновление, «Что нового» не нужно.
+    void whatsNewTake().then(setWhatsNew).catch(() => {});
     void (async () => {
       try {
         // 3 признака что мост уже установлен (хватит любого):
@@ -54,6 +68,8 @@ function App() {
     })();
   }, []);
 
+  const closeWhatsNew = useCallback(() => setWhatsNew(null), []);
+
   const navigate = (next: AppView) => {
     const nextIdx = NAV_ORDER.indexOf(next);
     const prevIdx = prevIndex.current;
@@ -66,6 +82,9 @@ function App() {
   const [step, setStep] = useState<WizardStep>("proxy");
   const [wizProxyUrl, setWizProxyUrl] = useState<string | null>(null);
   const [wizResult, setWizResult] = useState<WizardInstallResult | null>(null);
+
+  if (IS_TOAST) return <UpdateToast />;
+  if (IS_SPLASH) return <UpdateSplash />;
 
   // ─── Трей-попап: отдельная вьюха в прозрачном окне ───────────
   if (IS_TRAY) {
@@ -133,6 +152,8 @@ function App() {
                   <Proxies />
                 ) : view === "apps" ? (
                   <Apps />
+                ) : view === "sites" ? (
+                  <Sites onOpenApps={() => navigate("apps")} />
                 ) : view === "settings" ? (
                   <Settings />
                 ) : (
@@ -142,6 +163,8 @@ function App() {
           </main>
         </div>
       </div>
+      <UpdateDialog />
+      <WhatsNewModal version={view !== null ? whatsNew : null} onClose={closeWhatsNew} />
     </StatusProvider>
   );
 }

@@ -102,10 +102,16 @@
   /* Окно трей-попапа прозрачное: фон и «дыхание» бренда убираем, скруглённую
      панель с тенью рисует сам попап. */
   body[data-view="tray"],
-  body[data-view="tray"] #root {
+  body[data-view="tray"] #root,
+  body[data-view="toast"],
+  body[data-view="toast"] #root,
+  body[data-view="updating"],
+  body[data-view="updating"] #root {
     background: transparent;
   }
-  html:has(body[data-view="tray"]) {
+  html:has(body[data-view="tray"]),
+  html:has(body[data-view="toast"]),
+  html:has(body[data-view="updating"]) {
     background: transparent;
   }
 

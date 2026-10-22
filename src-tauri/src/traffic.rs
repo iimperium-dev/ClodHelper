@@ -11,9 +11,9 @@ use serde::Serialize;
 
 use crate::apps::AppProfile;
 
-/// Входы моста: общий HTTP 8889, строгий Claude 8890, SOCKS 8891 и
-/// закреплённые за прокси пула 8892–8896.
-const BRIDGE_PORTS: std::ops::RangeInclusive<u16> = 8889..=8896;
+/// Входы моста: сайты 8887, общий HTTP 8889, строгий Claude 8890, SOCKS
+/// 8891 и закреплённые за прокси пула 8892–8896 (8888 мост не слушает).
+const BRIDGE_PORTS: std::ops::RangeInclusive<u16> = 8887..=8896;
 
 #[derive(Debug, Serialize, Default, Clone, PartialEq)]
 pub struct AppTraffic {

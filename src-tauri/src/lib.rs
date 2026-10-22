@@ -29,6 +29,11 @@ mod browser_ext;
 mod browser_policy;
 mod leak_guard;
 mod privacy;
+mod sound;
+mod system_pac;
+mod update_notify;
+#[cfg(target_os = "windows")]
+mod update_splash;
 mod updater;
 mod vscode_config;
 #[cfg(target_os = "windows")]
@@ -70,6 +75,20 @@ pub fn run() {
     #[cfg(not(target_os = "windows"))]
     macos::fix_path_env();
 
+    // Контекст (с ресурсами фронтенда) создаётся один раз: второй вызов
+    // generate_context! вшил бы фронтенд в exe повторно.
+    let context = tauri::generate_context!();
+
+    // Заставка на время установки обновления — отдельный короткий режим.
+    #[cfg(target_os = "windows")]
+    {
+        let args: Vec<String> = std::env::args().collect();
+        if args.iter().any(|a| a == update_splash::FLAG) {
+            update_splash::run(&args, context);
+            return;
+        }
+    }
+
     let builder = tauri::Builder::default();
     // Автозапуск: на Windows — плагин (ключ Run), на macOS — SMAppService
     // (src/autostart.rs); плагин там больше не регистрируется.
@@ -98,6 +117,11 @@ pub fn run() {
             commands::privacy_check,
             commands::update_check,
             commands::update_install,
+            commands::update_latest,
+            commands::update_toast_open,
+            commands::update_toast_close,
+            commands::whats_new_take,
+            commands::play_chime,
             commands::browser_policy_status,
             commands::browser_policy_set,
             commands::leak_guard_status,
@@ -158,6 +182,14 @@ pub fn run() {
             commands::proxies_set,
             commands::proxy_assignments_get,
             commands::proxy_assignments_set,
+            commands::sites_get,
+            commands::sites_set,
+            commands::sites_normalize,
+            commands::sites_status,
+            commands::sites_hosts,
+            commands::sites_peek,
+            commands::system_pac_status,
+            commands::system_pac_set,
             commands::proxy_labels_get,
             commands::proxy_label_set,
             commands::proxies_ping,
@@ -192,6 +224,10 @@ pub fn run() {
                 });
             }
 
+            // Фоновая проверка обновлений: новая версия — уведомление в углу
+            // экрана со звуком (одно на версию).
+            update_notify::spawn_watcher(app.handle().clone());
+
             // macOS: агент переменных старого формата (`/bin/sh -c`, виден в
             // «Объектах входа» как безымянный «sh») → `clod-helper --apply-env`.
             #[cfg(not(target_os = "windows"))]
@@ -199,6 +235,10 @@ pub fn run() {
 
             // Автозапуск плагина («Clod Helper.plist») → SMAppService.
             std::thread::spawn(autostart::migrate_legacy);
+
+            // «Сайты во всех браузерах»: снять зависшую запись «Подсмотреть»
+            // (окно закрыли посреди неё) и освежить метку PAC.
+            std::thread::spawn(system_pac::on_startup);
 
             // Если запущены с флагом --tray (после автозапуска Windows) —
             // прячем главное окно при старте, видна только иконка в трее.
@@ -232,7 +272,7 @@ pub fn run() {
                 _ => {}
             }
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while running tauri application")
         .run(|app, event| {
             // macOS: окно спрятано в трей (close-to-tray), а клик по иконке

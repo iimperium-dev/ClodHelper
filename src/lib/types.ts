@@ -76,7 +76,59 @@ export interface ShimTestResult {
 
 // ─── App-level navigation ────────────────────────────────────────
 
-export type AppView = "overview" | "proxies" | "apps" | "settings" | "wizard";
+export type AppView = "overview" | "proxies" | "apps" | "sites" | "settings" | "wizard";
+
+// ─── Сайты через прокси (mirror of Rust SiteEntry / commands::sites) ──
+
+export interface SiteEntry {
+  id: string;
+  name: string;
+  /** Домены сайта — вместе с поддоменами. */
+  domains: string[];
+  /** Индекс прокси в пуле; null — «Авто». */
+  proxy: number | null;
+  enabled: boolean;
+}
+
+export interface SitesBrowser {
+  id: string;
+  name: string;
+  installed: boolean;
+  /** "sites" — только AI и сайты; "all" — весь трафик; "ai" — старый мост. */
+  mode: "sites" | "all" | "ai";
+}
+
+export interface SitesStatus {
+  /** Мост понимает сайты (≥1.9). */
+  supported: boolean;
+  browsers: SitesBrowser[];
+}
+
+/** «Сайты во всех браузерах» — системная автонастройка прокси (mirror system_pac.rs). */
+export interface SystemPacStatus {
+  /** Есть в этой ОС (пока только Windows). */
+  supported: boolean;
+  /** Включено пользователем. */
+  enabled: boolean;
+  /** В системе сейчас стоит наш PAC (enabled && !active — сбросила другая программа). */
+  active: boolean;
+  /** Чужая настройка прокси в системе. */
+  foreign: string | null;
+}
+
+export interface SeenHost {
+  host: string;
+  count: number;
+  first_ms: number;
+  last_ms: number;
+  via: "proxy" | "direct";
+  site: string | null;
+}
+
+export interface SeenHosts {
+  now_ms: number;
+  hosts: SeenHost[];
+}
 
 // ─── Persistent settings (mirror of Rust Settings) ───────────────
 
@@ -299,6 +351,16 @@ export interface UpdateInfo {
   /** Установщик для этой ОС (.dmg или -setup.exe). */
   url: string;
   sums_url: string;
+  /** Пункты «Что нового» из описания релиза. */
+  highlights?: string[];
+}
+
+/** Ход установки обновления (событие "update:progress"). */
+export interface UpdateProgress {
+  stage: "download" | "verify" | "install" | "restart";
+  received: number;
+  /** 0 — размер неизвестен. */
+  total: number;
 }
 
 /** «Защита от утечек» (pf на macOS, брандмауэр Windows). */

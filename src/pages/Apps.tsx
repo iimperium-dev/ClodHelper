@@ -312,8 +312,14 @@ export function Apps() {
             </Button>
           ) : (
             <Button variant="secondary" size="sm" onClick={() => setAdding((v) => !v)}>
-              <Plus className="h-3.5 w-3.5" />
-              Добавить
+              {/* Плюс поворачивается в крестик: открытый поиск закрывается той же кнопкой */}
+              <Plus
+                className={cn(
+                  "h-3.5 w-3.5 transition-transform duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]",
+                  adding && "rotate-45",
+                )}
+              />
+              {adding ? "Закрыть" : "Добавить"}
             </Button>
           )}
         </div>

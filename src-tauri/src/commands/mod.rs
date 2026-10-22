@@ -14,8 +14,10 @@ mod autostart;
 mod wizard;
 mod proxies;
 mod windows;
+mod sites;
 
 pub(crate) use setup::*;
+pub(crate) use sites::*;
 pub(crate) use control::*;
 pub(crate) use apps::*;
 pub(crate) use killswitch::*;

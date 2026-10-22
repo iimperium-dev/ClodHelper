@@ -130,6 +130,11 @@ enum RoutingPolicy {
     /// Закреплённый вход (--pin-listen ADDR=N): всё только через upstream №N.
     /// Так приложение (браузер и т.п.) получает «свой» прокси из пула.
     Fixed(usize),
+    /// Вход сайтов (--sites-listen): правила как у общего входа, но режим
+    /// всегда smart — через прокси только AI-домены и сайты пользователя,
+    /// остальное напрямую, что бы ни стояло в глобальном режиме. Запоминает
+    /// хосты для «Подсмотреть» (GET /hosts).
+    Sites,
 }
 
 impl RoutingPolicy {
@@ -139,9 +144,65 @@ impl RoutingPolicy {
             Self::UpstreamOnly => "upstream_only",
             Self::Socks => "socks_upstream_only",
             Self::Fixed(_) => "fixed_upstream",
+            Self::Sites => "sites",
+        }
+    }
+    /// Вход решает по правилам (домены, сайты, DIRECT), а не «всё в upstream».
+    fn uses_rules(self) -> bool {
+        matches!(self, Self::Rules | Self::Sites)
+    }
+}
+
+/// Сайты пользователя (`--sites FILE`, bridge-sites.json): домен → прокси
+/// (None — «Авто»). Отдельно от rules-файла: таблица перечитывается на лету
+/// (см. watch_sites), и добавление сайта не перезапускает мост — стримы
+/// Claude Code не рвутся. Порядок — длина домена ↓: первый матч самый точный.
+type SiteTable = Vec<(String, Option<usize>)>;
+
+#[derive(Deserialize, Default)]
+struct SitesFile {
+    #[serde(default)]
+    sites: Vec<SiteFileEntry>,
+}
+
+#[derive(Deserialize)]
+struct SiteFileEntry {
+    #[serde(default)]
+    domains: Vec<String>,
+    #[serde(default)]
+    proxy: Option<usize>,
+}
+
+/// Таблица сайтов, общая для всех входов процесса.
+#[derive(Default)]
+struct Sites {
+    table: std::sync::RwLock<Arc<SiteTable>>,
+}
+
+impl Sites {
+    fn get(&self) -> Arc<SiteTable> {
+        self.table.read().map(|g| g.clone()).unwrap_or_default()
+    }
+    fn set(&self, t: SiteTable) {
+        if let Ok(mut g) = self.table.write() {
+            *g = Arc::new(t);
         }
     }
 }
+
+/// Хост, к которому ходили через вход сайтов («Подсмотреть»).
+struct SeenHost {
+    count: u64,
+    /// Миллисекунды от старта моста.
+    first_ms: u64,
+    last_ms: u64,
+    upstream: bool,
+    /// Сайт пользователя, под который попал хост.
+    site: Option<String>,
+}
+
+/// Сколько хостов помним для «Подсмотреть»: дольше — вытесняем самый давний.
+const SEEN_CAP: usize = 1000;
 
 /// JSON rules-файла (`bridge-rules.json`). Все поля опциональны — отсутствие
 /// файла или поля означает дефолты (mode=all, встроенный список доменов).
@@ -226,6 +287,10 @@ struct State {
     direct_domains: Vec<String>,
     /// (домен, индекс upstream'а) — привязка сервисов к конкретным прокси.
     assignments: Vec<(String, usize)>,
+    /// Сайты пользователя — общие для всех входов, меняются на лету.
+    sites: Arc<Sites>,
+    /// Хосты для «Подсмотреть» — только у входа сайтов.
+    seen: Option<Mutex<std::collections::HashMap<String, SeenHost>>>,
     upstreams: Arc<Vec<Upstream>>,
     total: AtomicU64,
     active: AtomicU64,
@@ -564,7 +629,7 @@ fn is_service_ip(host: &str) -> bool {
 }
 
 fn decide(state: &State, host: &str) -> Route {
-    if state.routing_policy != RoutingPolicy::Rules {
+    if !state.routing_policy.uses_rules() {
         return Route::Upstream;
     }
     if state.direct_domains.iter().any(|d| host_matches(host, d)) {
@@ -772,8 +837,138 @@ fn request_upstream(state: &State, host: &str) -> Pin {
         RoutingPolicy::Socks => socks_upstream(state),
         RoutingPolicy::Fixed(i) if i < state.upstreams.len() => Pin::Pinned(i),
         RoutingPolicy::Fixed(_) => Pin::Broken,
-        RoutingPolicy::Rules => preferred_upstream(state, host),
+        RoutingPolicy::Rules | RoutingPolicy::Sites => preferred_upstream(state, host),
     }
+}
+
+/// Сайт пользователя, под который попадает хост: (домен сайта, прокси).
+fn site_for(state: &State, host: &str) -> Option<(String, Option<usize>)> {
+    state
+        .sites
+        .get()
+        .iter()
+        .find(|(d, _)| host_matches(host, d))
+        .cloned()
+}
+
+/// Куда отправить соединение: назначения сервисов (закрепления Claude)
+/// главнее всего; затем сайты пользователя (через прокси, даже если домен в
+/// direct_domains); затем обычные правила режима. Сайт с выбранным прокси —
+/// строгое закрепление, как у сервисов: прокси вне пула = отказ, не failover.
+fn route_plan(state: &State, host: &str) -> (Pin, Route, Option<String>) {
+    let pin = request_upstream(state, host);
+    if pin != Pin::None {
+        return (pin, Route::Upstream, None);
+    }
+    if state.routing_policy.uses_rules() {
+        if let Some((site, proxy)) = site_for(state, host) {
+            let pin = match proxy {
+                Some(i) if i < state.upstreams.len() => Pin::Pinned(i),
+                Some(_) => Pin::Broken,
+                None => Pin::None,
+            };
+            return (pin, Route::Upstream, Some(site));
+        }
+    }
+    (Pin::None, decide(state, host), None)
+}
+
+/// Разобрать bridge-sites.json в таблицу. Пустой/отсутствующий файл — пусто.
+fn parse_sites(text: &str) -> Result<SiteTable, String> {
+    let f: SitesFile = serde_json::from_str(text.trim_start_matches('\u{feff}'))
+        .map_err(|e| format!("не парсится: {e}"))?;
+    let mut t: SiteTable = f
+        .sites
+        .into_iter()
+        .flat_map(|s| {
+            let proxy = s.proxy;
+            s.domains.into_iter().map(move |d| (d, proxy))
+        })
+        .map(|(d, p)| (normalize_host(d.trim().trim_start_matches("*.").trim_start_matches('.')), p))
+        .filter(|(d, _)| !d.is_empty())
+        .collect();
+    // Детерминированно: длина ↓, имя, затем «Авто» раньше закреплённого.
+    t.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)).then_with(|| a.1.cmp(&b.1)));
+    t.dedup_by(|a, b| a.0 == b.0);
+    Ok(t)
+}
+
+fn load_sites(path: &str) -> Result<SiteTable, String> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => parse_sites(&text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(format!("не читается: {e}")),
+    }
+}
+
+fn file_mtime(path: &str) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
+/// Перечитывать сайты при изменении файла (раз в 2с по mtime). Битый файл —
+/// оставляем прежнюю таблицу: в отличие от rules, падать тут нельзя — это
+/// уронило бы и Claude, и всё остальное.
+async fn watch_sites(path: String, sites: Arc<Sites>, log: Arc<State>) {
+    let mut seen = file_mtime(&path);
+    loop {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let now = file_mtime(&path);
+        if now == seen {
+            continue;
+        }
+        seen = now;
+        match load_sites(&path) {
+            Ok(t) => {
+                log.log(&format!("сайты перечитаны: {} доменов", t.len()));
+                sites.set(t);
+            }
+            Err(e) => log.log_err(&format!("файл сайтов {path} {e} — оставляю прежний список")),
+        }
+    }
+}
+
+/// Запомнить хост для «Подсмотреть» (только вход сайтов).
+fn note_host(state: &State, host: &str, upstream: bool, site: Option<String>) {
+    let Some(seen) = &state.seen else { return };
+    let now = state.started.elapsed().as_millis() as u64;
+    let Ok(mut map) = seen.lock() else { return };
+    if let Some(h) = map.get_mut(host) {
+        h.count += 1;
+        h.last_ms = now;
+        h.upstream = upstream;
+        h.site = site;
+        return;
+    }
+    if map.len() >= SEEN_CAP {
+        if let Some(oldest) = map.iter().min_by_key(|(_, h)| h.last_ms).map(|(k, _)| k.clone()) {
+            map.remove(&oldest);
+        }
+    }
+    map.insert(host.to_string(), SeenHost { count: 1, first_ms: now, last_ms: now, upstream, site });
+}
+
+/// GET /hosts[?since=MS] — хосты с last ≥ since, свежие первыми.
+fn hosts_json(state: &State, since: u64) -> String {
+    let now = state.started.elapsed().as_millis() as u64;
+    let mut hosts: Vec<serde_json::Value> = Vec::new();
+    if let Some(Ok(map)) = state.seen.as_ref().map(|m| m.lock()) {
+        let mut v: Vec<(&String, &SeenHost)> = map.iter().filter(|(_, h)| h.last_ms >= since).collect();
+        v.sort_by(|a, b| b.1.last_ms.cmp(&a.1.last_ms).then_with(|| a.0.cmp(b.0)));
+        hosts = v
+            .into_iter()
+            .map(|(host, h)| {
+                serde_json::json!({
+                    "host": host,
+                    "count": h.count,
+                    "first_ms": h.first_ms,
+                    "last_ms": h.last_ms,
+                    "via": if h.upstream { "proxy" } else { "direct" },
+                    "site": h.site,
+                })
+            })
+            .collect();
+    }
+    serde_json::json!({ "now_ms": now, "hosts": hosts }).to_string()
 }
 
 /// Telegram ходит по IP дата-центров, а не по доменам — назначение берём для
@@ -1136,7 +1331,8 @@ fn healthz_json(state: &State) -> String {
         "port": state.listen.parse::<SocketAddr>().ok().map(|addr| addr.port()),
         "mode": if state.routing_policy == RoutingPolicy::UpstreamOnly { "all" } else { state.mode.as_str() },
         "routing_policy": state.routing_policy.as_str(),
-        "direct_allowed": state.routing_policy == RoutingPolicy::Rules,
+        "direct_allowed": state.routing_policy.uses_rules(),
+        "sites": state.sites.get().len(),
         "strict_ready": state.strict_ready(),
         "strict_upstream_index": if state.routing_policy == RoutingPolicy::UpstreamOnly {
             match strict_upstream(state) { Pin::Pinned(i) => Some(i), _ => None }
@@ -1153,8 +1349,72 @@ fn healthz_json(state: &State) -> String {
     .to_string()
 }
 
+/// PAC-файл для системной автонастройки прокси («Сайты во всех браузерах»):
+/// через вход сайтов — ровно то, что он сам отправил бы в прокси (AI-домены,
+/// закреплённые сервисы, сайты пользователя), остальное браузер ведёт
+/// напрямую, мимо моста. Без «; DIRECT» в конце: упавший мост не должен
+/// пускать Claude и сайты из списка с настоящего IP.
+/// `all` — на время «Подсмотреть»: весь трафик через вход, иначе мост не
+/// увидел бы адресов, которых ещё нет в списке (решает он же: чужое — напрямую).
+fn pac_js(state: &State, all: bool) -> String {
+    let proxy = format!("PROXY {}", state.listen);
+    let local = "if (isPlainHostName(host) || host === \"localhost\" || /^127\\./.test(host)) return \"DIRECT\";";
+    if all {
+        return format!("function FindProxyForURL(url, host) {{\n  {local}\n  return \"{proxy}\";\n}}\n");
+    }
+    let mut domains: Vec<String> = state
+        .proxy_domains
+        .iter()
+        .cloned()
+        .chain(state.assignments.iter().map(|(d, _)| d.clone()))
+        .chain(state.sites.get().iter().map(|(d, _)| d.clone()))
+        .filter(|d| !d.is_empty())
+        .collect();
+    domains.sort();
+    domains.dedup();
+    // Сети сервисов (Telegram и Anthropic ходят и по IP) — только IPv4:
+    // isInNet с именем хоста резолвил бы DNS на каждом запросе.
+    let nets: Vec<(String, String)> = SERVICE_NETS
+        .iter()
+        .filter_map(|(net, len)| {
+            let ip: std::net::Ipv4Addr = net.parse().ok()?;
+            let mask = std::net::Ipv4Addr::from(u32::MAX.checked_shl(32 - *len as u32).unwrap_or(0));
+            Some((ip.to_string(), mask.to_string()))
+        })
+        .collect();
+    format!(
+        "var D = {d};\nvar N = {n};\nfunction FindProxyForURL(url, host) {{\n  host = host.toLowerCase();\n  {local}\n  \
+         for (var i = 0; i < D.length; i++) {{\n    if (host === D[i] || dnsDomainIs(host, \".\" + D[i])) return \"{proxy}\";\n  }}\n  \
+         if (/^\\d+\\.\\d+\\.\\d+\\.\\d+$/.test(host)) {{\n    for (var j = 0; j < N.length; j++) {{\n      \
+         if (isInNet(host, N[j][0], N[j][1])) return \"{proxy}\";\n    }}\n  }}\n  return \"DIRECT\";\n}}\n",
+        d = serde_json::to_string(&domains).unwrap_or_else(|_| "[]".into()),
+        n = serde_json::to_string(&nets).unwrap_or_else(|_| "[]".into()),
+    )
+}
+
 async fn serve_local(client: &mut TcpStream, path: &str, state: &State) {
-    let (code, body) = if path == "/healthz" || path == "/stats" {
+    let (path, query) = path.split_once('?').unwrap_or((path, ""));
+    if path == "/proxy.pac" && state.routing_policy == RoutingPolicy::Sites {
+        let all = query.split('&').any(|kv| kv == "all=1");
+        let body = pac_js(state, all);
+        // no-store: таблица сайтов меняется на лету, а WinINET и браузеры
+        // охотно кэшируют PAC (свежесть дополнительно форсирует ?v= в адресе).
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/x-ns-proxy-autoconfig\r\nCache-Control: no-store\r\n\
+             Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len(),
+        );
+        let _ = client.write_all(resp.as_bytes()).await;
+        return;
+    }
+    let (code, body) = if path == "/hosts" && state.seen.is_some() {
+        let since = query
+            .split('&')
+            .find_map(|kv| kv.strip_prefix("since="))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        ("200 OK", hosts_json(state, since))
+    } else if path == "/healthz" || path == "/stats" {
         let code = if state.routing_policy == RoutingPolicy::UpstreamOnly && !state.strict_ready() {
             "503 Service Unavailable"
         } else {
@@ -1294,7 +1554,11 @@ async fn handle(mut client: TcpStream, state: Arc<State>, sem: Arc<Semaphore>) {
     // Назначение сильнее режима: закреплённый домен идёт через свой upstream,
     // даже если smart-режим отправил бы его напрямую (или домен попал в
     // direct_domains) — иначе он утёк бы с реальным IP пользователя.
-    let pin = request_upstream(&state, &req.host);
+    // Сайты пользователя — следом за назначениями (см. route_plan).
+    let (pin, route, site) = route_plan(&state, &req.host);
+    if pin != Pin::Broken {
+        note_host(&state, &req.host, route == Route::Upstream, site);
+    }
     let route = match pin {
         Pin::Pinned(_) => Route::Upstream,
         Pin::Broken => {
@@ -1308,7 +1572,7 @@ async fn handle(mut client: TcpStream, state: Arc<State>, sem: Arc<Semaphore>) {
                 .await;
             return;
         }
-        Pin::None => decide(&state, &req.host),
+        Pin::None => route,
     };
 
     // Устанавливаем исходящее соединение. Для Upstream запоминаем auth ИМЕННО
@@ -1561,6 +1825,10 @@ struct Args {
     socks_listen: Option<String>,
     /// Закреплённые входы: (адрес, индекс upstream'а).
     pin_listen: Vec<(String, usize)>,
+    /// Файл сайтов пользователя (перечитывается на лету).
+    sites: Option<String>,
+    /// Вход сайтов для браузера; None — выключен.
+    sites_listen: Option<String>,
     quiet: bool,
     rules: Option<String>,
     /// Собственный файл журнала с ротацией (см. mod logfile).
@@ -1580,6 +1848,8 @@ fn parse_args_from(argv: Vec<String>) -> Result<Args, String> {
         strict_listen: "127.0.0.1:8890".into(),
         socks_listen: Some("127.0.0.1:8891".into()),
         pin_listen: Vec::new(),
+        sites: None,
+        sites_listen: None,
         quiet: false,
         rules: None,
         log: None,
@@ -1611,6 +1881,14 @@ fn parse_args_from(argv: Vec<String>) -> Result<Args, String> {
                 let (addr, idx) = v.rsplit_once('=').ok_or("--pin-listen requires IP:PORT=INDEX")?;
                 let idx: usize = idx.parse().map_err(|_| "--pin-listen: bad upstream index")?;
                 a.pin_listen.push((addr.to_string(), idx));
+            }
+            "--sites" => {
+                i += 1;
+                a.sites = Some(argv.get(i).ok_or("--sites requires FILE")?.clone());
+            }
+            "--sites-listen" => {
+                i += 1;
+                a.sites_listen = Some(argv.get(i).ok_or("--sites-listen requires IP:PORT")?.clone());
             }
             "--socks-listen" => {
                 i += 1;
@@ -1659,6 +1937,14 @@ fn parse_args_from(argv: Vec<String>) -> Result<Args, String> {
             .map_err(|_| "--pin-listen requires a literal loopback IP and port")?;
         if !sa.ip().is_loopback() || sa.port() == 0 {
             return Err("--pin-listen must use a loopback IP and a non-zero port".into());
+        }
+    }
+    if let Some(sites) = &a.sites_listen {
+        let sa = sites
+            .parse::<SocketAddr>()
+            .map_err(|_| "--sites-listen requires a literal loopback IP and port")?;
+        if !sa.ip().is_loopback() || sa.port() == 0 {
+            return Err("--sites-listen must use a loopback IP and a non-zero port".into());
         }
     }
     // SOCKS без пароля — только на loopback, иначе это открытый прокси в сеть.
@@ -1781,6 +2067,16 @@ async fn main() {
     }
 
     let (mode, proxy_domains, direct_domains, assignments) = load_rules(args.rules.as_deref());
+    let sites = Arc::new(Sites::default());
+    // Битый файл сайтов при старте — не повод не стартовать (см. watch_sites).
+    let sites_err = match args.sites.as_deref().map(load_sites) {
+        Some(Ok(t)) => {
+            sites.set(t);
+            None
+        }
+        Some(Err(e)) => Some(e),
+        None => None,
+    };
 
     let state = Arc::new(State {
         started: Instant::now(),
@@ -1791,6 +2087,8 @@ async fn main() {
         proxy_domains,
         direct_domains,
         assignments,
+        sites: sites.clone(),
+        seen: None,
         upstreams: Arc::new(upstreams),
         total: AtomicU64::new(0),
         active: AtomicU64::new(0),
@@ -1810,6 +2108,8 @@ async fn main() {
         proxy_domains: state.proxy_domains.clone(),
         direct_domains: state.direct_domains.clone(),
         assignments: state.assignments.clone(),
+        sites: state.sites.clone(),
+        seen: None,
         upstreams: state.upstreams.clone(),
         total: AtomicU64::new(0),
         active: AtomicU64::new(0),
@@ -1829,6 +2129,8 @@ async fn main() {
         proxy_domains: Vec::new(),
         direct_domains: Vec::new(),
         assignments: state.assignments.clone(),
+        sites: state.sites.clone(),
+        seen: None,
         upstreams: state.upstreams.clone(),
         total: AtomicU64::new(0),
         active: AtomicU64::new(0),
@@ -1879,7 +2181,9 @@ async fn main() {
             proxy_domains: Vec::new(),
             direct_domains: Vec::new(),
             assignments: Vec::new(),
-            upstreams: state.upstreams.clone(),
+            sites: state.sites.clone(),
+        seen: None,
+        upstreams: state.upstreams.clone(),
             total: AtomicU64::new(0),
             active: AtomicU64::new(0),
             via_upstream: AtomicU64::new(0),
@@ -1894,6 +2198,43 @@ async fn main() {
                 tokio::spawn(serve_listener(l, pin_state, Arc::new(Semaphore::new(MAX_CONNECTIONS))));
             }
             Err(e) => state.log_err(&format!("cannot bind pinned listener {addr} — {e}")),
+        }
+    }
+
+    if let Some(e) = sites_err {
+        state.log_err(&format!("файл сайтов {} {e} — сайты пока не применены", args.sites.as_deref().unwrap_or("")));
+    }
+    if let Some(path) = args.sites.clone() {
+        tokio::spawn(watch_sites(path, sites.clone(), state.clone()));
+    }
+    // Вход сайтов (браузер «только сайты»): всегда smart, помнит хосты.
+    if let Some(addr) = args.sites_listen.as_deref() {
+        let sites_state = Arc::new(State {
+            started: state.started,
+            listen: addr.to_string(),
+            quiet: args.quiet,
+            mode: Mode::Smart,
+            routing_policy: RoutingPolicy::Sites,
+            proxy_domains: state.proxy_domains.clone(),
+            direct_domains: state.direct_domains.clone(),
+            assignments: state.assignments.clone(),
+            sites: sites.clone(),
+            seen: Some(Mutex::new(std::collections::HashMap::new())),
+            upstreams: state.upstreams.clone(),
+            total: AtomicU64::new(0),
+            active: AtomicU64::new(0),
+            via_upstream: AtomicU64::new(0),
+            via_direct: AtomicU64::new(0),
+            errors: AtomicU64::new(0),
+            last_errors: Mutex::new(std::collections::VecDeque::new()),
+            last_logged: Mutex::new((String::new(), 0)),
+        });
+        match TcpListener::bind(addr).await {
+            Ok(l) => {
+                sites_state.log(&format!("sites listener on {addr} | сайтов: {}", sites.get().len()));
+                tokio::spawn(serve_listener(l, sites_state, Arc::new(Semaphore::new(MAX_CONNECTIONS))));
+            }
+            Err(e) => state.log_err(&format!("cannot bind sites listener {addr} — {e}")),
         }
     }
 
@@ -1988,6 +2329,8 @@ mod tests {
             proxy_domains: vec!["anthropic.com".into()],
             direct_domains: vec!["127.0.0.1".into(), "example.invalid".into()],
             assignments: Vec::new(),
+            sites: Arc::default(),
+            seen: None,
             upstreams: Arc::new(upstreams),
             total: AtomicU64::new(0),
             active: AtomicU64::new(0),
@@ -2740,5 +3083,174 @@ mod tests {
         .unwrap();
         assert_eq!(a.pin_listen, vec![("127.0.0.1:8892".into(), 0), ("127.0.0.1:8893".into(), 1)]);
         assert!(parse_args_from(["--upstream", "http://127.0.0.1:1", "--pin-listen", "0.0.0.0:8892=0"].iter().map(|s| s.to_string()).collect()).is_err());
+    }
+
+    // ─── Сайты пользователя ──────────────────────────────────────
+
+    fn two_upstreams() -> Vec<Upstream> {
+        vec![
+            parse_upstream("http://127.0.0.1:1").unwrap(),
+            parse_upstream("http://127.0.0.1:2").unwrap(),
+        ]
+    }
+
+    fn sites_state(policy: RoutingPolicy, sites_json: &str) -> State {
+        let st = test_state(policy, two_upstreams());
+        st.sites.set(parse_sites(sites_json).unwrap());
+        st
+    }
+
+    #[test]
+    fn sites_parse_normalizes_and_orders() {
+        let t = parse_sites(
+            "\u{feff}{\"sites\":[{\"domains\":[\"YouTube.com.\",\"*.googlevideo.com\",\" \"],\"proxy\":1},\
+             {\"domains\":[\"youtube.com\",\"m.youtube.com\"]}]}",
+        )
+        .unwrap();
+        assert_eq!(
+            t,
+            vec![
+                ("googlevideo.com".to_string(), Some(1)),
+                ("m.youtube.com".to_string(), None),
+                ("youtube.com".to_string(), None), // дубль: «Авто» раньше закреплённого
+            ]
+        );
+        assert!(parse_sites("{bad").is_err());
+        assert!(parse_sites("{}").unwrap().is_empty());
+    }
+
+    #[test]
+    fn site_goes_upstream_even_in_smart_and_over_direct_domains() {
+        let st = sites_state(RoutingPolicy::Rules, r#"{"sites":[{"domains":["example.invalid","yt.invalid"]}]}"#);
+        // example.invalid в direct_domains, но сайт пользователя главнее.
+        let (pin, route, site) = route_plan(&st, "www.example.invalid");
+        assert!(pin == Pin::None && route == Route::Upstream);
+        assert_eq!(site.as_deref(), Some("example.invalid"));
+        let (_, route, site) = route_plan(&st, "other.invalid");
+        assert!(route == Route::Direct && site.is_none());
+        // Строгий и закреплённые входы сайтами не управляются.
+        let strict = sites_state(RoutingPolicy::Fixed(1), r#"{"sites":[{"domains":["yt.invalid"],"proxy":0}]}"#);
+        assert!(route_plan(&strict, "yt.invalid").0 == Pin::Pinned(1));
+    }
+
+    #[test]
+    fn site_proxy_pin_is_strict() {
+        let st = sites_state(
+            RoutingPolicy::Sites,
+            r#"{"sites":[{"domains":["yt.invalid"],"proxy":1},{"domains":["gone.invalid"],"proxy":7}]}"#,
+        );
+        assert!(route_plan(&st, "a.yt.invalid").0 == Pin::Pinned(1));
+        assert!(route_plan(&st, "gone.invalid").0 == Pin::Broken, "прокси вне пула — отказ, не failover");
+    }
+
+    #[test]
+    fn service_assignment_beats_site() {
+        let mut st = sites_state(RoutingPolicy::Rules, r#"{"sites":[{"domains":["claude.ai"],"proxy":1}]}"#);
+        st.assignments = vec![("claude.ai".into(), 0)];
+        let (pin, route, site) = route_plan(&st, "claude.ai");
+        assert!(pin == Pin::Pinned(0) && route == Route::Upstream && site.is_none());
+    }
+
+    #[test]
+    fn sites_listener_is_smart_regardless_of_mode() {
+        let mut st = sites_state(RoutingPolicy::Sites, r#"{"sites":[{"domains":["yt.invalid"]}]}"#);
+        st.mode = Mode::Smart; // так его создаёт main при любом глобальном режиме
+        assert!(route_plan(&st, "unlisted.invalid").1 == Route::Direct);
+        assert!(route_plan(&st, "api.anthropic.com").1 == Route::Upstream);
+        assert!(route_plan(&st, "yt.invalid").1 == Route::Upstream);
+    }
+
+    #[test]
+    fn sites_table_hot_reload() {
+        let path = std::env::temp_dir().join(format!("clod-bridge-sites-test-{}.json", std::process::id()));
+        let p = path.to_str().unwrap().to_string();
+        assert!(load_sites(&p).unwrap().is_empty(), "нет файла — пустой список");
+        std::fs::write(&path, r#"{"sites":[{"domains":["a.invalid"]}]}"#).unwrap();
+        let st = test_state(RoutingPolicy::Rules, Vec::new());
+        st.sites.set(load_sites(&p).unwrap());
+        assert!(site_for(&st, "a.invalid").is_some());
+        std::fs::write(&path, "{broken").unwrap();
+        assert!(load_sites(&p).is_err(), "битый файл не подменяет таблицу");
+        assert!(site_for(&st, "a.invalid").is_some());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn seen_hosts_are_capped_and_filtered() {
+        let mut st = test_state(RoutingPolicy::Sites, Vec::new());
+        st.seen = Some(Mutex::new(std::collections::HashMap::new()));
+        note_host(&st, "first.invalid", false, None);
+        note_host(&st, "first.invalid", true, Some("first.invalid".into()));
+        {
+            let map = st.seen.as_ref().unwrap().lock().unwrap();
+            let h = &map["first.invalid"];
+            assert_eq!(h.count, 2);
+            assert!(h.upstream);
+        }
+        for i in 0..SEEN_CAP + 5 {
+            note_host(&st, &format!("h{i}.invalid"), false, None);
+        }
+        let len = st.seen.as_ref().unwrap().lock().unwrap().len();
+        assert_eq!(len, SEEN_CAP);
+        let v: serde_json::Value = serde_json::from_str(&hosts_json(&st, u64::MAX)).unwrap();
+        assert!(v["hosts"].as_array().unwrap().is_empty(), "since в будущем — пусто");
+        assert!(v["now_ms"].is_u64());
+    }
+
+    #[tokio::test]
+    async fn hosts_endpoint_only_on_sites_listener() {
+        let mut st = test_state(RoutingPolicy::Sites, Vec::new());
+        st.seen = Some(Mutex::new(std::collections::HashMap::new()));
+        note_host(&st, "seen.invalid", false, None);
+        let out = single_request(Arc::new(st), "GET /hosts?since=0 HTTP/1.1\r\nHost: x\r\n\r\n".into()).await;
+        let text = String::from_utf8_lossy(&out);
+        assert!(text.starts_with("HTTP/1.1 200"), "{text}");
+        assert!(text.contains("seen.invalid"));
+        let plain = test_state(RoutingPolicy::Rules, Vec::new());
+        let out = single_request(Arc::new(plain), "GET /hosts HTTP/1.1\r\nHost: x\r\n\r\n".into()).await;
+        assert!(String::from_utf8_lossy(&out).starts_with("HTTP/1.1 404"));
+    }
+
+    #[test]
+    fn pac_lists_exactly_what_goes_through_proxy() {
+        let mut st = sites_state(RoutingPolicy::Sites, r#"{"sites":[{"domains":["yt.invalid"]}]}"#);
+        st.listen = "127.0.0.1:8887".into();
+        st.assignments = vec![("pinned.invalid".into(), 0)];
+        let pac = pac_js(&st, false);
+        for d in ["\"anthropic.com\"", "\"yt.invalid\"", "\"pinned.invalid\""] {
+            assert!(pac.contains(d), "{d} в PAC:\n{pac}");
+        }
+        assert!(!pac.contains("example.invalid"), "direct-домены в PAC не нужны");
+        assert!(pac.contains("\"PROXY 127.0.0.1:8887\""));
+        assert!(!pac.contains("; DIRECT"), "без фолбэка: упавший мост не раскрывает IP");
+        assert!(pac.contains("[\"149.154.160.0\",\"255.255.240.0\"]"), "сети Telegram /20");
+        // «Подсмотреть»: весь трафик через вход сайтов, кроме локального.
+        let all = pac_js(&st, true);
+        assert!(all.contains("return \"PROXY 127.0.0.1:8887\";") && !all.contains("var D"));
+    }
+
+    #[tokio::test]
+    async fn pac_endpoint_only_on_sites_listener() {
+        let st = sites_state(RoutingPolicy::Sites, r#"{"sites":[{"domains":["yt.invalid"]}]}"#);
+        let out = single_request(Arc::new(st), "GET /proxy.pac?v=3 HTTP/1.1\r\nHost: x\r\n\r\n".into()).await;
+        let text = String::from_utf8_lossy(&out);
+        assert!(text.starts_with("HTTP/1.1 200"), "{text}");
+        assert!(text.contains("application/x-ns-proxy-autoconfig") && text.contains("yt.invalid"));
+        let plain = test_state(RoutingPolicy::Rules, Vec::new());
+        let out = single_request(Arc::new(plain), "GET /proxy.pac HTTP/1.1\r\nHost: x\r\n\r\n".into()).await;
+        assert!(String::from_utf8_lossy(&out).starts_with("HTTP/1.1 404"));
+    }
+
+    #[test]
+    fn sites_args() {
+        let a = parse_args_from(
+            ["--upstream", "http://127.0.0.1:1", "--sites", "s.json", "--sites-listen", "127.0.0.1:8887"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        )
+        .unwrap();
+        assert_eq!((a.sites.as_deref(), a.sites_listen.as_deref()), (Some("s.json"), Some("127.0.0.1:8887")));
+        assert!(parse_args_from(["--upstream", "http://127.0.0.1:1", "--sites-listen", "0.0.0.0:8887"].iter().map(|s| s.to_string()).collect()).is_err());
     }
 }

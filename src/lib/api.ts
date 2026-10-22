@@ -28,6 +28,10 @@ import type {
   ShimTestResult,
   ShortcutTarget,
   WizardInstallResult,
+  SiteEntry,
+  SitesStatus,
+  SeenHosts,
+  SystemPacStatus,
 } from "./types";
 
 export async function detectNode(): Promise<NodeInfo> {
@@ -303,6 +307,44 @@ export async function proxyAssignmentsSet(
   return invoke<void>("proxy_assignments_set", { assignments });
 }
 
+// ─── Сайты через прокси ──────────────────────────────────────────
+
+export function sitesGet(): Promise<SiteEntry[]> {
+  return invoke<SiteEntry[]>("sites_get");
+}
+
+/** Сохранить сайты: мост подхватит их сам за ~2 с, без перезапуска. */
+export function sitesSet(sites: SiteEntry[]): Promise<SiteEntry[]> {
+  return invoke<SiteEntry[]>("sites_set", { sites });
+}
+
+/** «https://www.x.com/…» → «x.com»; null — не похоже на адрес сайта. */
+export function sitesNormalize(input: string): Promise<string | null> {
+  return invoke<string | null>("sites_normalize", { input });
+}
+
+export function sitesStatus(): Promise<SitesStatus> {
+  return invoke<SitesStatus>("sites_status");
+}
+
+/** «Подсмотреть»: хосты со входа сайтов с момента since (часы моста, мс). */
+export function sitesHosts(since: number): Promise<SeenHosts> {
+  return invoke<SeenHosts>("sites_hosts", { since });
+}
+
+/** Запись «Подсмотреть»: на её время весь трафик браузеров — через мост. */
+export function sitesPeek(active: boolean): Promise<void> {
+  return invoke<void>("sites_peek", { active });
+}
+
+export function systemPacStatus(): Promise<SystemPacStatus> {
+  return invoke<SystemPacStatus>("system_pac_status");
+}
+
+export function systemPacSet(enable: boolean): Promise<SystemPacStatus> {
+  return invoke<SystemPacStatus>("system_pac_set", { enable });
+}
+
 /** Лёгкий TCP-пинг всего пула (параллельно). */
 export async function proxiesPing(): Promise<ProxyPing[]> {
   return invoke<ProxyPing[]>("proxies_ping");
@@ -355,6 +397,29 @@ export function updateCheck(): Promise<UpdateInfo | null> {
 /** Скачать, проверить SHA-256, поставить и перезапуститься. */
 export function updateInstall(info: UpdateInfo): Promise<void> {
   return invoke<void>("update_install", { info });
+}
+
+/** Последнее найденное обновление (без запроса к GitHub). */
+export function updateLatest(): Promise<UpdateInfo | null> {
+  return invoke<UpdateInfo | null>("update_latest");
+}
+
+/** Клик по уведомлению: главное окно + окно обновления. */
+export function updateToastOpen(): Promise<void> {
+  return invoke<void>("update_toast_open");
+}
+
+export function updateToastClose(): Promise<void> {
+  return invoke<void>("update_toast_close");
+}
+
+/** Версия для окна «Что нового», если приложение только что обновилось. */
+export function whatsNewTake(): Promise<string | null> {
+  return invoke<string | null>("whats_new_take");
+}
+
+export function playChime(): Promise<void> {
+  return invoke<void>("play_chime");
 }
 
 export function leakGuardStatus(): Promise<LeakGuardStatus> {
