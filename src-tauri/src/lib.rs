@@ -4,6 +4,7 @@ mod claude_desktop;
 mod claude_policy;
 mod claude_proxy;
 mod commands;
+mod diagnostics;
 #[cfg(target_os = "windows")]
 mod elevate;
 mod env_proxy;
@@ -122,6 +123,7 @@ pub fn run() {
             commands::update_toast_close,
             commands::whats_new_take,
             commands::play_chime,
+            commands::diagnostics_report,
             commands::browser_policy_status,
             commands::browser_policy_set,
             commands::leak_guard_status,
@@ -188,6 +190,8 @@ pub fn run() {
             commands::sites_status,
             commands::sites_hosts,
             commands::sites_peek,
+            commands::sites_proxy_extensions,
+            commands::sites_open_extension,
             commands::system_pac_status,
             commands::system_pac_set,
             commands::proxy_labels_get,

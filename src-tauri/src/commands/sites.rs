@@ -67,6 +67,44 @@ pub async fn sites_set(sites: Vec<SiteEntry>) -> Result<Vec<SiteEntry>, String> 
     Ok(saved.sites)
 }
 
+/// Браузер с расширениями, перехватывающими прокси: сайты в нём не работают.
+#[derive(Debug, Serialize)]
+pub struct BrowserProxyExtensions {
+    pub name: String,
+    pub path: String,
+    pub extensions: Vec<crate::browser_ext::ProxyExtension>,
+}
+
+/// Для «Сайтов»: расширения-перехватчики во всех установленных Chromium-браузерах.
+#[tauri::command]
+pub async fn sites_proxy_extensions() -> Result<Vec<BrowserProxyExtensions>, String> {
+    tokio::task::spawn_blocking(|| {
+        crate::browser_ext::installed_browsers()
+            .into_iter()
+            .filter_map(|(name, path)| {
+                let extensions = crate::browser_ext::proxy_extensions(&path);
+                (!extensions.is_empty()).then_some(BrowserProxyExtensions { name, path, extensions })
+            })
+            .collect()
+    })
+    .await
+    .map_err(|e| format!("Внутренняя ошибка: {e}"))
+}
+
+/// Открыть страницу расширения, чтобы его отключить. Путь — только из
+/// списка найденных браузеров: произвольный exe по команде UI не запускаем.
+#[tauri::command]
+pub async fn sites_open_extension(path: String, ext_id: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        if !crate::browser_ext::installed_browsers().iter().any(|(_, p)| *p == path) {
+            return Err("Браузер не найден".to_string());
+        }
+        crate::browser_ext::open_extension_page(&path, &ext_id)
+    })
+    .await
+    .map_err(|e| format!("Внутренняя ошибка: {e}"))?
+}
+
 /// «Сайты во всех браузерах»: состояние системной автонастройки прокси.
 #[tauri::command]
 pub async fn system_pac_status() -> Result<crate::system_pac::SystemPacStatus, String> {

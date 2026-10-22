@@ -183,6 +183,62 @@ pub fn proxy_extensions(app_path: &str) -> Vec<ProxyExtension> {
     Vec::new()
 }
 
+/// Установленные Chromium-браузеры (имя, путь к .exe / .app) — для «Сайтов»:
+/// расширение-перехватчик в любом из них ломает сайты, даже если браузера
+/// нет в «Приложениях».
+pub fn installed_browsers() -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    #[cfg(target_os = "windows")]
+    {
+        let bases: Vec<PathBuf> = ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"]
+            .iter()
+            .filter_map(|v| std::env::var_os(v).map(PathBuf::from))
+            .collect();
+        let candidates: &[(&str, &str)] = &[
+            ("Google Chrome", "Google\\Chrome\\Application\\chrome.exe"),
+            ("Microsoft Edge", "Microsoft\\Edge\\Application\\msedge.exe"),
+            ("Brave", "BraveSoftware\\Brave-Browser\\Application\\brave.exe"),
+            ("Яндекс Браузер", "Yandex\\YandexBrowser\\Application\\browser.exe"),
+            ("Vivaldi", "Vivaldi\\Application\\vivaldi.exe"),
+            ("Chromium", "Chromium\\Application\\chrome.exe"),
+            ("Comet", "Perplexity\\Comet\\Application\\comet.exe"),
+        ];
+        for (name, rel) in candidates {
+            if let Some(exe) = bases.iter().map(|b| b.join(rel)).find(|p| p.exists()) {
+                out.push((name.to_string(), exe.to_string_lossy().to_string()));
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let dirs: Vec<PathBuf> = [Some(PathBuf::from("/Applications")), dirs::home_dir().map(|h| h.join("Applications"))]
+            .into_iter()
+            .flatten()
+            .collect();
+        for name in ["Google Chrome", "Microsoft Edge", "Brave Browser", "Yandex", "Vivaldi", "Chromium", "Comet", "Arc"] {
+            if let Some(app) = dirs.iter().map(|d| d.join(format!("{name}.app"))).find(|p| p.exists()) {
+                out.push((name.to_string(), app.to_string_lossy().to_string()));
+            }
+        }
+    }
+    out
+}
+
+/// Открыть страницу расширения в браузере по его пути (Windows: адрес
+/// передаётся exe — открытый браузер просто покажет новую вкладку).
+#[cfg(target_os = "windows")]
+pub fn open_extension_page(app_path: &str, ext_id: &str) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    let url = extension_page_url(app_path, ext_id)?;
+    crate::win::allow_foreground();
+    std::process::Command::new(app_path)
+        .arg(&url)
+        .creation_flags(0x0800_0000)
+        .spawn()
+        .map(|_| ())
+        .map_err(|_| format!("Откройте в браузере {url} и отключите расширение"))
+}
+
 /// Адрес страницы расширения в браузере. id расширения Chromium — 32 буквы
 /// a–p; другое в командную строку и AppleScript не пускаем.
 pub fn extension_page_url(app_path: &str, ext_id: &str) -> Result<String, String> {
@@ -244,6 +300,9 @@ mod tests {
     #[ignore]
     fn live_chrome() {
         println!("chrome → {:?}", proxy_extensions("/Applications/Google Chrome.app"));
+        for (name, path) in installed_browsers() {
+            println!("{name} ({path}) → {:?}", proxy_extensions(&path));
+        }
     }
 
     #[test]

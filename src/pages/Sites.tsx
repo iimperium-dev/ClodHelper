@@ -15,14 +15,16 @@ import {
   sitesGet,
   sitesHosts,
   sitesNormalize,
+  sitesOpenExtension,
   sitesPeek,
+  sitesProxyExtensions,
   sitesSet,
   sitesStatus,
   systemPacSet,
   systemPacStatus,
 } from "../lib/api";
 import { useStatus } from "../lib/status";
-import type { SeenHost, SiteEntry, SitesStatus, SystemPacStatus } from "../lib/types";
+import type { BrowserProxyExtensions, SeenHost, SiteEntry, SitesStatus, SystemPacStatus } from "../lib/types";
 import { fadeInUp, staggerContainer } from "../lib/motion";
 import { cn } from "../lib/cn";
 
@@ -95,11 +97,25 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
   const [open, setOpen] = useState<string | null>(null);
   const [peek, setPeek] = useState<string | null>(null);
   const [pac, setPac] = useState<SystemPacStatus | null>(null);
+  const [advanced, setAdvanced] = useState(false);
+  const [extensions, setExtensions] = useState<BrowserProxyExtensions[]>([]);
 
   const loadStatus = useCallback(async () => {
-    const [st, p] = await Promise.all([sitesStatus().catch(() => null), systemPacStatus().catch(() => null)]);
+    const [st, p, ext] = await Promise.all([
+      sitesStatus().catch(() => null),
+      systemPacStatus().catch(() => null),
+      sitesProxyExtensions().catch(() => []),
+    ]);
     setStatus(st);
     setPac(p);
+    setExtensions(ext);
+  }, []);
+
+  // Человек ушёл отключать расширение в браузер и вернулся — перепроверить.
+  useEffect(() => {
+    const onFocus = () => void sitesProxyExtensions().then(setExtensions).catch(() => {});
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
   }, []);
 
   /** «Во всех браузерах»: включить/выключить системную автонастройку. */
@@ -149,6 +165,14 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
       setAdding(false);
       setAddInput("");
       setOpen(site.id);
+      // Сайт без подключённого браузера не работает — а человек, добавивший
+      // сайт, ждёт, что он заработает (в 0.8.0 «ничего не происходило»).
+      // Включаем «Во всех браузерах» сами, если ничто не мешает: чужой
+      // прокси в Windows молча не заменяем — для него есть предупреждение.
+      if (pac?.supported && !pac.enabled && !pac.foreign && status?.supported && sitesBrowsers.length === 0) {
+        await togglePac(true);
+        setNote(`«${name}» — через прокси. Включил «Во всех браузерах»: сайты работают в Chrome, Edge и других`);
+      }
     }
   };
 
@@ -213,6 +237,11 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
 
   const presetsLeft = PRESETS.filter((p) => !sites?.some((s) => s.name === p.name));
   const sitesBrowsers = status?.browsers.filter((b) => b.mode === "sites") ?? [];
+  // Сайты работают, если стоит системный PAC или браузер закреплён в режиме
+  // «Только сайты». Браузер «весь трафик» в счёт не идёт: он ходит через
+  // мост, только когда открыт через Clod Helper.
+  const notWired =
+    !!status?.supported && !!sites?.some((s) => s.enabled) && !(pac?.enabled && pac.active) && sitesBrowsers.length === 0;
   const peekSite = sites?.find((s) => s.id === peek) ?? null;
 
   return (
@@ -256,6 +285,70 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
           </Button>
         </motion.div>
       )}
+
+      {/* ── Сайты есть, но ни один браузер не подключён — они не работают ── */}
+      {notWired && (
+        <motion.div
+          variants={fadeInUp}
+          className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-vb-warn/35 bg-vb-warn/[0.05] px-4 py-3"
+        >
+          <p className="text-[12px] leading-snug text-vb-warn">
+            {pac?.enabled
+              ? `Сайты не работают: настройку сбросила другая программа${pac.foreign ? ` (${pac.foreign})` : ""}`
+              : "Сайты пока не работают — ни один браузер не подключён"}
+          </p>
+          {pac?.supported ? (
+            <Button variant="secondary" size="sm" onClick={() => void togglePac(true)} disabled={busy !== null}>
+              {busy === "pac" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              {pac.enabled ? "Вернуть" : "Включить"}
+            </Button>
+          ) : (
+            <Button variant="secondary" size="sm" onClick={onOpenApps}>
+              Приложения
+            </Button>
+          )}
+        </motion.div>
+      )}
+
+      {/* ── Расширения-перехватчики: сайты в этих браузерах не работают ── */}
+      {extensions.map((b) => (
+        <motion.div
+          key={b.path}
+          variants={fadeInUp}
+          className="mt-4 rounded-xl border border-vb-warn/35 bg-vb-warn/[0.05] px-4 py-3"
+        >
+          <p className="text-[12px] leading-snug text-vb-warn">
+            В {b.name} сайты не работают: прокси перехватывает{" "}
+            {b.extensions.length === 1 ? "расширение" : "расширения"}{" "}
+            {b.extensions.map((e) => `«${e.name}»`).join(", ")}. Отключите{" "}
+            {b.extensions.length === 1 ? "его" : "их"} или выберите в{" "}
+            {b.extensions.length === 1 ? "нём" : "них"} режим «Выключено»
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {b.extensions.map((e) => (
+              <Button
+                key={e.id}
+                variant="secondary"
+                size="sm"
+                disabled={busy !== null}
+                onClick={() =>
+                  void (async () => {
+                    setError(null);
+                    try {
+                      await sitesOpenExtension(b.path, e.id);
+                      setNote(`Открыл «${e.name}» в ${b.name} — отключите его и вернитесь сюда`);
+                    } catch (err) {
+                      setError(String(err));
+                    }
+                  })()
+                }
+              >
+                Открыть «{e.name}»
+              </Button>
+            ))}
+          </div>
+        </motion.div>
+      ))}
 
       {/* ── Добавление ── */}
       <AnimatePresence>
@@ -358,13 +451,27 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
         )}
       </motion.section>
 
-      {/* ── Во всех браузерах: системная автонастройка прокси (Windows) ── */}
+      {/* ── Расширенные настройки: «Во всех браузерах» (Windows) ── */}
       {pac?.supported && (
         <motion.section variants={fadeInUp} className="mt-6">
-          <div className="mb-2 px-1">
-            <h2 className="text-[15px] font-semibold text-vb-fg">Браузеры</h2>
-          </div>
-          <div className="surface-card divide-y divide-vb-border/70">
+          <button
+            type="button"
+            onClick={() => setAdvanced((v) => !v)}
+            className="flex items-center gap-1.5 px-1 text-[12px] text-vb-silver-faint transition-colors hover:text-vb-silver"
+          >
+            <ChevronDown className={cn("h-3.5 w-3.5 transition-transform duration-200", advanced && "rotate-180")} />
+            Расширенные настройки
+          </button>
+          <AnimatePresence initial={false}>
+            {advanced && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: "auto" }}
+                exit={{ opacity: 0, height: 0 }}
+                transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+                className="overflow-hidden"
+              >
+          <div className="surface-card mt-2 divide-y divide-vb-border/70">
             <div className="flex items-center justify-between gap-4 px-4 py-3">
               <div className="min-w-0">
                 <div className="text-[14px] font-semibold text-vb-fg">Во всех браузерах</div>
@@ -410,20 +517,22 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
             )}
           </div>
           <p className="mt-2 px-1 text-[11px] leading-snug text-vb-silver-faint">
-            Обычные сайты идут напрямую, мимо моста. Если в браузере стоит прокси-расширение или VPN, он может
-            перебить эту настройку — тогда закрепите браузер ниже
+            Включено — сайты из списка идут через прокси в любом браузере, обычные сайты — напрямую, мимо
+            моста. Выключите, только если настраиваете прокси в браузерах сами
           </p>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </motion.section>
       )}
 
-      {/* ── Закрепить в браузере (политика Chromium) ── */}
+      {/* ── Браузер (macOS: системной автонастройки пока нет — закрепление политикой) ── */}
+      {pac && !pac.supported && (
       <motion.section variants={fadeInUp} className="mt-6">
         <div className="mb-2 px-1">
-          <h2 className="text-[15px] font-semibold text-vb-fg">{pac?.supported ? "Закрепить в браузере" : "Браузер"}</h2>
+          <h2 className="text-[15px] font-semibold text-vb-fg">Браузер</h2>
           <p className="text-[12px] text-vb-silver-faint">
-            {pac?.supported
-              ? "Необязательно: политика браузера главнее расширений и VPN. Chrome, Edge, Brave, Chromium"
-              : "Сайты работают в Chrome, Edge, Brave и Chromium в режиме «Только сайты»"}
+            Сайты работают в Chrome, Edge, Brave и Chromium в режиме «Только сайты»
           </p>
         </div>
         <div className="surface-card divide-y divide-vb-border/70">
@@ -434,9 +543,7 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
           ) : status.browsers.length === 0 ? (
             <div className="flex items-center justify-between gap-3 px-4 py-3">
               <span className="text-[12px] leading-snug text-vb-silver-faint">
-                {pac?.supported
-                  ? "Чтобы закрепить браузер, добавьте его в «Приложения»"
-                  : "Добавьте браузер в «Приложения» — через него и пойдут сайты"}
+                Добавьте браузер в «Приложения» — через него и пойдут сайты
               </span>
               <Button variant="secondary" size="sm" onClick={onOpenApps}>
                 Приложения
@@ -478,9 +585,10 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
         </div>
         <p className="mt-2 px-1 text-[11px] leading-snug text-vb-silver-faint">
           Открывайте браузер через «Приложения» или включите в его настройках «Всегда через мост» — тогда
-          сайты пойдут через прокси, даже если браузер открыт из «Пуска»
+          сайты пойдут через прокси, даже если браузер открыт из Dock
         </p>
       </motion.section>
+      )}
 
       {peekSite && (
         <PeekDialog
