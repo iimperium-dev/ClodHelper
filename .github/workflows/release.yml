@@ -141,10 +141,12 @@ jobs:
       # «Что нового» — из src/whats-new.json (его же показывает приложение
       # после обновления). Окно обновления в старой версии читает пункты
       # секции «## Что нового» из описания релиза (updater::highlights).
-      - name: Checkout whats-new
+      - name: Checkout whats-new and manifest script
         uses: actions/checkout@v4
         with:
-          sparse-checkout: src/whats-new.json
+          sparse-checkout: |
+            src/whats-new.json
+            scripts/make-manifest.mjs
           sparse-checkout-cone-mode: false
           path: src-repo
 
@@ -176,11 +178,20 @@ jobs:
           } > release-notes.md
           cat release-notes.md
 
-      - name: Create GitHub Release
+      # Манифест обновления: программа (≥0.8.9) проверяет обновления по нему —
+      # releases/latest/download/latest.json идёт через сайт и CDN, без лимита
+      # API. Подписывает его разработчик у себя (scripts/publish-release.mjs:
+      # пересчитывает суммы, подписывает ed25519, публикует) — поэтому релиз
+      # создаётся черновиком: пользователи не увидят его до подписи.
+      # SHA256SUMS.txt и описание — для старых версий (≤0.8.8), они читают API.
+      - name: Update manifest
+        run: node src-repo/scripts/make-manifest.mjs release-assets "$GITHUB_REF_NAME" src-repo/src/whats-new.json
+
+      - name: Create GitHub Release (draft until signed)
         uses: softprops/action-gh-release@v2
         with:
           files: release-assets/*
           generate_release_notes: true
-          draft: false
+          draft: true
           prerelease: false
           body_path: release-notes.md

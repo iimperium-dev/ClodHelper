@@ -393,8 +393,9 @@ export interface UpdateInfo {
   notes: string;
   /** Установщик для этой ОС (.dmg или -setup.exe). */
   url: string;
-  sums_url: string;
-  /** Пункты «Что нового» из описания релиза. */
+  /** SHA-256 установщика из подписанного манифеста. */
+  sha256: string;
+  /** Пункты «Что нового» этой версии. */
   highlights?: string[];
 }
 
