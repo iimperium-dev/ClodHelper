@@ -84,6 +84,16 @@ pub struct Settings {
     /// «Что нового». None — сборки до этого поля (или первый запуск).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_version_seen: Option<String>,
+    /// Рассылки разработчика (последний скачанный notices.json) — колокольчик
+    /// виден и без сети.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notices_cache: Vec<crate::notices::Notice>,
+    /// Прочитанные уведомления (id рассылок и «update-X.Y.Z»).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notices_read: Vec<String>,
+    /// Рассылки, уже всплывавшие в углу экрана (повторно не всплывают).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notices_toasted: Vec<String>,
     /// «Сайты во всех браузерах»: системная автонастройка прокси (PAC моста).
     #[serde(default)]
     pub system_pac: bool,
@@ -349,6 +359,46 @@ pub fn set_saved_proxy_env(
 ) -> Result<Settings, String> {
     with_settings(|s| {
         s.saved_proxy_env = value;
+        Ok(())
+    })
+}
+
+pub fn set_notices_cache(list: Vec<crate::notices::Notice>) -> Result<Settings, String> {
+    with_settings(|s| {
+        // Отметки о прочтении — только для живых id: файл рассылок может
+        // похудеть, а список прочитанного не должен расти вечно.
+        let alive: Vec<String> = list.iter().map(|n| n.id.clone()).collect();
+        s.notices_read.retain(|id| id.starts_with("update-") || alive.contains(id));
+        s.notices_toasted.retain(|id| alive.contains(id));
+        s.notices_cache = list;
+        Ok(())
+    })
+}
+
+pub fn mark_notices_read(ids: &[String]) -> Result<Settings, String> {
+    with_settings(|s| {
+        for id in ids {
+            if !s.notices_read.contains(id) {
+                s.notices_read.push(id.clone());
+            }
+        }
+        // Обновления: держим отметки только о последних версиях.
+        let updates: Vec<usize> = s.notices_read.iter().enumerate().filter(|(_, i)| i.starts_with("update-")).map(|(n, _)| n).collect();
+        if updates.len() > 5 {
+            let drop: Vec<String> = updates[..updates.len() - 5].iter().map(|&n| s.notices_read[n].clone()).collect();
+            s.notices_read.retain(|i| !drop.contains(i));
+        }
+        Ok(())
+    })
+}
+
+pub fn mark_notices_toasted(ids: &[String]) -> Result<Settings, String> {
+    with_settings(|s| {
+        for id in ids {
+            if !s.notices_toasted.contains(id) {
+                s.notices_toasted.push(id.clone());
+            }
+        }
         Ok(())
     })
 }

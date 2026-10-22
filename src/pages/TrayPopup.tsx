@@ -13,16 +13,19 @@ import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { isMac } from "../lib/platform";
 import { StatusOrb } from "../components/StatusOrb";
 import { NumberTicker } from "../components/NumberTicker";
+import { listen } from "@tauri-apps/api/event";
 import {
+  noticesList,
   quitApp,
   shimRestart,
   shimStart,
   shimStop,
   shimTest,
   showMainWindow,
+  updateToastOpen,
 } from "../lib/api";
 import { formatUptime, useStatus } from "../lib/status";
-import type { ShimTestResult } from "../lib/types";
+import type { NoticeItem, ShimTestResult } from "../lib/types";
 import { cn } from "../lib/cn";
 
 /*
@@ -80,6 +83,26 @@ export function TrayPopup() {
 
   const openApp = async () => {
     await showMainWindow();
+    await getCurrentWindow().hide();
+  };
+
+  // Обновление и непрочитанные уведомления — индикатор прямо в попапе.
+  const [notices, setNotices] = useState<NoticeItem[]>([]);
+  useEffect(() => {
+    const reload = () => void noticesList().then(setNotices).catch(() => {});
+    reload();
+    const subs = [
+      listen("notices:changed", reload),
+      listen("update:available", reload),
+      getCurrentWindow().onFocusChanged(({ payload }) => payload && reload()),
+    ];
+    return () => subs.forEach((s) => void s.then((f) => f()));
+  }, []);
+  const update = notices.find((n) => n.kind === "update");
+  const unreadNews = notices.filter((n) => n.kind === "news" && !n.read).length;
+  const openUpdate = async () => {
+    if (!update) return;
+    await updateToastOpen(update.id);
     await getCurrentWindow().hide();
   };
 
@@ -172,6 +195,22 @@ export function TrayPopup() {
             </button>
           )}
         </div>
+
+        {/* Вышло обновление — светящаяся строка */}
+        {update && (
+          <button
+            type="button"
+            onClick={() => void openUpdate()}
+            className="mx-4 mb-3 flex items-center gap-2.5 rounded-lg border border-vb-emerald/30 bg-vb-emerald/[0.07] px-3 py-2 text-left transition-colors hover:bg-vb-emerald/[0.12] active:scale-[0.98]"
+          >
+            <span className="relative flex h-2 w-2 shrink-0">
+              <span className="absolute inset-0 animate-ping rounded-full bg-vb-emerald/70 [animation-duration:2s]" />
+              <span className="relative h-2 w-2 rounded-full bg-vb-emerald shadow-[0_0_8px_var(--color-vb-emerald-glow)]" />
+            </span>
+            <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-vb-fg">{update.title}</span>
+            <span className="shrink-0 text-[11px] font-semibold text-vb-emerald">Обновить</span>
+          </button>
+        )}
 
         {/* Ошибка последнего действия */}
         <AnimatePresence>
@@ -289,6 +328,14 @@ export function TrayPopup() {
           >
             <ExternalLink className="h-3.5 w-3.5" />
             Открыть приложение
+            {unreadNews > 0 && (
+              <span
+                className="tnum grid h-4 min-w-4 place-items-center rounded-full bg-vb-emerald px-1 text-[9px] font-bold text-black"
+                title={`Новых уведомлений: ${unreadNews}`}
+              >
+                {unreadNews}
+              </span>
+            )}
           </button>
           <button
             type="button"

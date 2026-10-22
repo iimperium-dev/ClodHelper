@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { X } from "lucide-react";
 import { LogoTile } from "../components/UpdateDialog";
-import { updateLatest, updateToastClose, updateToastOpen } from "../lib/api";
+import { noticesList, updateLatest, updateToastClose, updateToastOpen } from "../lib/api";
 import { isMac } from "../lib/platform";
 
 /** Сколько уведомление висит само; наведение мыши ставит отсчёт на паузу. */
@@ -15,7 +15,11 @@ const LIFETIME_MS = 12_000;
   забирает фокус (update_notify.rs), звук играет Rust.
 */
 export function UpdateToast() {
-  const [version, setVersion] = useState<string | null>(null);
+  // Что показываем: «update-X» — вышло обновление, иначе id рассылки.
+  const id = new URLSearchParams(window.location.search).get("n") ?? "";
+  const isUpdate = id === "" || id.startsWith("update-");
+  const [title, setTitle] = useState(isUpdate ? "Доступно обновление" : "");
+  const [sub, setSub] = useState(isUpdate ? "Нажмите, чтобы посмотреть, что нового" : "");
   const [shown, setShown] = useState(true);
   const [hover, setHover] = useState(false);
   const left = useRef(LIFETIME_MS);
@@ -23,8 +27,20 @@ export function UpdateToast() {
   const [, tick] = useState(0);
 
   useEffect(() => {
-    void updateLatest().then((i) => setVersion(i?.version ?? null)).catch(() => {});
-  }, []);
+    if (isUpdate) {
+      void updateLatest()
+        .then((i) => i && setTitle(`Доступно обновление ${i.version}`))
+        .catch(() => {});
+    } else {
+      void noticesList()
+        .then((list) => {
+          const n = list.find((x) => x.id === id);
+          setTitle(n?.title ?? "Новое уведомление");
+          setSub(n?.body || "Нажмите, чтобы открыть");
+        })
+        .catch(() => setTitle("Новое уведомление"));
+    }
+  }, [id, isUpdate]);
 
   // Отсчёт до автоскрытия (стоит, пока курсор над карточкой).
   useEffect(() => {
@@ -51,7 +67,7 @@ export function UpdateToast() {
     // Windows — угол над панелью задач (снизу), macOS — под строкой меню.
     <div className={`flex h-screen w-screen justify-end p-4 ${isMac ? "items-start" : "items-end"}`}>
       <AnimatePresence
-        onExitComplete={() => void (action.current === "open" ? updateToastOpen() : updateToastClose())}
+        onExitComplete={() => void (action.current === "open" ? updateToastOpen(id || undefined) : updateToastClose())}
       >
         {shown && (
           <motion.div
@@ -84,10 +100,8 @@ export function UpdateToast() {
                 <span>·</span>
                 <span>сейчас</span>
               </div>
-              <div className="truncate text-[14px] font-semibold text-vb-fg">
-                {version ? `Доступно обновление ${version}` : "Доступно обновление"}
-              </div>
-              <div className="truncate text-[12px] text-vb-silver-dim">Нажмите, чтобы посмотреть, что нового</div>
+              <div className="truncate text-[14px] font-semibold text-vb-fg">{title}</div>
+              <div className="truncate text-[12px] text-vb-silver-dim">{sub}</div>
             </div>
             <button
               type="button"

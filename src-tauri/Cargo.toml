@@ -1,6 +1,6 @@
 [package]
 name = "clod-helper"
-version = "0.8.2"
+version = "0.8.3"
 description = "Установщик Claude Code и Claude Desktop через прокси"
 authors = ["iimperium"]
 edition = "2021"

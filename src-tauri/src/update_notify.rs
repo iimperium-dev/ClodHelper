@@ -21,8 +21,9 @@ const TOAST_H: f64 = 120.0;
 const MARGIN: f64 = 8.0;
 
 /// Первая проверка — не сразу: при входе в систему сеть поднимается не
-/// мгновенно, да и уведомление на старте теряется среди прочих.
-const FIRST_CHECK: Duration = Duration::from_secs(45);
+/// мгновенно. Но и не поздно: рассылку, пропущенную с выключенным
+/// компьютером, человек должен увидеть вскоре после запуска.
+const FIRST_CHECK: Duration = Duration::from_secs(15);
 const CHECK_EVERY: Duration = Duration::from_secs(6 * 3600);
 
 /// Последнее найденное обновление — окно-уведомление и главное окно берут
@@ -44,6 +45,9 @@ pub fn spawn_watcher(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(FIRST_CHECK).await;
         loop {
+            // Всплывает одно уведомление за проверку (самое важное): обновление
+            // главнее рассылки; остальное ждёт в колокольчике.
+            let mut toast: Option<String> = None;
             match crate::updater::check().await {
                 Ok(found) => {
                     remember(&found);
@@ -51,21 +55,35 @@ pub fn spawn_watcher(app: AppHandle) {
                         let _ = app.emit("update:available", &info);
                         let notified = crate::settings::load().update_notified;
                         if notified.as_deref() != Some(info.version.as_str()) {
-                            show_toast(&app);
+                            toast = Some(crate::notices::update_id(&info.version));
                             let _ = crate::settings::set_update_notified(&info.version);
                         }
                     }
                 }
                 Err(e) => tracing::info!("фоновая проверка обновлений: {e}"),
             }
+            match crate::notices::fetch().await {
+                Ok(fresh) => {
+                    if let Some(n) = fresh.iter().find(|n| crate::notices::worth_toast(n)) {
+                        toast.get_or_insert_with(|| n.id.clone());
+                    }
+                    let ids: Vec<String> = fresh.iter().map(|n| n.id.clone()).collect();
+                    let _ = crate::settings::mark_notices_toasted(&ids);
+                }
+                Err(e) => tracing::info!("рассылки: {e}"),
+            }
+            let _ = app.emit("notices:changed", crate::notices::unread());
+            if let Some(id) = toast {
+                show_toast(&app, &id);
+            }
             tokio::time::sleep(CHECK_EVERY).await;
         }
     });
 }
 
-/// Показать уведомление: Windows — справа внизу над панелью задач, macOS —
-/// справа вверху под строкой меню (там же, где системные уведомления).
-pub fn show_toast(app: &AppHandle) {
+/// Показать уведомление `id` (обновление «update-X» или рассылка): Windows —
+/// справа внизу над панелью задач, macOS — справа вверху под строкой меню.
+pub fn show_toast(app: &AppHandle, id: &str) {
     // Старое уведомление (о прошлой версии) — закрыть, новое создаётся с нуля:
     // так анимация появления проигрывается каждый раз.
     if let Some(old) = app.get_webview_window(TOAST_LABEL) {
@@ -79,7 +97,10 @@ pub fn show_toast(app: &AppHandle) {
     if let Err(e) = tauri::WebviewWindowBuilder::new(
         app,
         TOAST_LABEL,
-        tauri::WebviewUrl::App("index.html?view=toast".into()),
+        tauri::WebviewUrl::App(
+            format!("index.html?view=toast&n={}", url::form_urlencoded::byte_serialize(id.as_bytes()).collect::<String>())
+                .into(),
+        ),
     )
     .title("Clod Helper")
     .inner_size(TOAST_W, TOAST_H)
@@ -121,11 +142,18 @@ pub fn close_toast(app: &AppHandle) {
     }
 }
 
-/// Клик по уведомлению: главное окно + окно обновления в нём.
-pub fn open_from_toast(app: &AppHandle) {
+/// Клик по уведомлению: главное окно и в нём — окно обновления (для
+/// «update-…») или колокольчик с этой рассылкой. Кликнутое — прочитано.
+pub fn open_from_toast(app: &AppHandle, id: &str) {
     close_toast(app);
     crate::show_main_window(app);
-    if let Some(info) = latest() {
-        let _ = app.emit_to("main", "update:open", &info);
+    let _ = crate::settings::mark_notices_read(&[id.to_string()]);
+    let _ = app.emit("notices:changed", crate::notices::unread());
+    if id.starts_with("update-") {
+        if let Some(info) = latest() {
+            let _ = app.emit_to("main", "update:open", &info);
+        }
+    } else {
+        let _ = app.emit_to("main", "notices:open", id);
     }
 }

@@ -33,6 +33,7 @@ import type {
   SeenHosts,
   SystemPacStatus,
   BrowserProxyExtensions,
+  NoticeItem,
 } from "./types";
 
 export async function detectNode(): Promise<NodeInfo> {
@@ -415,9 +416,19 @@ export function updateLatest(): Promise<UpdateInfo | null> {
   return invoke<UpdateInfo | null>("update_latest");
 }
 
-/** Клик по уведомлению: главное окно + окно обновления. */
-export function updateToastOpen(): Promise<void> {
-  return invoke<void>("update_toast_open");
+/** Клик по уведомлению (id — «update-X» или рассылка): главное окно + что нужно. */
+export function updateToastOpen(id?: string): Promise<void> {
+  return invoke<void>("update_toast_open", { id: id ?? null });
+}
+
+/** Колокольчик: обновление и рассылки. */
+export function noticesList(): Promise<NoticeItem[]> {
+  return invoke<NoticeItem[]>("notices_list");
+}
+
+/** Отметить прочитанными; пустой список — все. */
+export function noticesMarkRead(ids: string[]): Promise<NoticeItem[]> {
+  return invoke<NoticeItem[]>("notices_mark_read", { ids });
 }
 
 export function updateToastClose(): Promise<void> {

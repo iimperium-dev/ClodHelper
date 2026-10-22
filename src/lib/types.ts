@@ -363,6 +363,18 @@ export interface UpdateInfo {
   highlights?: string[];
 }
 
+/** Элемент колокольчика: обновление или рассылка разработчика (notices.rs). */
+export interface NoticeItem {
+  id: string;
+  kind: "update" | "news";
+  /** YYYY-MM-DD; у обновления пусто. */
+  date: string;
+  title: string;
+  body: string;
+  link: string | null;
+  read: boolean;
+}
+
 /** Ход установки обновления (событие "update:progress"). */
 export interface UpdateProgress {
   stage: "download" | "verify" | "install" | "restart";
