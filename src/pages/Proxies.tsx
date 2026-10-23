@@ -222,7 +222,7 @@ export function Proxies() {
     setPool(await proxiesGet().catch(() => []));
     setLabels(await proxyLabelsGet().catch(() => ({})));
     setAssignments(await proxyAssignmentsGet().catch(() => ({})));
-    setBackups(await proxyBackupsGet().catch(() => ({})));
+    setBackups((await proxyBackupsGet().catch(() => null)) ?? {});
     setApps(await appsList().catch(() => []));
   }, []);
 
@@ -295,7 +295,7 @@ export function Proxies() {
       setAssignments(await proxyAssignmentsGet().catch(() => ({})));
       setLabels(await proxyLabelsGet().catch(() => ({})));
       // Резервы едут за своим прокси, удалённый уносит свои — перечитываем.
-      setBackups(await proxyBackupsGet().catch(() => ({})));
+      setBackups((await proxyBackupsGet().catch(() => null)) ?? {});
       return true;
     } catch (e) {
       setError(String(e));
@@ -324,7 +324,7 @@ export function Proxies() {
     setBusy(`bk:${parent}`);
     setError(null);
     try {
-      setBackups(await proxyBackupsSet(parent, list));
+      setBackups((await proxyBackupsSet(parent, list)) ?? {});
       await refresh();
       await refreshPoolPing();
       setLabels(await proxyLabelsGet().catch(() => ({})));

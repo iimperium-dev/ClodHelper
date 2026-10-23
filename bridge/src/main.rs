@@ -305,10 +305,117 @@ mod procmap {
     }
 }
 
-#[cfg(not(windows))]
+/// macOS: владелец соединения ищется через libproc — сначала по пути
+/// отбираются процессы исключённых программ (дёшево), и только у них
+/// перебираются TCP-сокеты: локальный порт = порт клиента, удалённый =
+/// наш вход. Разметка struct socket_fdinfo (<sys/proc_info.h>) одинакова на
+/// arm64 и x86_64 — смещения сверены компилятором.
+#[cfg(target_os = "macos")]
 mod procmap {
-    pub fn client_exe(_: u16, _: u16) -> Option<String> {
-        None
+    use std::ffi::c_void;
+
+    const PROC_PIDLISTFDS: i32 = 1;
+    const PROX_FDTYPE_SOCKET: u32 = 2;
+    const PROC_PIDFDSOCKETINFO: i32 = 3;
+    const SOCKINFO_TCP: i32 = 2;
+    const SOCKET_FDINFO_SIZE: usize = 792;
+    const OFF_KIND: usize = 256;
+    const OFF_FPORT: usize = 264;
+    const OFF_LPORT: usize = 268;
+
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    struct ProcFdInfo {
+        fd: i32,
+        fdtype: u32,
+    }
+
+    fn pids() -> Vec<i32> {
+        // SAFETY: буфер на n pid; libproc пишет не больше переданного размера.
+        unsafe {
+            let n = libc::proc_listallpids(std::ptr::null_mut(), 0);
+            if n <= 0 {
+                return Vec::new();
+            }
+            let mut buf = vec![0i32; n as usize + 64];
+            let got = libc::proc_listallpids(buf.as_mut_ptr() as *mut c_void, (buf.len() * 4) as i32);
+            buf.truncate(got.max(0) as usize);
+            buf
+        }
+    }
+
+    /// Путь к исполняемому файлу процесса в виде norm_dir: «\», нижний регистр.
+    fn path(pid: i32) -> Option<String> {
+        let mut buf = vec![0u8; 4096];
+        // SAFETY: буфер PROC_PIDPATHINFO_MAXSIZE (4×MAXPATHLEN).
+        let n = unsafe { libc::proc_pidpath(pid, buf.as_mut_ptr() as *mut c_void, buf.len() as u32) };
+        if n <= 0 {
+            return None;
+        }
+        buf.truncate(n as usize);
+        Some(String::from_utf8_lossy(&buf).replace('/', "\\").to_lowercase())
+    }
+
+    fn port(raw: &[u8], off: usize) -> u16 {
+        // insi_lport/insi_fport — int, порт в сетевом порядке в младших 16 битах.
+        let v = i32::from_ne_bytes(raw[off..off + 4].try_into().unwrap_or_default());
+        u16::from_be(v as u16)
+    }
+
+    /// Есть ли у процесса TCP-сокет local=client_port → remote=our_port.
+    fn owns(pid: i32, client_port: u16, our_port: u16) -> bool {
+        // SAFETY: размеры буферов передаются libproc; читаем только записанное.
+        unsafe {
+            let bytes = libc::proc_pidinfo(pid, PROC_PIDLISTFDS, 0, std::ptr::null_mut(), 0);
+            if bytes <= 0 {
+                return false;
+            }
+            let mut fds = vec![ProcFdInfo::default(); bytes as usize / std::mem::size_of::<ProcFdInfo>() + 16];
+            let size = (fds.len() * std::mem::size_of::<ProcFdInfo>()) as i32;
+            let got = libc::proc_pidinfo(pid, PROC_PIDLISTFDS, 0, fds.as_mut_ptr() as *mut c_void, size);
+            if got <= 0 {
+                return false;
+            }
+            fds.truncate(got as usize / std::mem::size_of::<ProcFdInfo>());
+            let mut info = vec![0u8; SOCKET_FDINFO_SIZE];
+            for f in fds.iter().filter(|f| f.fdtype == PROX_FDTYPE_SOCKET) {
+                let n = libc::proc_pidfdinfo(
+                    pid,
+                    f.fd,
+                    PROC_PIDFDSOCKETINFO,
+                    info.as_mut_ptr() as *mut c_void,
+                    SOCKET_FDINFO_SIZE as i32,
+                );
+                if n as usize != SOCKET_FDINFO_SIZE {
+                    continue;
+                }
+                let kind = i32::from_ne_bytes(info[OFF_KIND..OFF_KIND + 4].try_into().unwrap_or_default());
+                if kind == SOCKINFO_TCP && port(&info, OFF_LPORT) == client_port && port(&info, OFF_FPORT) == our_port {
+                    return true;
+                }
+            }
+            false
+        }
+    }
+
+    /// Соединение client_port → our_port открыла программа из папок `dirs`.
+    pub fn client_in(client_port: u16, our_port: u16, dirs: &[String]) -> bool {
+        let me = std::process::id() as i32;
+        pids().into_iter().filter(|&p| p > 0 && p != me).any(|pid| {
+            path(pid).is_some_and(|exe| dirs.iter().any(|d| exe.starts_with(d.as_str()))) && owns(pid, client_port, our_port)
+        })
+    }
+
+    #[cfg(test)]
+    pub fn owner_path(client_port: u16, our_port: u16) -> Option<String> {
+        pids().into_iter().find(|&pid| owns(pid, client_port, our_port)).and_then(path)
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+mod procmap {
+    pub fn client_in(_: u16, _: u16, _: &[String]) -> bool {
+        false
     }
 }
 
@@ -322,7 +429,10 @@ fn client_bypassed(state: &State, client: &TcpStream) -> bool {
         return false;
     }
     let (Ok(peer), Ok(local)) = (client.peer_addr(), client.local_addr()) else { return false };
-    procmap::client_exe(peer.port(), local.port()).is_some_and(|exe| bypass.iter().any(|dir| exe.starts_with(dir.as_str())))
+    #[cfg(windows)]
+    return procmap::client_exe(peer.port(), local.port()).is_some_and(|exe| bypass.iter().any(|dir| exe.starts_with(dir.as_str())));
+    #[cfg(not(windows))]
+    procmap::client_in(peer.port(), local.port(), &bypass)
 }
 
 /// Хост, к которому ходили через вход сайтов («Подсмотреть»).
@@ -2605,6 +2715,24 @@ async fn serve_listener(listener: TcpListener, state: Arc<State>, sem: Arc<Semap
         // Слот берётся внутри handle и без ожидания: раньше accept-цикл
         // стоял до 5с в ожидании слота, и в это время не отвечал даже /healthz.
         tokio::spawn(handle(client, state.clone(), sem.clone()));
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod procmap_tests {
+    /// Владелец локального соединения находится по портам — это сам тест.
+    #[test]
+    fn finds_own_connection_owner() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let ours = l.local_addr().unwrap().port();
+        let c = std::net::TcpStream::connect(("127.0.0.1", ours)).unwrap();
+        let _accepted = l.accept().unwrap();
+        let client = c.local_addr().unwrap().port();
+        let me = std::env::current_exe().unwrap().to_string_lossy().replace('/', "\\").to_lowercase();
+        assert_eq!(super::procmap::owner_path(client, ours).as_deref(), Some(me.as_str()));
+        // client_in пропускает свой процесс (мост сам себе не клиент) — поэтому
+        // проверяем отбор через чужую папку: ни один процесс там не держит сокет.
+        assert!(!super::procmap::client_in(client, ours, &["\\nonexistent\\".into()]));
     }
 }
 

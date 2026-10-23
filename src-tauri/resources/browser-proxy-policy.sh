@@ -6,6 +6,9 @@
 # через мост, даже открытый из Dock, а WebRTC не раскрывает настоящий IP.
 #   ProxySettings      = { ProxyMode = fixed_servers; ProxyServer = <вход моста> }
 #   WebRtcIPHandling   = disable_non_proxied_udp
+# Режим «Сайты только в выбранных браузерах» — сервер «pac:<адрес PAC моста>»:
+#   ProxySettings      = { ProxyMode = pac_script; ProxyPacUrl = <адрес> }
+#   (WebRTC не трогаем: через мост идут только сайты из списка)
 #
 # Запись владения (что ключей не было) — в root-папке ClodHelper; чужие
 # значения этих ключей не перезаписываются (конфликт). Enable ставит службу
@@ -14,7 +17,7 @@
 #
 # Использование: sh browser-proxy-policy.sh Status|Enable|Disable|Restore <домен> [сервер]
 #   домен  — com.google.Chrome | com.brave.Browser | com.microsoft.Edge | org.chromium.Chromium
-#   сервер — 127.0.0.1:8890 (Enable)
+#   сервер — 127.0.0.1:8890 или pac:http://127.0.0.1:8887/proxy.pac (Enable)
 # Enable/Disable/Restore требуют root. Результат — одна строка JSON в stdout.
 
 ACTION="${1:-Status}"
@@ -39,9 +42,21 @@ has() { [ -f "$POLICY" ] && "$PB" -c "Print :$1" "$POLICY" >/dev/null 2>&1; }
 # Записанный нами сервер или пусто (записи нет).
 owner_server() { [ -e "$OWNER" ] && sed -n 's/^ClodHelper 1 \(.*\)$/\1/p' "$OWNER"; }
 
-# ours — оба ключа наши; absent — ни одного; foreign — что-то чужое.
+# PAC-режим: сервер вида pac:http://127.0.0.1:порт/proxy.pac.
+is_pac() { case "$1" in pac:http://127.0.0.1:*/proxy.pac) return 0 ;; esac; return 1; }
+
+# ours — наши ключи; absent — ни одного; foreign — что-то чужое.
+# В PAC-режиме WebRtcIPHandling не наш и в счёт не идёт.
 state() {
     srv=$(owner_server)
+    if is_pac "$srv"; then
+        if ! has ProxySettings; then echo absent; return; fi
+        if [ "$(get ProxySettings:ProxyMode)" = pac_script ] \
+            && [ "$(get ProxySettings:ProxyPacUrl)" = "${srv#pac:}" ]; then
+            echo ours; return
+        fi
+        echo foreign; return
+    fi
     if ! has ProxySettings && ! has WebRtcIPHandling; then echo absent; return; fi
     if [ -n "$srv" ] && [ "$(get ProxySettings:ProxyServer)" = "$srv" ] \
         && [ "$(get ProxySettings:ProxyMode)" = fixed_servers ] \
@@ -68,6 +83,14 @@ write_ours() {
     /bin/mkdir -p "/Library/Managed Preferences"
     "$PB" -c "Delete :ProxySettings" "$POLICY" >/dev/null 2>&1
     "$PB" -c "Add :ProxySettings dict" "$POLICY" >/dev/null 2>&1
+    if is_pac "$1"; then
+        "$PB" -c "Add :ProxySettings:ProxyMode string pac_script" "$POLICY" >/dev/null 2>&1
+        "$PB" -c "Add :ProxySettings:ProxyPacUrl string ${1#pac:}" "$POLICY" >/dev/null 2>&1
+        /usr/sbin/chown root:wheel "$POLICY" 2>/dev/null
+        /bin/chmod 644 "$POLICY" 2>/dev/null
+        /usr/bin/killall cfprefsd >/dev/null 2>&1 || true
+        return
+    fi
     "$PB" -c "Add :ProxySettings:ProxyMode string fixed_servers" "$POLICY" >/dev/null 2>&1
     "$PB" -c "Add :ProxySettings:ProxyServer string $1" "$POLICY" >/dev/null 2>&1
     "$PB" -c "Add :ProxySettings:ProxyBypassList string <local>" "$POLICY" >/dev/null 2>&1
@@ -132,6 +155,7 @@ esac
 if [ "$ACTION" = Enable ]; then
     case "$SERVER" in
         127.0.0.1:[0-9]*) ;;
+        pac:http://127.0.0.1:[0-9]*/proxy.pac) ;;
         *) fail "Ожидался вход моста 127.0.0.1:порт." ;;
     esac
     st=$(state)
@@ -140,7 +164,10 @@ if [ "$ACTION" = Enable ]; then
     printf 'ClodHelper 1 %s' "$SERVER" > "$OWNER" && /bin/chmod 644 "$OWNER" || fail "Не удалось сохранить запись владения."
     write_ours "$SERVER"
     [ "$(state)" = ours ] || fail "Не удалось подтвердить политику браузера."
-    if install_daemon; then
+    if is_pac "$SERVER"; then
+        install_daemon
+        NOTICE="Готово. Сайты из списка — через мост в этом браузере."
+    elif install_daemon; then
         NOTICE="Готово. Перезапустите браузер — дальше он всегда идёт через мост."
     else
         NOTICE="Готово. Перезапустите браузер. Автовосстановление не установилось."
@@ -153,7 +180,7 @@ fi
 /bin/rm -f "$DAEMON" "$DAEMON.tmp"
 if [ "$(state)" = ours ]; then
     "$PB" -c "Delete :ProxySettings" "$POLICY" >/dev/null 2>&1
-    "$PB" -c "Delete :WebRtcIPHandling" "$POLICY" >/dev/null 2>&1
+    is_pac "$(owner_server)" || "$PB" -c "Delete :WebRtcIPHandling" "$POLICY" >/dev/null 2>&1
     if [ "$("$PB" -c "Print" "$POLICY" 2>/dev/null | tr -d ' \n')" = "Dict{}" ]; then
         /bin/rm -f "$POLICY"
     fi

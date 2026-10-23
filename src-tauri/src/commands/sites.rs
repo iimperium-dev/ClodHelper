@@ -146,7 +146,8 @@ fn scope_browsers() -> Vec<ScopeBrowser> {
 
 fn scope_now() -> SitesScope {
     SitesScope {
-        supported: cfg!(target_os = "windows"),
+        // Windows — политика в реестре, macOS — Managed Preferences.
+        supported: cfg!(any(target_os = "windows", target_os = "macos")),
         selected: settings::load().sites_scope_selected,
         browsers: scope_browsers(),
     }

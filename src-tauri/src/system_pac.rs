@@ -1,4 +1,5 @@
-//! «Сайты во всех браузерах»: системная автонастройка прокси (PAC) Windows.
+//! «Сайты во всех браузерах»: системная автонастройка прокси (PAC) —
+//! Windows (WinInet) и macOS (networksetup, настройки каждой сети).
 //!
 //! Вместо того чтобы подключать каждый браузер к мосту, Windows получает
 //! адрес PAC-файла, который отдаёт сам мост (`/proxy.pac` на входе сайтов).
@@ -178,14 +179,148 @@ mod win {
 #[cfg(target_os = "windows")]
 pub use win::{read, write};
 
-#[cfg(not(target_os = "windows"))]
-pub fn read() -> Result<ProxyConf, String> {
-    Err("Пока только для Windows".into())
+/// macOS: системные настройки прокси каждой сети («Настройки → Сеть →
+/// Подробнее → Прокси»), через networksetup — без пароля администратора.
+/// Chrome, Edge, Brave, Safari и большинство программ берут прокси отсюда.
+/// Читаем действующие (scutil --proxy — то, что видят программы), пишем во
+/// все включённые сети: при переходе Wi-Fi ⇄ VPN настройка не теряется.
+#[cfg(target_os = "macos")]
+mod mac {
+    use super::{ProxyConf, AUTO_DETECT, AUTO_URL, DIRECT, MANUAL};
+    use std::process::Command;
+
+    fn networksetup(args: &[&str]) -> Result<String, String> {
+        let out = Command::new("/usr/sbin/networksetup")
+            .args(args)
+            .output()
+            .map_err(|e| format!("networksetup: {e}"))?;
+        let text = String::from_utf8_lossy(&out.stdout).to_string();
+        // networksetup пишет ошибки в stdout и всё равно выходит с 0.
+        if !out.status.success() || text.contains("** Error") {
+            return Err(format!("Не записать настройки прокси macOS: {}", text.trim()));
+        }
+        Ok(text)
+    }
+
+    /// Включённые сетевые службы (строки со «*» — выключены).
+    pub fn services() -> Result<Vec<String>, String> {
+        let text = networksetup(&["-listallnetworkservices"])?;
+        Ok(text
+            .lines()
+            .skip(1)
+            .filter(|l| !l.trim().is_empty() && !l.starts_with('*'))
+            .map(str::to_string)
+            .collect())
+    }
+
+    /// Разбор `scutil --proxy` (словарь «Ключ : значение», списки — по строкам).
+    pub fn parse_scutil(text: &str) -> ProxyConf {
+        let mut flags = DIRECT;
+        let (mut host, mut port, mut pac, mut exceptions) = (None, None, None, Vec::new());
+        let (mut http_on, mut pac_on, mut in_exceptions) = (false, false, false);
+        for line in text.lines().map(str::trim) {
+            if in_exceptions {
+                if line.starts_with('}') {
+                    in_exceptions = false;
+                } else if let Some((_, v)) = line.split_once(" : ") {
+                    exceptions.push(v.trim().to_string());
+                }
+                continue;
+            }
+            let Some((k, v)) = line.split_once(" : ") else { continue };
+            let v = v.trim();
+            match k.trim() {
+                "HTTPEnable" => http_on = v == "1",
+                "HTTPProxy" => host = Some(v.to_string()),
+                "HTTPPort" => port = Some(v.to_string()),
+                "ProxyAutoConfigEnable" => pac_on = v == "1",
+                "ProxyAutoConfigURLString" => pac = Some(v.to_string()),
+                "ProxyAutoDiscoveryEnable" if v == "1" => flags |= AUTO_DETECT,
+                "ExceptionsList" => in_exceptions = true,
+                _ => {}
+            }
+        }
+        let server = match (host, port) {
+            (Some(h), Some(p)) if !h.is_empty() => Some(format!("{h}:{p}")),
+            (Some(h), None) if !h.is_empty() => Some(h),
+            _ => None,
+        };
+        if http_on && server.is_some() {
+            flags |= MANUAL;
+        }
+        if pac_on && pac.as_deref().is_some_and(|u| !u.is_empty()) {
+            flags |= AUTO_URL;
+        }
+        ProxyConf {
+            flags,
+            server,
+            bypass: (!exceptions.is_empty()).then(|| exceptions.join(";")),
+            pac_url: pac.filter(|u| !u.is_empty()),
+        }
+    }
+
+    pub fn read() -> Result<ProxyConf, String> {
+        let out = Command::new("/usr/sbin/scutil")
+            .arg("--proxy")
+            .output()
+            .map_err(|e| format!("Не прочитать настройки прокси macOS: {e}"))?;
+        Ok(parse_scutil(&String::from_utf8_lossy(&out.stdout)))
+    }
+
+    pub fn write(conf: &ProxyConf) -> Result<(), String> {
+        let list = services()?;
+        if list.is_empty() {
+            return Err("Нет включённых сетевых служб".into());
+        }
+        let on = |b: bool| if b { "on" } else { "off" };
+        for svc in &list {
+            let s = svc.as_str();
+            match conf.pac_url.as_deref().filter(|u| conf.flags & AUTO_URL != 0 && !u.is_empty()) {
+                Some(url) => {
+                    networksetup(&["-setautoproxyurl", s, url])?;
+                }
+                None => {
+                    networksetup(&["-setautoproxystate", s, "off"])?;
+                }
+            }
+            let manual = conf
+                .server
+                .as_deref()
+                .filter(|_| conf.flags & MANUAL != 0)
+                .and_then(|srv| srv.rsplit_once(':'))
+                .filter(|(_, p)| p.parse::<u16>().is_ok());
+            match manual {
+                Some((host, port)) => {
+                    networksetup(&["-setwebproxy", s, host, port])?;
+                    networksetup(&["-setsecurewebproxy", s, host, port])?;
+                }
+                None => {
+                    networksetup(&["-setwebproxystate", s, "off"])?;
+                    networksetup(&["-setsecurewebproxystate", s, "off"])?;
+                }
+            }
+            networksetup(&["-setproxyautodiscovery", s, on(conf.flags & AUTO_DETECT != 0)])?;
+            if let Some(b) = conf.bypass.as_deref().filter(|b| !b.is_empty()) {
+                let mut args = vec!["-setproxybypassdomains", s];
+                args.extend(b.split(';').map(str::trim).filter(|d| !d.is_empty()));
+                networksetup(&args)?;
+            }
+        }
+        Ok(())
+    }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+pub use mac::{read, write};
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+pub fn read() -> Result<ProxyConf, String> {
+    Err("Не поддерживается на этой системе".into())
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn write(_: &ProxyConf) -> Result<(), String> {
-    Err("Пока только для Windows".into())
+    Err("Не поддерживается на этой системе".into())
 }
 
 /// Для UI: включено ли (намерение), стоит ли сейчас наш PAC, что чужое.
@@ -225,7 +360,10 @@ pub fn enable() -> Result<SystemPacStatus, String> {
 pub fn disable() -> Result<SystemPacStatus, String> {
     let saved = crate::settings::load().system_pac_saved;
     if read()?.is_ours() {
-        let restore = saved.unwrap_or(ProxyConf { flags: DIRECT | AUTO_DETECT, ..Default::default() });
+        // Без сохранённого — системное по умолчанию: на Windows «Автоматически
+        // определять параметры» включено, на macOS — нет.
+        let default_flags = if cfg!(target_os = "windows") { DIRECT | AUTO_DETECT } else { DIRECT };
+        let restore = saved.unwrap_or(ProxyConf { flags: default_flags, ..Default::default() });
         write(&restore)?;
     }
     crate::settings::set_system_pac(false)?;
@@ -300,6 +438,20 @@ mod tests {
         assert!(corp.foreign().unwrap().contains("corp"));
         // Флаг ручного прокси без адреса — не чужая настройка.
         assert_eq!(ProxyConf { flags: DIRECT | MANUAL, ..Default::default() }.foreign(), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_scutil_parse() {
+        let text = "<dictionary> {\n  ExceptionsList : <array> {\n    0 : *.local\n    1 : 169.254/16\n  }\n  HTTPEnable : 1\n  HTTPPort : 2080\n  HTTPProxy : 127.0.0.1\n  ProxyAutoConfigEnable : 1\n  ProxyAutoConfigURLString : http://127.0.0.1:8887/proxy.pac?v=5\n}\n";
+        let c = mac::parse_scutil(text);
+        assert!(c.is_ours());
+        assert_eq!(c.server.as_deref(), Some("127.0.0.1:2080"));
+        assert_eq!(c.bypass.as_deref(), Some("*.local;169.254/16"));
+        assert_eq!(c.flags & AUTO_DETECT, 0);
+        let off = mac::parse_scutil("<dictionary> {\n  HTTPEnable : 0\n  ProxyAutoConfigEnable : 0\n}\n");
+        assert_eq!(off.flags, DIRECT);
+        assert_eq!(off.foreign(), None);
     }
 
     /// Живое чтение (ничего не меняет): cargo test live_system_proxy -- --ignored --nocapture

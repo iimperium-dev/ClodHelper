@@ -636,6 +636,11 @@ pub fn relaunch(p: &AppProfile) -> Result<(), String> {
         if is_running() {
             return Err(format!("{} не закрылся — закройте его и нажмите «Открыть»", p.name));
         }
+        // Chromium-браузер: вернуть все окна и вкладки, как было до закрытия
+        // (на Windows это делает закрытие «как перед обновлением системы»).
+        if crate::browser_ext::is_chromium_browser(&exe) {
+            return open_app_with(&exe, &launch_proxy_url(p), &p.name, &["--restore-last-session"]);
+        }
     }
     launch(p)
 }
@@ -821,12 +826,19 @@ pub fn open_in_browser(p: &AppProfile, url: &str) -> Result<(), String> {
 
 #[cfg(not(target_os = "windows"))]
 pub(crate) fn open_app(app: &str, proxy: &str, name: &str) -> Result<(), String> {
+    open_app_with(app, proxy, name, &[])
+}
+
+/// open_app с дополнительными флагами запуска.
+#[cfg(not(target_os = "windows"))]
+fn open_app_with(app: &str, proxy: &str, name: &str, extra: &[&str]) -> Result<(), String> {
     let out = Command::new("/usr/bin/open")
         .arg("-a")
         .arg(app)
         .arg("--args")
         .arg(format!("--proxy-server={proxy}"))
         .arg(WEBRTC_GUARD)
+        .args(extra)
         .output()
         .map_err(|e| format!("Не удалось запустить {name}: {e}"))?;
     if out.status.success() {

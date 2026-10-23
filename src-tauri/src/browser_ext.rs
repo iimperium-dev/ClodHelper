@@ -240,6 +240,15 @@ pub struct BypassApp {
 /// → «…\Local\1browser» (двойная папка — весь продукт с его ядрами профилей).
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn app_dir(exe: &str) -> Option<String> {
+    // macOS: программа — это бандл .app целиком (исполняемые файлы и
+    // помощники браузера лежат внутри него).
+    #[cfg(not(target_os = "windows"))]
+    {
+        let i = exe.find(".app/").map(|i| i + 4).or_else(|| exe.trim_end_matches('/').ends_with(".app").then(|| exe.trim_end_matches('/').len()))?;
+        let bundle = &exe[..i];
+        return (Path::new(bundle).components().count() >= 3).then(|| bundle.to_string());
+    }
+    #[cfg_attr(not(target_os = "windows"), allow(unreachable_code))]
     let p = Path::new(exe);
     let mut dir = p.parent()?.to_path_buf();
     if dir.file_name().is_some_and(|n| n.eq_ignore_ascii_case("Application")) {
@@ -306,7 +315,64 @@ pub fn bypass_candidates() -> Vec<BypassApp> {
             push(name, exe, true, &mut out);
         }
     }
+    // macOS: установленные браузеры и запущенные программы, которые
+    // зарегистрированы как браузер (открывают ссылки http) — так находятся и
+    // антидетект-браузеры, которых нет в списке известных.
+    #[cfg(not(target_os = "windows"))]
+    {
+        let running: Vec<String> = std::process::Command::new("/bin/ps")
+            .args(["-axo", "comm="])
+            .output()
+            .map(|o| {
+                let mut v: Vec<String> = String::from_utf8_lossy(&o.stdout).lines().filter_map(|l| app_dir(l.trim())).collect();
+                v.sort();
+                v.dedup();
+                v
+            })
+            .unwrap_or_default();
+        let me = std::env::current_exe().ok().and_then(|e| e.to_str().and_then(app_dir));
+        let push = |name: String, bundle: String, out: &mut Vec<BypassApp>| {
+            if me.as_deref() == Some(bundle.as_str()) || out.iter().any(|a| a.dir == bundle) {
+                return;
+            }
+            let is_running = running.iter().any(|r| r == &bundle);
+            out.push(BypassApp { name, dir: bundle, running: is_running });
+        };
+        for (name, app) in installed_browsers() {
+            push(name, app.trim_end_matches('/').to_string(), &mut out);
+        }
+        for bundle in running.iter().filter(|b| opens_http(b)) {
+            let name = Path::new(bundle).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+            push(name, bundle.clone(), &mut out);
+        }
+    }
     out
+}
+
+/// macOS: бандл — Chromium-браузер (известный или открывающий ссылки http
+/// и собранный на Chromium: внутри есть «… Framework.framework»).
+#[cfg(not(target_os = "windows"))]
+pub fn is_chromium_browser(app: &str) -> bool {
+    let Some(bundle) = app_dir(app) else { return false };
+    if installed_browsers().iter().any(|(_, a)| a.trim_end_matches('/') == bundle) {
+        return true;
+    }
+    let chromium = std::fs::read_dir(Path::new(&bundle).join("Contents/Frameworks"))
+        .map(|rd| rd.flatten().any(|e| e.file_name().to_string_lossy().ends_with(" Framework.framework")))
+        .unwrap_or(false);
+    chromium && opens_http(&bundle)
+}
+
+/// macOS: бандл объявляет схему http в CFBundleURLTypes — это браузер.
+#[cfg(not(target_os = "windows"))]
+fn opens_http(bundle: &str) -> bool {
+    let plist = Path::new(bundle).join("Contents/Info.plist");
+    std::process::Command::new("/usr/bin/plutil")
+        .args(["-extract", "CFBundleURLTypes", "json", "-o", "-"])
+        .arg(&plist)
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_lowercase().contains("\"http\""))
+        .unwrap_or(false)
 }
 
 /// Открыть страницу расширения в браузере по его пути (Windows: адрес
@@ -368,6 +434,36 @@ pub fn open_extension_page(app_path: &str, ext_id: &str) -> Result<(), String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_app_dir_is_bundle() {
+        assert_eq!(
+            app_dir("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome").as_deref(),
+            Some("/Applications/Google Chrome.app")
+        );
+        assert_eq!(app_dir("/Applications/Arc.app").as_deref(), Some("/Applications/Arc.app"));
+        assert_eq!(app_dir("/usr/bin/curl"), None, "не бандл — не программа для исключения");
+    }
+
+    /// Живая проверка: cargo test live_chromium -- --ignored --nocapture
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore]
+    fn live_chromium() {
+        for a in ["Google Chrome", "Comet", "1browser", "Telegram", "Claude", "Visual Studio Code"] {
+            println!("{a}: {}", is_chromium_browser(&format!("/Applications/{a}.app")));
+        }
+    }
+
+    /// Живой список (ничего не меняет): cargo test live_bypass_candidates -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn live_bypass_candidates() {
+        for c in bypass_candidates() {
+            println!("{} | {} | running={}", c.name, c.dir, c.running);
+        }
+    }
 
     #[test]
     fn finds_only_enabled_proxy_controllers() {

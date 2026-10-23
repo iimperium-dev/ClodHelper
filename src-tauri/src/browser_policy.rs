@@ -294,9 +294,57 @@ pub fn apply_pac(enable: &[&str], disable: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
+/// macOS: «Сайты только в выбранных браузерах» — PAC моста политикой
+/// одним браузерам и снятие с других за ОДНО окно пароля. Результат
+/// проверяется по фактическим Managed Preferences, а не по выводу root.
 #[cfg(not(target_os = "windows"))]
-pub fn apply_pac(_: &[&str], _: &[&str]) -> Result<(), String> {
-    Err("Пока только для Windows".into())
+pub fn apply_pac(enable: &[&str], disable: &[&str]) -> Result<(), String> {
+    use base64::Engine;
+    if enable.is_empty() && disable.is_empty() {
+        return Ok(());
+    }
+    if enable.iter().chain(disable).any(|d| policy_domain_known(d).is_none()) {
+        return Err("Неизвестный браузер".into());
+    }
+    let enc = base64::engine::general_purpose::STANDARD.encode(SCRIPT);
+    // Домены — из белого списка, сервер — константа: в shell ничего чужого.
+    let mut shell = String::new();
+    if !enable.is_empty() {
+        shell.push_str(&format!(
+            "/bin/mkdir -p '{dir}' && /usr/sbin/chown root:wheel '{dir}' && /bin/chmod 755 '{dir}' && \
+             /bin/echo {enc} | /usr/bin/base64 -D > '{dir}/browser-proxy-policy.sh'; ",
+            dir = "/Library/Application Support/ClodHelper",
+        ));
+    }
+    for d in enable {
+        shell.push_str(&format!("/bin/echo {enc} | /usr/bin/base64 -D | /bin/sh -s -- Enable {d} {PAC_SERVER} >/dev/null; "));
+    }
+    for d in disable {
+        shell.push_str(&format!("/bin/echo {enc} | /usr/bin/base64 -D | /bin/sh -s -- Disable {d} >/dev/null; "));
+    }
+    shell.push_str("exit 0");
+    let apple = format!(
+        "do shell script \"{shell}\" with prompt \"Clod Helper настраивает сайты в выбранных браузерах.\" with administrator privileges"
+    );
+    let out = std::process::Command::new("/usr/bin/osascript")
+        .args(["-e", &apple])
+        .output()
+        .map_err(|e| format!("Не удалось запросить права администратора: {e}"))?;
+    if String::from_utf8_lossy(&out.stderr).contains("-128") {
+        return Err("Запрос пароля отменён".into());
+    }
+    for d in enable {
+        let st = status(d)?;
+        if !(st.configured && st.server == PAC_SERVER) {
+            return Err(st.conflict.unwrap_or_else(|| "Не удалось подтвердить политику браузера".into()));
+        }
+    }
+    for d in disable {
+        if status(d)?.managed {
+            return Err("Не удалось снять политику браузера".into());
+        }
+    }
+    Ok(())
 }
 
 /// Windows: включить/снять одним окном UAC. Прежние значения политики

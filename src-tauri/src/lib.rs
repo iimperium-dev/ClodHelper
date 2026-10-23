@@ -373,7 +373,7 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<monitor::TrayHandles> {
 /// на подкласс NSPanel (canBecomeKeyWindow = YES), стиль — nonactivatingPanel;
 /// плюс: на всех рабочих столах, поверх полноэкранных, уровень всплывающего меню.
 #[cfg(target_os = "macos")]
-fn mac_popup_window(win: &tauri::WebviewWindow) -> bool {
+pub(crate) fn mac_popup_window(win: &tauri::WebviewWindow) -> bool {
     use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
     use objc2::{msg_send, sel};
     use std::sync::OnceLock;
@@ -438,6 +438,24 @@ fn mac_highlight_tray(app: &tauri::AppHandle, on: bool) {
             }
         }
     });
+}
+
+/// macOS: показать поверх всего, не делая окно ключевым (уведомление не
+/// забирает ввод у программы, где человек печатает).
+#[cfg(target_os = "macos")]
+pub(crate) fn mac_order_front(win: &tauri::WebviewWindow) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    let Ok(ptr) = win.ns_window() else { return };
+    if ptr.is_null() {
+        return;
+    }
+    // SAFETY: живой NSWindow этого окна, главный поток (вызывается из
+    // обработчиков событий приложения).
+    unsafe {
+        let w = &*(ptr as *const AnyObject);
+        let _: () = msg_send![w, orderFrontRegardless];
+    }
 }
 
 /// macOS: показать панель поверх всего и сделать её ключевой — без

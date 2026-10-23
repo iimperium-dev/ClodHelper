@@ -142,7 +142,7 @@ pub fn show_toast(app: &AppHandle, id: &str) {
     // печатал), а ShowWindow в обход Tauri ломал его состояние — окну
     // возвращались рамка и заголовок. Проверено вживую на Windows 11.
     let (x, y) = corner(app);
-    if let Err(e) = tauri::WebviewWindowBuilder::new(
+    match tauri::WebviewWindowBuilder::new(
         app,
         TOAST_LABEL,
         tauri::WebviewUrl::App(
@@ -161,11 +161,28 @@ pub fn show_toast(app: &AppHandle, id: &str) {
     .skip_taskbar(true)
     .focused(false)
     .focusable(false)
-    .visible(true)
+    // macOS: сначала невидимым — класс и уровень окна меняются до показа.
+    .visible(!cfg!(target_os = "macos"))
     .build()
     {
-        tracing::warn!("не удалось создать окно уведомления: {e}");
-        return;
+        Ok(_win) => {
+            // macOS: неактивирующая панель на всех рабочих столах и поверх
+            // полноэкранных приложений (как меню значка) — уведомление видно
+            // где угодно и не переключает пользователя на стол Clod Helper.
+            // AppKit — только из главного потока (показ идёт из фоновой задачи).
+            #[cfg(target_os = "macos")]
+            {
+                let w = _win.clone();
+                let _ = _win.run_on_main_thread(move || {
+                    crate::mac_popup_window(&w);
+                    crate::mac_order_front(&w);
+                });
+            }
+        }
+        Err(e) => {
+            tracing::warn!("не удалось создать окно уведомления: {e}");
+            return;
+        }
     }
     crate::sound::chime();
 }

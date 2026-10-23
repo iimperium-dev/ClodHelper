@@ -5,6 +5,11 @@
 //
 // Программа (≥0.8.9) проверяет обновления по нему, а ставит — только если
 // манифест подписан разработчиком (scripts/publish-release.mjs).
+//
+// Пункты «Что нового» (src/whats-new.json) — строка (для всех) или
+// { "text": "…", "platforms": ["mac"] | ["windows"] }. У каждой ОС в
+// манифесте свой список: пустой — в релизе для неё ничего нового, и
+// программа на этой ОС (≥0.8.11) обновление не предлагает.
 
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -26,22 +31,30 @@ function entry(suffix) {
   return { file: name.replaceAll(" ", "."), sha256 };
 }
 
+const notes = JSON.parse(readFileSync(whatsNew, "utf8"));
+const items = notes[version]?.items ?? [];
+/** Пункты для ОС ("windows" | "mac"): строки — всем, объекты — своим. */
+const itemsFor = (os) =>
+  items
+    .filter((i) => typeof i === "string" || (i.platforms ?? []).includes(os))
+    .map((i) => (typeof i === "string" ? i : i.text));
+
 const platforms = {};
 const win = entry("_x64-setup.exe");
 const mac = entry("_universal.dmg");
-if (win) platforms["windows-x86_64"] = win;
-if (mac) platforms["darwin-universal"] = mac;
+if (win) platforms["windows-x86_64"] = { ...win, highlights: itemsFor("windows") };
+if (mac) platforms["darwin-universal"] = { ...mac, highlights: itemsFor("mac") };
 if (!Object.keys(platforms).length) {
   console.error("нет ни одного установщика");
   process.exit(1);
 }
 
-const notes = JSON.parse(readFileSync(whatsNew, "utf8"));
+// Общий список — для версий до 0.8.11, которые не знают пунктов по ОС.
 const manifest = {
   version,
   tag,
   pub_date: new Date().toISOString(),
-  highlights: notes[version]?.items ?? [],
+  highlights: items.map((i) => (typeof i === "string" ? i : i.text)),
   platforms,
 };
 writeFileSync(join(dir, "latest.json"), JSON.stringify(manifest, null, 2) + "\n");

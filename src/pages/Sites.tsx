@@ -32,7 +32,11 @@ import {
 import { useStatus } from "../lib/status";
 import type { BrowserProxyExtensions, BypassApp, SitesScope, SeenHost, SiteEntry, SitesStatus, SystemPacStatus } from "../lib/types";
 import { fadeInUp, staggerContainer } from "../lib/motion";
+import { isMac } from "../lib/platform";
 import { cn } from "../lib/cn";
+
+/** Кто берёт системные настройки прокси (для подписей «Во всех браузерах»). */
+const BROWSERS = isMac ? "Chrome, Safari, Edge, Firefox и другие" : "Chrome, Edge, Firefox и другие";
 
 /** Вход сайтов моста (mirror tasks::SITES_PORT). */
 const SITES_SERVER = "127.0.0.1:8887";
@@ -608,7 +612,7 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
         )}
       </motion.section>
 
-      {/* ── Расширенные настройки: «Во всех браузерах» (Windows) ── */}
+      {/* ── Расширенные настройки: «Во всех браузерах» (системный PAC: Windows и macOS) ── */}
       {pac?.supported && (
         <motion.section variants={fadeInUp} className="mt-6">
           <button
@@ -669,10 +673,10 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
                   {!status?.supported
                     ? "Сначала обновите мост — кнопка выше"
                     : pac.enabled && pac.active
-                      ? "Chrome, Edge, Firefox и другие: сайты из списка — через прокси"
+                      ? `${BROWSERS}: сайты из списка — через прокси`
                       : pac.enabled
                         ? `Настройку сбросила другая программа${pac.foreign ? ` (${pac.foreign})` : ""}`
-                        : "Chrome, Edge, Firefox и другие — без настройки каждого браузера"}
+                        : `${BROWSERS} — без настройки каждого браузера`}
                 </div>
               </div>
               {pac.enabled && !pac.active ? (
@@ -691,7 +695,7 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
             </div>
             {!pac.enabled && pac.foreign && (
               <p className="px-4 py-2.5 text-[11px] leading-snug text-vb-warn">
-                В Windows уже задан {pac.foreign}. Включение заменит его, выключение — вернёт как было
+                В {isMac ? "macOS" : "Windows"} уже задан {pac.foreign}. Включение заменит его, выключение — вернёт как было
               </p>
             )}
           </div>

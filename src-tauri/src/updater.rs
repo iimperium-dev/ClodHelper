@@ -69,6 +69,12 @@ struct ManifestFile {
     /// Имя файла в релизе (как его назвал GitHub — пробелы стали точками).
     file: String,
     sha256: String,
+    /// «Что нового» именно для этой ОС (manifest ≥0.8.11). Пустой список —
+    /// в релизе для этой ОС ничего нового: обновление не предлагаем, люди не
+    /// получают уведомление о версии, которая им ничего не даёт. Нет поля —
+    /// старый манифест: берём общий список.
+    #[serde(default)]
+    highlights: Option<Vec<String>>,
 }
 
 /// "0.6.0" / "v0.6.1" → (0, 6, 1).
@@ -139,6 +145,9 @@ fn update_from(m: Manifest, current: &str, platform: &str) -> Option<UpdateInfo>
         return None;
     }
     let f = m.platforms.get(platform)?;
+    if f.highlights.as_ref().is_some_and(|h| h.is_empty()) {
+        return None;
+    }
     let sha = f.sha256.to_lowercase();
     let safe_name = !f.file.is_empty() && !f.file.contains(['/', '\\']) && !f.file.contains("..");
     if !safe_name || sha.len() != 64 || !sha.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -149,7 +158,7 @@ fn update_from(m: Manifest, current: &str, platform: &str) -> Option<UpdateInfo>
         version: m.version,
         notes: String::new(),
         sha256: sha,
-        highlights: m.highlights.into_iter().take(12).collect(),
+        highlights: f.highlights.clone().unwrap_or(m.highlights).into_iter().take(12).collect(),
     })
 }
 /// Скачать установщик и проверить его SHA-256. Возвращает имя файла и байты.
@@ -397,6 +406,26 @@ mod tests {
         assert!(update_from(manifest("0.9.0", "v0.9.0", "../evil.exe", &sha), "0.8.8", "windows-x86_64").is_none());
         assert!(update_from(manifest("0.9.0", "v0.9.0", exe, "abc"), "0.8.8", "windows-x86_64").is_none());
         assert!(update_from(manifest("0.9.0", "v0.9.0", exe, &sha), "0.8.8", "linux").is_none());
+
+        // Свои пункты у ОС: пусто — для этой ОС ничего нового, не предлагаем.
+        let per_os: Manifest = serde_json::from_value(serde_json::json!({
+            "version": "0.9.0", "tag": "v0.9.0", "highlights": ["Только Windows"],
+            "platforms": {
+                "windows-x86_64": { "file": exe, "sha256": sha, "highlights": ["Только Windows"] },
+                "darwin-universal": { "file": "Clod.Helper_0.9.0_universal.dmg", "sha256": "b".repeat(64), "highlights": [] },
+            }
+        }))
+        .unwrap();
+        assert!(update_from(per_os, "0.8.8", "darwin-universal").is_none(), "Mac не зовём на версию только для Windows");
+        let per_os: Manifest = serde_json::from_value(serde_json::json!({
+            "version": "0.9.0", "tag": "v0.9.0", "highlights": ["Общее", "Для Mac"],
+            "platforms": {
+                "darwin-universal": { "file": "Clod.Helper_0.9.0_universal.dmg", "sha256": "b".repeat(64), "highlights": ["Общее", "Для Mac"] },
+                "windows-x86_64": { "file": exe, "sha256": sha, "highlights": ["Общее"] },
+            }
+        }))
+        .unwrap();
+        assert_eq!(update_from(per_os, "0.8.8", "windows-x86_64").unwrap().highlights, ["Общее"]);
         assert!(parse_ver("v0.7.0") > parse_ver("0.6.0"));
         assert!(parse_ver("0.6.10") > parse_ver("0.6.9"));
         assert_eq!(urlencoding_decode("Clod%20Helper_0.6.0.dmg"), "Clod Helper_0.6.0.dmg");

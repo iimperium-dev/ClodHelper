@@ -27,7 +27,8 @@ export function NotificationBell() {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const bellRef = useRef<HTMLButtonElement | null>(null);
 
-  const reload = useCallback(() => void noticesList().then(setItems).catch(() => {}), []);
+  // Пустой ответ (null) — пустой список: колокольчик не должен ронять окно.
+  const reload = useCallback(() => void noticesList().then((l) => setItems(l ?? [])).catch(() => {}), []);
 
   // Окно открыли — проверить рассылки сразу, не дожидаясь фоновой проверки.
   useEffect(() => {
@@ -71,7 +72,7 @@ export function NotificationBell() {
 
   const markRead = async (ids: string[]) => {
     setItems((prev) => prev.map((i) => (ids.length === 0 || ids.includes(i.id) ? { ...i, read: true } : i)));
-    setItems(await noticesMarkRead(ids).catch(() => items));
+    setItems((await noticesMarkRead(ids).catch(() => items)) ?? items);
   };
 
   const openUpdate = async (item: NoticeItem) => {

@@ -104,6 +104,18 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ""
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
 
+      # Своя постоянная подпись (самоподписанный сертификат из секретов):
+      # macOS узнаёт обновлённые clod-helper и clod-bridge и не показывает
+      # «Добавлены фоновые объекты» после каждого обновления. Без секретов
+      # шаг ничего не делает — сборка остаётся с подписью ad-hoc.
+      - name: Sign with own certificate
+        env:
+          CLOD_SIGN_P12_BASE64: ${{ secrets.MACOS_SIGN_P12 }}
+          CLOD_SIGN_P12_PASSWORD: ${{ secrets.MACOS_SIGN_P12_PASSWORD }}
+        run: |
+          B=src-tauri/target/universal-apple-darwin/release/bundle
+          sh scripts/sign-mac.sh "$B/macos/Clod Helper.app" "$(ls "$B"/dmg/*.dmg)"
+
       - name: Collect artifacts
         run: |
           mkdir -p release-assets
@@ -154,7 +166,8 @@ jobs:
         run: |
           v="${GITHUB_REF_NAME#v}"
           {
-            items=$(jq -r --arg v "$v" '.[$v].items[]? | "- " + .' src-repo/src/whats-new.json)
+            # Пункт — строка (для всех) или {text, platforms}: помечаем ОС.
+            items=$(jq -r --arg v "$v" '.[$v].items[]? | if type == "string" then "- " + . else "- " + .text + " (" + ((.platforms // []) | map(if . == "mac" then "macOS" else "Windows" end) | join(", ")) + ")" end' src-repo/src/whats-new.json)
             if [ -n "$items" ]; then
               printf '## Что нового\n\n%s\n\n' "$items"
             fi
