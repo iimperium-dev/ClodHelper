@@ -96,7 +96,7 @@ function proxyProblemLabel(proxies: ProxyState[]): string | null {
 }
 
 export function Sidebar({ view, onNavigate }: Props) {
-  const { status, health, healthErr, exeLegacy, orb, proxies } = useStatus();
+  const { status, health, healthErr, exeLegacy, orb, proxies, bridgeFile } = useStatus();
   const [expanded, setExpanded] = useState(readExpanded);
   const [logoHover, setLogoHover] = useState(false);
 
@@ -115,7 +115,9 @@ export function Sidebar({ view, onNavigate }: Props) {
   const running = status?.running ?? false;
   const statusLabel = loading
     ? "Проверяю…"
-    : !running
+    : bridgeFile && bridgeFile.kind !== "restored"
+      ? "Антивирус удаляет мост"
+      : !running
       ? "Мост остановлен"
       : proxyProblemLabel(proxies) ?? "Мост активен";
   const statusSub =

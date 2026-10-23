@@ -285,6 +285,8 @@ pub fn start() -> Result<(), String> {
     if status().running {
         return Ok(());
     }
+    // Файл моста пропал (антивирус) — вернуть из копии в программе.
+    crate::bridge_file::ensure(false)?;
 
     let mut task_error = None;
     if crate::tasks::is_registered() {

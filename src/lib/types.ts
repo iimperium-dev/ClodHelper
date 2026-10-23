@@ -387,6 +387,15 @@ export interface BrowserPolicyStatus {
   notice: string | null;
 }
 
+/** Файл моста пропал (антивирус): восстановлен / удаляется снова / нет копии. */
+export type BridgeFileIssueKind = "restored" | "removed_again" | "no_copy";
+
+export interface BridgeFileIssue {
+  kind: BridgeFileIssueKind;
+  /** Папки для исключений антивируса. */
+  dirs: string[];
+}
+
 /** Новая версия Clod Helper на GitHub. */
 export interface UpdateInfo {
   version: string;

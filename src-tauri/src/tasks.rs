@@ -480,6 +480,8 @@ pub fn bridge_exe_is_legacy() -> bool {
 /// если регистрация упала, старый автозапуск остаётся рабочим fallback'ом).
 #[cfg(target_os = "windows")]
 pub fn register(proxy_url: &str) -> Result<(), String> {
+    // Файл моста пропал (антивирус) — вернуть до регистрации: задаче нужен exe.
+    crate::bridge_file::ensure(false)?;
     let exe = shim::bridge_exe_path()
         .ok_or_else(|| "Не нашёл папку ClaudeDesktopProxy".to_string())?;
     if !exe.exists() {
@@ -743,6 +745,8 @@ mod launchd {
     /// plist только при bootstrap, поэтому загруженный агент выгружаем —
     /// вызывающие сразу делают shim::start/restart (как с задачей на Windows).
     pub fn register(proxy_url: &str) -> Result<(), String> {
+    // Файл моста пропал (антивирус) — вернуть до регистрации: задаче нужен exe.
+    crate::bridge_file::ensure(false)?;
         let exe = shim::bridge_exe_path()
             .ok_or_else(|| "Не нашёл папку ClaudeDesktopProxy".to_string())?;
         if !exe.exists() {
