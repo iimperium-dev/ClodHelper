@@ -239,6 +239,49 @@ pub async fn diagnostics_report() -> Result<String, String> {
         .map_err(|e| format!("Внутренняя ошибка: {e}"))
 }
 
+/// Проблема с файлом моста (удалён антивирусом и т.п.); None — всё в порядке.
+#[tauri::command]
+pub fn bridge_file_issue() -> Option<crate::bridge_file::Issue> {
+    crate::bridge_file::issue()
+}
+
+/// «Понятно» на сообщении «мост восстановлен».
+#[tauri::command]
+pub fn bridge_file_dismiss() {
+    crate::bridge_file::dismiss()
+}
+
+/// «Проверить снова»: человек разрешил файл / добавил исключение —
+/// восстановить мост (даже если антивирус только что удалял) и запустить.
+#[tauri::command]
+pub async fn bridge_file_retry() -> Result<Option<crate::bridge_file::Issue>, String> {
+    tokio::task::spawn_blocking(|| -> Result<(), String> {
+        crate::bridge_file::ensure(true)?;
+        shim::start()
+    })
+    .await
+    .map_err(|e| format!("Внутренняя ошибка: {e}"))??;
+    Ok(crate::bridge_file::issue())
+}
+
+/// Открыть «Безопасность Windows» → «Защита от вирусов и угроз» (журнал
+/// защиты и исключения — оттуда в один-два клика).
+#[tauri::command]
+pub fn open_windows_security() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer.exe")
+            .arg("windowsdefender://threat/")
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("Не удалось открыть «Безопасность Windows»: {e}"))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Только для Windows".into())
+    }
+}
+
 /// При запуске: встроенный мост новее установленного → обновить сразу.
 /// Без этого после обновления приложения мост оставался старым до ручного
 /// «Обновить мост» (а новые возможности — SOCKS, закреплённые входы —

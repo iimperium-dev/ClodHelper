@@ -3,6 +3,7 @@ import type {
   AppProfile,
   AppProfileStatus,
   AppSettings,
+  BridgeFileIssue,
   BridgeHealth,
   BridgeVersions,
   TelegramStatus,
@@ -394,6 +395,26 @@ export async function proxiesPing(): Promise<ProxyPing[]> {
 /** Имена (тэги) прокси: URL → имя. */
 export async function proxyLabelsGet(): Promise<Record<string, string>> {
   return invoke<Record<string, string>>("proxy_labels_get");
+}
+
+/** Проблема с файлом моста (удалён антивирусом); null — всё в порядке. */
+export async function bridgeFileIssue(): Promise<BridgeFileIssue | null> {
+  return invoke<BridgeFileIssue | null>("bridge_file_issue");
+}
+
+/** «Понятно» на сообщении «мост восстановлен». */
+export async function bridgeFileDismiss(): Promise<void> {
+  return invoke<void>("bridge_file_dismiss");
+}
+
+/** «Проверить снова»: восстановить мост и запустить. */
+export async function bridgeFileRetry(): Promise<BridgeFileIssue | null> {
+  return invoke<BridgeFileIssue | null>("bridge_file_retry");
+}
+
+/** Открыть «Безопасность Windows» → «Защита от вирусов и угроз». */
+export async function openWindowsSecurity(): Promise<void> {
+  return invoke<void>("open_windows_security");
 }
 
 /** Резервы прокси пула: URL прокси → его резервы по порядку. */

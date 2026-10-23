@@ -10,6 +10,7 @@ import {
 import { listen } from "@tauri-apps/api/event";
 import {
   bridgeExeLegacy,
+  bridgeFileIssue,
   bridgeHealth,
   bridgeTaskStatus,
   bridgeVersions,
@@ -18,6 +19,7 @@ import {
   shimStatus,
 } from "./api";
 import type {
+  BridgeFileIssue,
   BridgeHealth,
   BridgeTaskStatus,
   BridgeVersions,
@@ -182,6 +184,9 @@ interface StatusContextValue {
   refreshPoolPing: () => Promise<void>;
   /** Оптимистичная подмена env-статуса (после set/clear). */
   setEnv: (v: GlobalProxyEnv) => void;
+  /** Файл моста пропал (антивирус): восстановлен / удаляется снова / нет копии. */
+  bridgeFile: BridgeFileIssue | null;
+  setBridgeFile: (v: BridgeFileIssue | null) => void;
 }
 
 const StatusContext = createContext<StatusContextValue | null>(null);
@@ -208,6 +213,7 @@ export function StatusProvider({ children }: { children: ReactNode }) {
   const lastEvent = useRef(0);
   const [history, setHistory] = useState<TrafficSample[]>([]);
   const [poolPing, setPoolPing] = useState<ProxyPing[]>([]);
+  const [bridgeFile, setBridgeFile] = useState<BridgeFileIssue | null>(null);
   const lastTotal = useRef<number | null>(null);
   /** Поколение refresh: устаревший ответ (интервальный тик, обогнанный ручным
       refresh после действия) не должен перезатирать более свежее состояние —
@@ -306,6 +312,14 @@ export function StatusProvider({ children }: { children: ReactNode }) {
     [updateQuality],
   );
 
+  // Программа восстановила мост или антивирус удаляет его снова — сразу в UI.
+  useEffect(() => {
+    const un = listen<BridgeFileIssue | null>("bridge-file", (e) => setBridgeFile(e.payload));
+    return () => {
+      void un.then((f) => f());
+    };
+  }, []);
+
   useEffect(() => {
     const un = listen<BridgeHealth>("bridge-health", (e) => {
       lastEvent.current = Date.now();
@@ -361,6 +375,11 @@ export function StatusProvider({ children }: { children: ReactNode }) {
     if (full || !healthOk || t % PROCESS_SCAN_EVERY_TICKS === 0) {
       slow.push(shimStatus().then((v) => fresh() && setStatus(v)).catch(() => {}));
     }
+    // Мост не отвечает — не удалил ли его антивирус (событие могло прийти,
+    // пока окна не было).
+    if (full || !healthOk) {
+      slow.push(bridgeFileIssue().then((v) => fresh() && setBridgeFile(v)).catch(() => {}));
+    }
     await Promise.all(slow);
   }, [applyHealth]);
 
@@ -408,6 +427,8 @@ export function StatusProvider({ children }: { children: ReactNode }) {
         refresh,
         refreshPoolPing,
         setEnv,
+        bridgeFile,
+        setBridgeFile,
       }}
     >
       {children}

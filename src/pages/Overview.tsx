@@ -15,6 +15,7 @@ import { StatusOrb } from "../components/StatusOrb";
 import { NumberTicker } from "../components/NumberTicker";
 import { Sparkline } from "../components/Sparkline";
 import { UpdateBanner } from "../components/UpdateBanner";
+import { BridgeFileNotice } from "../components/BridgeFileNotice";
 import {
   bridgeTaskRegister,
   bridgeUpdate,
@@ -156,6 +157,7 @@ export function Overview({ onOpenProxies }: Props) {
     history,
     refresh,
     refreshPoolPing,
+    bridgeFile,
   } = useStatus();
 
   const [busy, setBusy] = useState<"start" | "stop" | "restart" | "test" | null>(null);
@@ -314,7 +316,9 @@ export function Overview({ onOpenProxies }: Props) {
               ? `работает ${formatUptime(health?.uptime_sec ?? status?.uptime_sec)}${issuesNote}`
               : loading
                 ? " "
-                : "Трафик не проксируется"}
+                : bridgeFile && bridgeFile.kind !== "restored"
+                  ? "Антивирус удалил файл моста"
+                  : "Трафик не проксируется"}
           </p>
         </div>
         {!loading &&
@@ -364,6 +368,9 @@ export function Overview({ onOpenProxies }: Props) {
           </motion.p>
         )}
       </AnimatePresence>
+
+      {/* Антивирус удалил мост: восстановлен сам / инструкция */}
+      <BridgeFileNotice className="mt-4" />
 
       {/* ── Выход в интернет: единственное место с IP ── */}
       {running && (

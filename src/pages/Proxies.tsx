@@ -8,32 +8,28 @@ import {
   Pencil,
   Plus,
   RefreshCw,
-  RotateCw,
   Trash2,
 } from "lucide-react";
 import { Button } from "../components/Button";
 import { CountryFlag } from "../components/CountryFlag";
 import {
   appsList,
-  bridgeUpdate,
   checkProxy,
   proxyBackupsGet,
   proxyBackupsSet,
   proxiesGet,
   proxiesSet,
   proxyAssignmentsGet,
-  proxyAssignmentsSet,
   proxyLabelsGet,
   proxyLabelSet,
 } from "../lib/api";
-import { ServiceLogo } from "../components/BrandLogos";
 import { ProxyInputField, useProxyInput } from "../components/ProxyInput";
 import { ProxyBackups } from "../components/ProxyBackups";
+import { BridgeFileNotice } from "../components/BridgeFileNotice";
 import { useStatus } from "../lib/status";
 import type { AppProfileStatus, ProxyCheckResult, ServiceGroup } from "../lib/types";
 import { fadeInUp, staggerContainer } from "../lib/motion";
 import { cn } from "../lib/cn";
-import { isMac } from "../lib/platform";
 
 /** Сервисы для назначений (mirror tasks::SERVICE_GROUPS в Rust). */
 const SERVICES: { id: ServiceGroup; name: string; sub: string }[] = [
@@ -197,7 +193,7 @@ export function ProxySelect({ value, pool, labels, disabled, onChange }: SelectP
   «сервис → прокси» через кастомный пикер, удаление с подтверждением.
 */
 export function Proxies() {
-  const { health, proxies, refresh, refreshPoolPing } = useStatus();
+  const { proxies, refresh, refreshPoolPing, bridgeFile } = useStatus();
 
   const [pool, setPool] = useState<string[] | null>(null);
   const [labels, setLabels] = useState<Record<string, string>>({});
@@ -221,8 +217,6 @@ export function Proxies() {
 
   const [confirmDel, setConfirmDel] = useState<number | null>(null);
   const confirmTimer = useRef<number | null>(null);
-
-  const [updatingBridge, setUpdatingBridge] = useState(false);
 
   const load = useCallback(async () => {
     setPool(await proxiesGet().catch(() => []));
@@ -378,23 +372,6 @@ export function Proxies() {
     await applyPool(next, `primary:${i}`);
   };
 
-  const handleAssign = async (group: ServiceGroup, value: number) => {
-    const next = { ...assignments };
-    if (value < 0) delete next[group];
-    else next[group] = value;
-    setAssignments(next);
-    setBusy(`assign:${group}`);
-    setError(null);
-    try {
-      await proxyAssignmentsSet(next);
-      await refresh();
-    } catch (e) {
-      setError(String(e));
-      setAssignments(await proxyAssignmentsGet().catch(() => ({})));
-    } finally {
-      setBusy(null);
-    }
-  };
 
   const startTagEdit = (i: number, url: string) => {
     setEditingTag(i);
@@ -410,25 +387,9 @@ export function Proxies() {
     }
   };
 
-  const handleBridgeUpdate = async () => {
-    setUpdatingBridge(true);
-    setError(null);
-    try {
-      await bridgeUpdate();
-      await refresh();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setUpdatingBridge(false);
-    }
-  };
 
   const stateFor = (url: string) => proxies.find((p) => p.url === url);
-  /** Назначения честно строгие (закрепление сильнее режима, без failover)
-      только с моста 1.2.0 — старее гейтим, чтобы UI не врал про «IP не меняется». */
-  const bridgeSupportsAssignments =
-    health !== null &&
-    health.version.localeCompare("1.2.0", undefined, { numeric: true }) >= 0;
+
 
   return (
     <motion.div
@@ -494,7 +455,12 @@ export function Proxies() {
         )}
       </AnimatePresence>
 
-      {error && (
+      {/* Антивирус удалил мост — чаще всего всплывает здесь, при добавлении
+          прокси (мост перезапускается). Блок объясняет и ведёт по шагам —
+          ту же ошибку отдельной красной строкой не дублируем. */}
+      <BridgeFileNotice className="mt-4" />
+
+      {error && !(bridgeFile && bridgeFile.kind !== "restored" && /Антивирус/.test(error)) && (
         <motion.p variants={fadeInUp} className="mt-3 text-[12px] text-vb-loss">
           {error}
         </motion.p>
@@ -784,70 +750,6 @@ export function Proxies() {
         )}
       </motion.section>
 
-      {/* ── Назначения по сервисам (Windows). На macOS прокси выбирается в
-          настройках каждого приложения («Приложения» → шестерёнка). ── */}
-      {!isMac && (
-      <motion.section variants={fadeInUp} className="mt-6">
-        <div className="mb-2 px-1">
-          <h2 className="text-[15px] font-semibold text-vb-fg">Назначения</h2>
-          <p className="text-[12px] text-vb-silver-faint">Сервис всегда выходит через выбранный прокси</p>
-        </div>
-
-        {!bridgeSupportsAssignments && health !== null && (
-          <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-vb-warn/30 bg-vb-warn/[0.05] p-3">
-            <p className="text-[12px] leading-snug text-vb-warn">
-              Для строгих назначений мосту нужна версия 1.2.0+ (сейчас {health.version}).
-            </p>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={handleBridgeUpdate}
-              disabled={updatingBridge}
-            >
-              {updatingBridge ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <RotateCw className="h-3.5 w-3.5" />
-              )}
-              Обновить мост
-            </Button>
-          </div>
-        )}
-
-        <div className="surface-card divide-y divide-vb-border/70">
-          {SERVICES.map(({ id, name, sub }) => {
-            const value = assignments[id] ?? -1;
-            const rowBusy = busy === `assign:${id}`;
-            return (
-              <div key={id} className="flex items-center gap-3 px-4 py-3">
-                <ServiceLogo id={id} />
-                <div className="min-w-0 flex-1">
-                  <div className="text-[14px] font-semibold text-vb-fg">{name}</div>
-                  <div className="mt-px text-[11px] text-vb-silver-faint">{sub}</div>
-                </div>
-                {rowBusy && (
-                  <Loader2 className="h-4 w-4 shrink-0 animate-spin text-vb-silver-dim" />
-                )}
-                <ProxySelect
-                  value={value}
-                  pool={pool ?? []}
-                  labels={labels}
-                  // Старый мост назначения игнорирует — активный контрол врал бы,
-                  // что закрепление работает (см. плашку «Обновить мост» выше).
-                  disabled={
-                    busy !== null ||
-                    pool === null ||
-                    pool.length === 0 ||
-                    !bridgeSupportsAssignments
-                  }
-                  onChange={(v) => void handleAssign(id, v)}
-                />
-              </div>
-            );
-          })}
-        </div>
-      </motion.section>
-      )}
     </motion.div>
   );
 }

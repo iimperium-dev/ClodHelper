@@ -1,5 +1,6 @@
 mod apps;
 mod autostart;
+mod bridge_file;
 mod claude_desktop;
 mod claude_policy;
 mod claude_proxy;
@@ -188,6 +189,10 @@ pub fn run() {
             commands::proxies_set,
             commands::proxy_assignments_get,
             commands::proxy_backups_get,
+            commands::bridge_file_issue,
+            commands::bridge_file_dismiss,
+            commands::bridge_file_retry,
+            commands::open_windows_security,
             commands::proxy_backups_set,
             commands::proxy_assignments_set,
             commands::sites_get,
@@ -225,6 +230,12 @@ pub fn run() {
             // мост → Claude Code теряет связь»). Фоновый поток, переживает любые
             // ошибки, поднимает шим за ~5с после падения. Второй эшелон после
             // RestartOnFailure Планировщика (тот работает и без нашего GUI).
+            // Где лежит встроенный мост — чтобы вернуть его, если антивирус
+            // удалит установленный (до watchdog: тот первым заметит пропажу).
+            bridge_file::init(
+                app.handle(),
+                commands::resolve_resource(app.handle(), shim::BRIDGE_EXE).ok(),
+            );
             shim::spawn_watchdog();
 
             // Миграция старых установок: .vbs в Startup → задача Планировщика
