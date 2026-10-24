@@ -18,6 +18,8 @@ import {
   browserPolicySet,
   browserPolicyStatus,
   checkProxy,
+  claudeTelemetryGet,
+  claudeTelemetrySet,
   proxiesGet,
   proxyAssignmentsGet,
   proxyAssignmentsSet,
@@ -207,6 +209,8 @@ export function AppSettingsModal({
   const [note, setNote] = useState<string | null>(null);
   const [policy, setPolicy] = useState<BrowserPolicyStatus | null>(null);
   const [guard, setGuard] = useState<LeakGuardStatus | null>(null);
+  /** Claude Desktop: мост не выпускает его телеметрию (null — ещё не знаем). */
+  const [telemetryOff, setTelemetryOff] = useState<boolean | null>(null);
   // Тело прокручено — под закреплённой шапкой появляется линия.
   const [scrolled, setScrolled] = useState(false);
   // Системные переменные прокси (Claude Code в терминале) — общее состояние.
@@ -231,6 +235,9 @@ export function AppSettingsModal({
       proxyAssignmentsGet().then(setAssign).catch(() => {}),
       browserPolicyStatus(appId).then(setPolicy).catch(() => setPolicy(null)),
       GUARD_OF[appId] ? leakGuardStatus().then(setGuard).catch(() => setGuard(null)) : Promise.resolve(),
+      appId === "claude-desktop"
+        ? claudeTelemetryGet().then(setTelemetryOff).catch(() => setTelemetryOff(null))
+        : Promise.resolve(setTelemetryOff(null)),
     ]);
   }, [appId]);
   useEffect(() => {
@@ -298,6 +305,15 @@ export function AppSettingsModal({
       setGuard(await leakGuardSet([...list]));
       return null;
     }, guardOn ? "Защита снята" : "Защита включена");
+  };
+
+  const toggleTelemetry = () => {
+    if (telemetryOff === null) return;
+    const next = !telemetryOff;
+    void run(async () => {
+      setTelemetryOff(await claudeTelemetrySet(next));
+      return null;
+    }, next ? "Телеметрия Claude больше не уходит" : "Телеметрия Claude снова отправляется");
   };
 
   const run = async (fn: () => Promise<unknown>, done?: string) => {
@@ -445,15 +461,35 @@ export function AppSettingsModal({
               </Section>
 
               {/* Защита от утечек (брандмауэр): Claude и Telegram — включается при подключении */}
-              {guardOf && guard && (
+              {((guardOf && guard) || telemetryOff !== null) && (
                 <Section>
-                  <div className="flex items-center justify-between gap-3 px-3.5 py-2.5">
-                    <span className="min-w-0">
-                      <span className="block text-[13px] text-vb-fg">Не пускать мимо прокси</span>
-                      <span className="block text-[11px] leading-snug text-vb-silver-faint">{guardOf.sub}</span>
-                    </span>
-                    <Toggle checked={guardOn} disabled={busy} onChange={toggleGuard} label="Не пускать мимо прокси" />
-                  </div>
+                  {guardOf && guard && (
+                    <div className="flex items-center justify-between gap-3 px-3.5 py-2.5">
+                      <span className="min-w-0">
+                        <span className="block text-[13px] text-vb-fg">Не пускать мимо прокси</span>
+                        <span className="block text-[11px] leading-snug text-vb-silver-faint">{guardOf.sub}</span>
+                      </span>
+                      <Toggle checked={guardOn} disabled={busy} onChange={toggleGuard} label="Не пускать мимо прокси" />
+                    </div>
+                  )}
+                  {/* Claude Desktop: отчёты об ошибках (имя компьютера, железо) — не выпускать */}
+                  {telemetryOff !== null && (
+                    <div className="flex items-center justify-between gap-3 px-3.5 py-2.5">
+                      <span className="min-w-0">
+                        <span className="block text-[13px] text-vb-fg">Не отправлять телеметрию</span>
+                        <span className="block text-[11px] leading-snug text-vb-silver-faint">
+                          Отчёты об ошибках с именем компьютера и железом (Sentry, Datadog) не уходят. Claude работает
+                          как обычно
+                        </span>
+                      </span>
+                      <Toggle
+                        checked={telemetryOff}
+                        disabled={busy}
+                        onChange={toggleTelemetry}
+                        label="Не отправлять телеметрию"
+                      />
+                    </div>
+                  )}
                 </Section>
               )}
 

@@ -327,3 +327,23 @@ pub(crate) async fn auto_update_bridge(app: AppHandle) {
         Err(e) => tracing::warn!("автообновление моста не удалось: {e}"),
     }
 }
+
+/// «Инструменты» → очистка данных аккаунта Claude: что найдено и сколько.
+#[tauri::command]
+pub async fn claude_wipe_scan() -> Result<crate::claude_wipe::Scan, String> {
+    tokio::task::spawn_blocking(crate::claude_wipe::scan)
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))
+}
+
+/// Закрыть Claude Desktop и удалить данные аккаунта (с Claude Code — по флагу).
+#[tauri::command]
+pub async fn claude_wipe_run(
+    include_desktop: bool,
+    include_code: bool,
+    include_chats: bool,
+) -> Result<crate::claude_wipe::WipeResult, String> {
+    tokio::task::spawn_blocking(move || crate::claude_wipe::wipe(include_desktop, include_code, include_chats))
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))?
+}

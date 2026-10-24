@@ -469,6 +469,55 @@ struct RulesFile {
     assignments: Option<std::collections::HashMap<String, usize>>,
     /// Резервы прокси: индекс прокси → индексы резервов по порядку.
     fallbacks: Option<std::collections::HashMap<String, Vec<usize>>>,
+    /// Домены, которые мост не выпускает никуда (телеметрия Claude: отчёты
+    /// об ошибках с именем компьютера и железом). Перечитываются на лету.
+    block_domains: Option<Vec<String>>,
+}
+
+// ─── Блокировка (телеметрия) ─────────────────────────────────────
+
+/// Заблокированные домены — общие для всех входов, меняются на лету.
+static BLOCKED: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(Vec::new());
+
+fn is_blocked(host: &str) -> bool {
+    BLOCKED.read().map(|b| b.iter().any(|d| host_matches(host, d))).unwrap_or(false)
+}
+
+/// block_domains из rules-файла; None — файл не читается/битый (оставляем прежнее).
+fn load_blocked(path: &str) -> Option<Vec<String>> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(Vec::new()),
+        Err(_) => return None,
+    };
+    let r: RulesFile = serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()?;
+    let mut v: Vec<String> = r.block_domains.unwrap_or_default().iter().map(|d| normalize_host(d)).collect();
+    v.retain(|d| !d.is_empty());
+    Some(v)
+}
+
+fn set_blocked(v: Vec<String>) {
+    if let Ok(mut g) = BLOCKED.write() {
+        *g = v;
+    }
+}
+
+/// Перечитывать блок-лист при изменении rules-файла (раз в 2с по mtime):
+/// тумблер в Clod Helper применяется без перезапуска моста.
+async fn watch_blocked(path: String, log: Arc<State>) {
+    let mut seen = file_mtime(&path);
+    loop {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let now = file_mtime(&path);
+        if now == seen {
+            continue;
+        }
+        seen = now;
+        if let Some(v) = load_blocked(&path) {
+            log.log(&format!("блокировка перечитана: {} доменов", v.len()));
+            set_blocked(v);
+        }
+    }
 }
 
 struct Upstream {
@@ -1940,6 +1989,14 @@ async fn handle(mut client: TcpStream, state: Arc<State>, sem: Arc<Semaphore>) {
     };
     req.host = normalize_host(&req.host);
 
+    // Заблокированное (телеметрия) не уходит никуда — ни через прокси, ни напрямую.
+    if is_blocked(&req.host) {
+        let _ = client
+            .write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .await;
+        return;
+    }
+
     state.total.fetch_add(1, Ordering::Relaxed);
     state.active.fetch_add(1, Ordering::Relaxed);
     let _guard = ActiveGuard(&state);
@@ -2172,6 +2229,10 @@ async fn handle_socks(mut client: TcpStream, state: Arc<State>, sem: Arc<Semapho
     let _guard = ActiveGuard(&state);
 
     let host = normalize_host(&host);
+    if is_blocked(&host) {
+        let _ = socks_reply(&mut client, SOCKS_CONNECTION_REFUSED).await;
+        return;
+    }
     let Pin::Pinned(i) = request_upstream(&state, &host) else {
         state.errors.fetch_add(1, Ordering::Relaxed);
         state.log_err("SOCKS: назначенный Telegram прокси вне пула — отказываю (IP менять нельзя)");
@@ -2477,6 +2538,9 @@ async fn main() {
     }
 
     let (mode, proxy_domains, direct_domains, assignments) = load_rules(args.rules.as_deref());
+    if let Some(p) = args.rules.as_deref() {
+        set_blocked(load_blocked(p).unwrap_or_default());
+    }
     apply_fallbacks(&mut upstreams, &load_fallbacks(args.rules.as_deref()));
     let sites = Arc::new(Sites::default());
     // Битый файл сайтов при старте — не повод не стартовать (см. watch_sites).
@@ -2620,6 +2684,9 @@ async fn main() {
     }
     if let Some(path) = args.sites.clone() {
         tokio::spawn(watch_sites(path, sites.clone(), state.clone()));
+    }
+    if let Some(path) = args.rules.clone() {
+        tokio::spawn(watch_blocked(path, state.clone()));
     }
     // Вход сайтов (браузер «только сайты»): всегда smart, помнит хосты.
     if let Some(addr) = args.sites_listen.as_deref() {
@@ -3718,6 +3785,35 @@ mod tests {
         let plain = test_state(RoutingPolicy::Rules, Vec::new());
         let out = single_request(Arc::new(plain), "GET /hosts HTTP/1.1\r\nHost: x\r\n\r\n".into()).await;
         assert!(String::from_utf8_lossy(&out).starts_with("HTTP/1.1 404"));
+    }
+
+    #[tokio::test]
+    async fn blocked_domains_are_refused_and_reloaded() {
+        let dir = std::env::temp_dir().join(format!("clod-block-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let rules = dir.join("rules.json");
+        std::fs::write(&rules, r#"{"mode":"smart","block_domains":["Blocked-Telemetry.invalid."]}"#).unwrap();
+        let p = rules.to_string_lossy().to_string();
+        set_blocked(load_blocked(&p).unwrap());
+        assert!(is_blocked("blocked-telemetry.invalid"));
+        assert!(is_blocked("o1.ingest.blocked-telemetry.invalid"), "поддомены тоже");
+        assert!(!is_blocked("notblocked-telemetry.invalid"));
+        let st = Arc::new(test_state(RoutingPolicy::Rules, Vec::new()));
+        for req in [
+            "CONNECT o1.blocked-telemetry.invalid:443 HTTP/1.1\r\nHost: o1.blocked-telemetry.invalid:443\r\n\r\n",
+            "POST http://blocked-telemetry.invalid/api HTTP/1.1\r\nHost: blocked-telemetry.invalid\r\nContent-Length: 0\r\n\r\n",
+        ] {
+            let out = single_request(st.clone(), req.into()).await;
+            assert!(String::from_utf8_lossy(&out).starts_with("HTTP/1.1 403"), "{}", String::from_utf8_lossy(&out));
+        }
+        assert_eq!(st.total.load(Ordering::Relaxed), 0, "в статистику не идёт");
+        // Битый файл — блок-лист прежний; без поля — пусто (тумблер выключен).
+        std::fs::write(&rules, "{oops").unwrap();
+        assert!(load_blocked(&p).is_none());
+        std::fs::write(&rules, r#"{"mode":"smart"}"#).unwrap();
+        set_blocked(load_blocked(&p).unwrap());
+        assert!(!is_blocked("blocked-telemetry.invalid"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

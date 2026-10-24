@@ -76,7 +76,7 @@ export interface ShimTestResult {
 
 // ─── App-level navigation ────────────────────────────────────────
 
-export type AppView = "overview" | "proxies" | "apps" | "sites" | "settings" | "wizard";
+export type AppView = "overview" | "proxies" | "sites" | "apps" | "tools" | "settings" | "wizard";
 
 // ─── Сайты через прокси (mirror of Rust SiteEntry / commands::sites) ──
 
@@ -436,4 +436,31 @@ export interface LeakGuardStatus {
   auto_restore: boolean;
   /** Живая проверка: прямое соединение с Anthropic отклонено. null — не понять. */
   verified: boolean | null;
+}
+
+// ─── Инструменты → очистка аккаунта Claude (mirror claude_wipe.rs) ──
+export type WipeGroup = "login" | "device" | "web" | "account" | "logs" | "cache" | "chats";
+
+export interface WipeGroupInfo {
+  id: WipeGroup;
+  /** Claude Code, а не Claude Desktop. */
+  code: boolean;
+  bytes: number;
+  items: number;
+}
+
+export interface WipeScan {
+  desktop_dirs: string[];
+  code_found: boolean;
+  groups: WipeGroupInfo[];
+  desktop_running: boolean;
+  cli_running: number;
+  kept_sessions: number;
+}
+
+export interface WipeResult {
+  removed_bytes: number;
+  removed_items: number;
+  failed: string[];
+  closed_desktop: boolean;
 }

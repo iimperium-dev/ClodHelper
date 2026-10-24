@@ -76,6 +76,10 @@ pub struct Settings {
     /// Пользовательские имена (тэги) прокси: URL → имя («Немецкий», «Резерв»).
     #[serde(default)]
     pub proxy_labels: std::collections::HashMap<String, String>,
+    /// Не выпускать телеметрию Claude (отчёты об ошибках в Sentry, Datadog):
+    /// в них имя компьютера и железо. None — включено (по умолчанию).
+    #[serde(default)]
+    pub block_claude_telemetry: Option<bool>,
     /// Резервы прокси: URL прокси пула → его резервы по порядку (до 5).
     /// Ключ — URL, а не индекс: при перестановке пула резервы едут вместе
     /// со своим прокси.
@@ -347,6 +351,18 @@ fn replace_pool(s: &mut Settings, urls: Vec<String>) {
 }
 
 /// Задать/убрать имя (тэг) прокси. Пустое имя = убрать.
+/// Блокировать ли телеметрию Claude (по умолчанию — да).
+pub fn claude_telemetry_blocked(s: &Settings) -> bool {
+    s.block_claude_telemetry.unwrap_or(true)
+}
+
+pub fn set_claude_telemetry_blocked(on: bool) -> Result<Settings, String> {
+    with_settings(|s| {
+        s.block_claude_telemetry = Some(on);
+        Ok(())
+    })
+}
+
 pub fn set_proxy_label(url: String, label: String) -> Result<Settings, String> {
     with_settings(|s| {
         let label = label.trim().to_string();
