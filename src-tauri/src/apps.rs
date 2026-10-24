@@ -715,7 +715,7 @@ fn main_pids(image: &str, exe: Option<&str>) -> Vec<u32> {
 }
 
 #[cfg(target_os = "windows")]
-fn kill_pids(pids: &[u32]) {
+pub(crate) fn kill_pids(pids: &[u32]) {
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
     let mut sys = System::new();
     sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::new());

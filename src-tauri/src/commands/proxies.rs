@@ -168,6 +168,23 @@ pub fn proxy_assignments_get() -> std::collections::HashMap<String, usize> {
     settings::load().proxy_assignments
 }
 
+/// Блокируется ли телеметрия Claude (тумблер в настройках Claude Desktop).
+#[tauri::command]
+pub fn claude_telemetry_get() -> bool {
+    settings::claude_telemetry_blocked(&settings::load())
+}
+
+/// Включить/выключить блокировку: мост перечитывает правила сам, без
+/// перезапуска (ответы Claude не обрываются).
+#[tauri::command]
+pub async fn claude_telemetry_set(on: bool) -> Result<bool, String> {
+    settings::set_claude_telemetry_blocked(on)?;
+    tokio::task::spawn_blocking(crate::tasks::write_rules_file)
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))??;
+    Ok(on)
+}
+
 /// Имена (тэги) прокси: URL → имя.
 #[tauri::command]
 pub fn proxy_labels_get() -> std::collections::HashMap<String, String> {

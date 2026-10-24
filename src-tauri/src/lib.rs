@@ -4,6 +4,7 @@ mod bridge_file;
 mod claude_desktop;
 mod claude_policy;
 mod claude_proxy;
+mod claude_wipe;
 mod commands;
 mod diagnostics;
 mod notices;
@@ -193,6 +194,8 @@ pub fn run() {
             commands::bridge_file_dismiss,
             commands::bridge_file_retry,
             commands::open_windows_security,
+            commands::claude_wipe_scan,
+            commands::claude_wipe_run,
             commands::proxy_backups_set,
             commands::proxy_assignments_set,
             commands::sites_get,
@@ -213,6 +216,8 @@ pub fn run() {
             commands::system_pac_set,
             commands::proxy_labels_get,
             commands::proxy_label_set,
+            commands::claude_telemetry_get,
+            commands::claude_telemetry_set,
             commands::proxies_ping,
             // Окна (трей-попап)
             commands::show_main_window,

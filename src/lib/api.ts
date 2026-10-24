@@ -4,6 +4,8 @@ import type {
   AppProfileStatus,
   AppSettings,
   BridgeFileIssue,
+  WipeResult,
+  WipeScan,
   BridgeHealth,
   BridgeVersions,
   TelegramStatus,
@@ -392,6 +394,16 @@ export async function proxiesPing(): Promise<ProxyPing[]> {
   return invoke<ProxyPing[]>("proxies_ping");
 }
 
+/** Блокируется ли телеметрия Claude (Sentry, Datadog). */
+export async function claudeTelemetryGet(): Promise<boolean> {
+  return invoke<boolean>("claude_telemetry_get");
+}
+
+/** Включить/выключить блокировку телеметрии Claude (без перезапуска моста). */
+export async function claudeTelemetrySet(on: boolean): Promise<boolean> {
+  return invoke<boolean>("claude_telemetry_set", { on });
+}
+
 /** Имена (тэги) прокси: URL → имя. */
 export async function proxyLabelsGet(): Promise<Record<string, string>> {
   return invoke<Record<string, string>>("proxy_labels_get");
@@ -521,4 +533,18 @@ export function leakGuardStatus(): Promise<LeakGuardStatus> {
 /** Пустой список — снять защиту. Mac попросит пароль. */
 export function leakGuardSet(services: string[]): Promise<LeakGuardStatus> {
   return invoke<LeakGuardStatus>("leak_guard_set", { services });
+}
+
+/** Инструменты: что найдено из данных аккаунта Claude. */
+export async function claudeWipeScan(): Promise<WipeScan> {
+  return invoke<WipeScan>("claude_wipe_scan");
+}
+
+/** Закрыть Claude Desktop и удалить данные аккаунта. */
+export async function claudeWipeRun(
+  includeDesktop: boolean,
+  includeCode: boolean,
+  includeChats: boolean,
+): Promise<WipeResult> {
+  return invoke<WipeResult>("claude_wipe_run", { includeDesktop, includeCode, includeChats });
 }

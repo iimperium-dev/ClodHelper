@@ -9,6 +9,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Settings2,
+  Wrench,
 } from "lucide-react";
 import { StatusOrb } from "./StatusOrb";
 import { BrandMark } from "./BrandMark";
@@ -16,13 +17,14 @@ import { formatUptime, poolOnly, useStatus, type ProxyState } from "../lib/statu
 import { cn } from "../lib/cn";
 import type { AppView } from "../lib/types";
 
-export const NAV_ORDER: AppView[] = ["overview", "proxies", "apps", "sites", "settings"];
+export const NAV_ORDER: AppView[] = ["overview", "proxies", "sites", "apps", "tools", "settings"];
 
 const NAV_ITEMS: { id: AppView; label: string; icon: typeof LayoutGrid }[] = [
   { id: "overview", label: "Обзор", icon: House },
   { id: "proxies", label: "Прокси", icon: Globe },
-  { id: "apps", label: "Приложения", icon: AppWindow },
   { id: "sites", label: "Сайты", icon: Link2 },
+  { id: "apps", label: "Приложения", icon: AppWindow },
+  { id: "tools", label: "Инструменты", icon: Wrench },
   { id: "settings", label: "Настройки", icon: Settings2 },
 ];
 

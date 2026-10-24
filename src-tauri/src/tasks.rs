@@ -172,6 +172,25 @@ pub const SERVICE_GROUPS: &[(&str, &[&str])] = &[
     ),
 ];
 
+/// Телеметрия Claude, которую мост не выпускает (тумблер в настройках
+/// Claude Desktop). Список — из таблицы адресов самого Claude Desktop
+/// (Sentry — организация Anthropic; Datadog — логи Claude Code и сборщики
+/// замеров интерфейса). Флаги экспериментов (GrowthBook) не трогаем: без
+/// них Claude может работать не так. Замеры и события, которые идут через
+/// сам claude.ai (/api/v2/rum, /api/event_logging), по адресу не отличить —
+/// их мост не видит, не вскрывая шифрование.
+pub const CLAUDE_TELEMETRY_DOMAINS: &[&str] = &[
+    "o1158394.ingest.us.sentry.io",
+    "http-intake.logs.us5.datadoghq.com",
+    "browser-intake-datadoghq.com",
+    "browser-intake-us3-datadoghq.com",
+    "browser-intake-us5-datadoghq.com",
+    "browser-intake-ap1-datadoghq.com",
+    "browser-intake-ap2-datadoghq.com",
+    "browser-intake-datadoghq.eu",
+    "browser-intake-ddog-gov.com",
+];
+
 /// Записать rules-файл моста из settings (route_mode + proxy_assignments).
 /// Вызывается при регистрации задачи и при изменениях в UI. Возвращает путь
 /// для аргумента --rules.
@@ -209,11 +228,14 @@ pub fn write_rules_file_if_changed() -> Result<(PathBuf, bool), String> {
     proxy_domains.sort_unstable();
     proxy_domains.dedup();
     let fallbacks = crate::settings::bridge_fallbacks(&s);
+    // Мост ≥1.13 перечитывает block_domains на лету; старый поле игнорирует.
+    let block: &[&str] = if crate::settings::claude_telemetry_blocked(&s) { CLAUDE_TELEMETRY_DOMAINS } else { &[] };
     let json = serde_json::json!({
         "mode": mode,
         "proxy_domains": proxy_domains,
         "assignments": assignments,
         "fallbacks": fallbacks,
+        "block_domains": block,
     });
     let path = shim::install_dir()
         .map(|d| d.join(RULES_FILE))

@@ -10,6 +10,7 @@ import { Proxies } from "./pages/Proxies";
 import { Apps } from "./pages/Apps";
 import { Sites } from "./pages/Sites";
 import { Settings } from "./pages/Settings";
+import { Tools } from "./pages/Tools";
 import { TrayPopup } from "./pages/TrayPopup";
 import { UpdateToast } from "./pages/UpdateToast";
 import { UpdateSplash } from "./pages/UpdateSplash";
@@ -154,6 +155,8 @@ function App() {
                   <Apps />
                 ) : view === "sites" ? (
                   <Sites onOpenApps={() => navigate("apps")} />
+                ) : view === "tools" ? (
+                  <Tools onOpenApps={() => navigate("apps")} />
                 ) : view === "settings" ? (
                   <Settings />
                 ) : (
