@@ -50,7 +50,8 @@ pub async fn apps_search(query: String) -> Result<Vec<apps::FoundApp>, String> {
             .app_profiles
             .into_iter()
             .filter(|p| p.hidden)
-            .filter_map(|p| Some((apps::profile_file(&p)?, p)))
+            // Приложения из Store (Codex/ChatGPT) — по AppID: файла не видно.
+            .filter_map(|p| Some((apps::profile_file(&p).or_else(|| apps::profile_store_id(&p))?, p)))
             .map(|(path, p)| (p.name, path))
             .collect();
         apps::search_with_hidden(&query, &hidden)
@@ -145,9 +146,6 @@ pub async fn apps_add_custom(
     name: String,
     exe_path: String,
 ) -> Result<Vec<AppProfileStatus>, String> {
-    if !std::path::Path::new(&exe_path).exists() {
-        return Err("Файл не найден по указанному пути".into());
-    }
     let mut s = settings::load_with_presets();
     // Программа уже есть, но убрана из списка (в т.ч. встроенная) — вернуть.
     // Путь сверяем с тем, где она стоит сейчас: поиск отдаёт путь из «Пуска»
@@ -155,11 +153,16 @@ pub async fn apps_add_custom(
     if let Some(p) = s.app_profiles.iter_mut().find(|p| {
         p.hidden
             && (p.exe_path.as_deref().is_some_and(|e| apps::same_path(e, &exe_path))
-                || apps::profile_file(p).is_some_and(|f| apps::same_path(&f, &exe_path)))
+                || apps::profile_file(p).is_some_and(|f| apps::same_path(&f, &exe_path))
+                || apps::profile_store_id(p).is_some_and(|id| id.eq_ignore_ascii_case(&exe_path)))
     }) {
         p.hidden = false;
         let saved = settings::set_profiles(s.app_profiles)?;
         return Ok(apps::statuses(&saved.app_profiles));
+    }
+    // Новое своё приложение — только настоящий файл.
+    if !std::path::Path::new(&exe_path).exists() {
+        return Err("Файл не найден по указанному пути".into());
     }
     // id = custom-<N>
     let n = s
