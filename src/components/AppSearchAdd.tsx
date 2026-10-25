@@ -193,7 +193,9 @@ export function AppSearchAdd({ existing, onAdd, onClose }: Props) {
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-[13px] font-medium text-vb-fg">{r.name}</span>
                         <span className="block truncate text-[11px] text-vb-silver-faint">
-                          {r.path.replace(/[\\/][^\\/]+$/, "") || "/"}
+                          {/^[^\\/]+![^\\/]+$/.test(r.path)
+                            ? "Microsoft Store"
+                            : r.path.replace(/[\\/][^\\/]+$/, "") || "/"}
                         </span>
                       </span>
                       {i === active && <span className="text-[11px] text-vb-silver-faint">↵</span>}

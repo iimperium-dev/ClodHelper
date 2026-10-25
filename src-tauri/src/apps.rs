@@ -432,6 +432,16 @@ pub fn profile_file(p: &AppProfile) -> Option<String> {
     })
 }
 
+/// Приложение из Microsoft Store, известное только по AppID (файла в
+/// закрытой WindowsApps не видно): AppID, если оно установлено.
+pub fn profile_store_id(p: &AppProfile) -> Option<String> {
+    if p.kind != LaunchKind::Msix {
+        return None;
+    }
+    let (installed, id) = profile_installed(p);
+    id.filter(|i| installed && i.contains('!'))
+}
+
 /// Один ли это файл: на Windows регистр и «/» против «\» не важны.
 pub fn same_path(a: &str, b: &str) -> bool {
     if cfg!(target_os = "windows") {
@@ -2046,4 +2056,24 @@ fn extract_icons(paths: &[&String]) -> std::collections::HashMap<String, String>
             Some((p.to_string(), base64::engine::general_purpose::STANDARD.encode(png)))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod store_search_smoke {
+    /// Только чтение: убранный ChatGPT Codex (Store) находится поиском.
+    #[test]
+    #[ignore = "смотрит настоящие настройки и установленные программы"]
+    fn hidden_store_app_is_found() {
+        let hidden: Vec<(String, String)> = crate::settings::load_with_presets()
+            .app_profiles
+            .into_iter()
+            .filter(|p| p.hidden)
+            .filter_map(|p| Some((super::profile_file(&p).or_else(|| super::profile_store_id(&p))?, p)))
+            .map(|(path, p)| (p.name, path))
+            .collect();
+        for q in ["chatg", "codex", "чатгпт"] {
+            let found = super::search_with_hidden(q, &hidden);
+            eprintln!("{q}: {:?}", found.iter().map(|f| (&f.name, &f.path)).collect::<Vec<_>>());
+        }
+    }
 }
