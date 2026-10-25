@@ -116,9 +116,14 @@ export function proxyStatesOf(
     const q = quality[i];
     const url = p?.url ?? health?.upstreams[i]?.url ?? "";
     const base = { url, host: p?.host || hostOf(url), ms: p?.ms, backupOf: parentOf(i) };
+    // Мост прямо сейчас ходит через этот прокси без сбоев — он работает,
+    // что бы ни показала наша отдельная проверка (её тестовые адреса бывают
+    // недоступны из страны пользователя или через конкретный прокси).
+    const u = health?.upstreams[i];
+    const bridgeProves = !!u && u.healthy && u.ok > 0 && (u.fail_streak ?? 0) === 0 && q?.state !== "down";
     // Настоящий запрос через прокси не прошёл (или порт закрыт) — не работает,
     // какой бы красивый ни был TCP-пинг.
-    if (p && (p.alive === false || p.ms === null)) {
+    if (p && (p.alive === false || p.ms === null) && !bridgeProves) {
       return { ...base, state: "down" as const, reason: p.error ?? "Прокси не отвечает" };
     }
     if (p?.alive === true) {
@@ -140,7 +145,7 @@ export function proxyStatesOf(
         reason: `${q.recentFail} из ${q.recentOk + q.recentFail} подключений за минуту не прошли`,
       };
     }
-    return { ...base, state: q ? ("ok" as const) : ("unknown" as const) };
+    return { ...base, state: q || bridgeProves ? ("ok" as const) : ("unknown" as const) };
   });
   // Упавший прокси с живым резервом: трафик идёт через резерв (мост так
   // и делает — первый живой по порядку).

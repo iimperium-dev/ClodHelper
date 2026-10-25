@@ -734,7 +734,17 @@ fn run_ps(script: &str) -> Option<String> {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub use launchd::{migrate_from_startup_vbs, register, start, status, stop_ignore_errors};
+pub use launchd::{migrate_from_startup_vbs, register, start, status, stop_ignore_errors, unregister};
+
+/// Прокси не осталось: мост без них не запускается, и автозапуск крутил бы
+/// его по кругу. Снимаем задачу и затираем файл пула (там были логины и
+/// пароли удалённых прокси). Добавление прокси снова зарегистрирует задачу.
+#[cfg(target_os = "windows")]
+pub fn unregister() {
+    let _ = schtasks(&["/End", "/TN", TASK_NAME]);
+    let _ = schtasks(&["/Delete", "/TN", TASK_NAME, "/F"]);
+    let _ = write_upstream_file(&[]);
+}
 
 /// Автозапуск моста на macOS: LaunchAgent с KeepAlive.
 #[cfg(not(target_os = "windows"))]
@@ -867,6 +877,15 @@ mod launchd {
     /// Выгрузить агент — иначе KeepAlive поднял бы убитый мост через 5 секунд.
     pub fn stop_ignore_errors() {
         macos::bootout(LABEL);
+    }
+
+    /// Прокси не осталось: выгрузить агент, убрать plist и затереть файл пула.
+    pub fn unregister() {
+        macos::bootout(LABEL);
+        if let Some(p) = plist_path() {
+            let _ = std::fs::remove_file(p);
+        }
+        let _ = write_upstream_file(&[]);
     }
 
     /// На macOS легаси-автозапуска (.vbs) не было — мигрировать нечего.

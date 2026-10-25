@@ -325,8 +325,9 @@ pub fn set_proxy_url(url: String) -> Result<Settings, String> {
 /// Заменить пул целиком (1..=5, [0] — основной). Индексы назначений
 /// перемапливаются по URL; назначения на удалённые прокси снимаются.
 pub fn set_proxies(urls: Vec<String>) -> Result<Settings, String> {
-    if urls.is_empty() || urls.len() > 5 {
-        return Err("Пул прокси: от 1 до 5 адресов".into());
+    // Пустой — можно: человек убрал все прокси (мост тогда останавливается).
+    if urls.len() > 5 {
+        return Err("Пул прокси: до 5 адресов".into());
     }
     with_settings(|s| {
         replace_pool(s, urls);
