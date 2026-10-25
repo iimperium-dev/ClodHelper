@@ -404,7 +404,7 @@ export function Proxies() {
   };
 
   const handleRemove = async (i: number) => {
-    if (!pool || pool.length <= 1) return;
+    if (!pool || pool.length === 0) return;
     setConfirmDel(null);
     await applyPool(pool.filter((_, k) => k !== i), `del:${i}`);
   };
@@ -689,7 +689,29 @@ export function Proxies() {
                   </div>
 
                   <div className="flex shrink-0 items-center gap-1">
-                    {confirmDel === i ? (
+                    {confirmDel === i && pool.length === 1 ? (
+                      /* Последний прокси: мост остановится, через него — без сети */
+                      <div className="flex items-center gap-1.5 rounded-lg border border-vb-loss/40 bg-vb-loss/[0.06] px-2 py-1">
+                        <span className="text-[12px] font-medium text-vb-loss">
+                          Последний — мост остановится, Claude будет без сети
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => void handleRemove(i)}
+                          disabled={busy !== null}
+                          className="rounded-md bg-vb-loss px-2 py-0.5 text-[11px] font-semibold text-white transition-colors hover:bg-vb-loss/85 active:scale-[0.96] disabled:opacity-40"
+                        >
+                          Удалить
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDel(null)}
+                          className="rounded-md px-1.5 py-0.5 text-[11px] font-medium text-vb-silver-dim transition-colors hover:bg-vb-surface-2 hover:text-vb-silver"
+                        >
+                          Отмена
+                        </button>
+                      </div>
+                    ) : confirmDel === i ? (
                       /* Подтверждение удаления — обязательное */
                       <div className="flex items-center gap-1.5 rounded-lg border border-vb-loss/40 bg-vb-loss/[0.06] px-2 py-1">
                         <span className="text-[12px] font-medium text-vb-loss">
@@ -731,21 +753,19 @@ export function Proxies() {
                               <RefreshCw className="h-3.5 w-3.5" />
                             )}
                           </button>
-                          {pool.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={() => askDelete(i)}
-                              disabled={busy !== null}
-                              className="rounded-lg p-1.5 text-vb-silver-faint transition-colors hover:bg-vb-loss/10 hover:text-vb-loss active:scale-[0.97] disabled:opacity-35"
-                              title="Убрать из пула"
-                            >
-                              {busy === `del:${i}` ? (
-                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                              ) : (
-                                <Trash2 className="h-3.5 w-3.5" />
-                              )}
-                            </button>
-                          )}
+                          <button
+                            type="button"
+                            onClick={() => askDelete(i)}
+                            disabled={busy !== null}
+                            className="rounded-lg p-1.5 text-vb-silver-faint transition-colors hover:bg-vb-loss/10 hover:text-vb-loss active:scale-[0.97] disabled:opacity-35"
+                            title="Убрать из пула"
+                          >
+                            {busy === `del:${i}` ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-3.5 w-3.5" />
+                            )}
+                          </button>
                         </div>
                       </>
                     )}

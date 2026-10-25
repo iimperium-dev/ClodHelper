@@ -43,7 +43,14 @@ pub struct ProxyPing {
 /// Настоящий запрос через прокси: маленький ответ 204 без TLS (быстро и
 /// дёшево по трафику). Любой ответ сайта — прокси работает.
 async fn probe_through(url: &str) -> Result<(), String> {
-    let proxy = reqwest::Proxy::all(url).map_err(|e| format!("Неверный адрес прокси: {e}"))?;
+    // SOCKS5: имя сайта пусть разрешает сам прокси (socks5h), как мост. Иначе
+    // проверка зависела бы от DNS страны пользователя — в части стран он
+    // подменяет или режет ответы, и рабочий прокси выглядел «мёртвым».
+    let url = match url.strip_prefix("socks5://") {
+        Some(rest) => format!("socks5h://{rest}"),
+        None => url.to_string(),
+    };
+    let proxy = reqwest::Proxy::all(&url).map_err(|e| format!("Неверный адрес прокси: {e}"))?;
     let client = reqwest::Client::builder()
         .proxy(proxy)
         .connect_timeout(std::time::Duration::from_secs(5))
@@ -51,16 +58,20 @@ async fn probe_through(url: &str) -> Result<(), String> {
         .build()
         .map_err(|e| format!("Внутренняя ошибка: {e}"))?;
     let mut last = String::new();
-    // Две цели: прокси провайдера иногда режет один конкретный хост.
-    for target in ["http://cp.cloudflare.com/generate_204", "http://www.gstatic.com/generate_204"] {
+    // Несколько целей: прокси (или сеть) иногда режет конкретный хост или
+    // обычный http — тогда пробуем следующую, в том числе https (CONNECT).
+    for target in [
+        "http://cp.cloudflare.com/generate_204",
+        "http://www.gstatic.com/generate_204",
+        "https://www.google.com/generate_204",
+    ] {
         match client.get(target).send().await {
             Ok(r) if r.status().as_u16() == 407 => return Err("Прокси не принял логин или пароль".into()),
             Ok(r) if r.status().is_server_error() => last = format!("Прокси ответил ошибкой {}", r.status().as_u16()),
             Ok(_) => return Ok(()),
-            // Молчит или не пускает — дело в самом прокси, вторая цель не
-            // поможет, а ожидание удвоит.
+            // Молчит — дело в самом прокси, другие цели не помогут, а ожидание умножится.
             Err(e) if e.is_timeout() => return Err("Порт открыт, но прокси молчит — не отвечает на запросы".into()),
-            Err(e) if e.is_connect() => return Err("Не удалось подключиться к прокси".into()),
+            Err(e) if e.is_connect() => last = "Не удалось подключиться к прокси".into(),
             Err(e) => last = format!("Ошибка: {e}"),
         }
     }
@@ -119,8 +130,21 @@ pub async fn proxies_set(urls: Vec<String>) -> Result<Vec<String>, String> {
     for u in &urls {
         proxy::parse(u)?;
     }
+    let empty = urls.is_empty();
     let saved = settings::set_proxies(urls)?;
     let primary = saved.proxy_url.clone().unwrap_or_default();
+    if empty {
+        // Без прокси мост не работает: останавливаем и снимаем с автозапуска.
+        // Приложения через мост остаются без сети — напрямую не выпускаем.
+        tokio::task::spawn_blocking(|| {
+            let _ = shim::stop();
+            crate::tasks::unregister();
+            let _ = crate::tasks::write_rules_file();
+        })
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))?;
+        return Ok(Vec::new());
+    }
     tokio::task::spawn_blocking(move || {
         // Не фатально: без задачи мост перезапустится с одним upstream (легаси).
         if let Err(e) = crate::tasks::register(&primary) {
