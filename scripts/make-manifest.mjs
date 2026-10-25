@@ -23,10 +23,19 @@ if (!dir || !/^v\d+\.\d+\.\d+$/.test(tag ?? "") || !whatsNew) {
 const version = tag.slice(1);
 const files = readdirSync(dir);
 
-/** Установщик платформы: имя — как его назовёт GitHub (пробелы → точки). */
+/** Установщик платформы: имя — как его назовёт GitHub (пробелы → точки).
+    Только файл ЭТОЙ версии: старый установщик из кэша сборки иначе мог
+    оказаться первым (так в 0.8.12 манифест указал на 0.8.11). */
 function entry(suffix) {
-  const name = files.find((f) => f.endsWith(suffix));
-  if (!name) return null;
+  const all = files.filter((f) => f.endsWith(suffix));
+  const name = all.find((f) => f.includes(`_${version}_`));
+  if (!name) {
+    if (all.length) {
+      console.error(`нет установщика версии ${version} (${suffix}), есть только: ${all.join(", ")}`);
+      process.exit(1);
+    }
+    return null;
+  }
   const sha256 = createHash("sha256").update(readFileSync(join(dir, name))).digest("hex");
   return { file: name.replaceAll(" ", "."), sha256 };
 }

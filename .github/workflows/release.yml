@@ -41,6 +41,12 @@ jobs:
       - name: Build bridge
         run: npm run bridge:build
 
+      # Кэш хранит src-tauri/target целиком — с установщиками прошлых версий.
+      # Без очистки в релиз 0.8.12 попал старый 0.8.11, и манифест указал на него.
+      - name: Clean old installers
+        shell: pwsh
+        run: Remove-Item -Recurse -Force src-tauri/target/release/bundle -ErrorAction SilentlyContinue
+
       - name: Build Tauri app
         run: npm run tauri build
         env:
@@ -54,7 +60,8 @@ jobs:
           $bundleDir = "src-tauri/target/release/bundle"
           $out = "release-assets"
           New-Item -ItemType Directory -Path $out -Force | Out-Null
-          Get-ChildItem -Path "$bundleDir/nsis/*-setup.exe" -ErrorAction SilentlyContinue |
+          $version = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          Get-ChildItem -Path "$bundleDir/nsis/*_${version}_*-setup.exe" -ErrorAction SilentlyContinue |
             ForEach-Object { Copy-Item $_.FullName $out }
           Get-ChildItem $out
 
@@ -119,7 +126,8 @@ jobs:
       - name: Collect artifacts
         run: |
           mkdir -p release-assets
-          cp src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg release-assets/
+          V=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          cp src-tauri/target/universal-apple-darwin/release/bundle/dmg/*_${V}_*.dmg release-assets/
           ls -la release-assets
 
       - name: Upload artifacts (workflow run)
