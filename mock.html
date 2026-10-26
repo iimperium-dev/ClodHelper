@@ -52,6 +52,26 @@
   };
   let layout = null;
   let leak = { enabled: true, services: "claude", auto_restore: true, verified: true };
+  // «Сайты»: список сайтов, браузеры и системная автонастройка прокси.
+  const SITES = {
+    sites_get: [
+      { id: "s1", name: "YouTube", domains: ["youtube.com", "googlevideo.com", "ytimg.com"], proxy: null, enabled: true },
+      { id: "s2", name: "Instagram", domains: ["instagram.com", "cdninstagram.com"], proxy: 1, enabled: true },
+      { id: "s3", name: "Spotify", domains: ["spotify.com", "scdn.co"], proxy: null, enabled: true },
+      { id: "s4", name: "Discord", domains: ["discord.com", "discord.gg", "discordapp.com"], proxy: null, enabled: false },
+    ],
+    sites_status: {
+      supported: true,
+      browsers: [
+        { id: "chrome", name: "Google Chrome", installed: true, mode: "sites" },
+        { id: "edge", name: "Microsoft Edge", installed: true, mode: "sites" },
+      ],
+    },
+    system_pac_status: { supported: true, enabled: true, active: true, foreign: null },
+    sites_scope_get: { supported: true, selected: false, browsers: [] },
+    sites_proxy_extensions: [],
+    sites_bypass_get: [],
+  };
   const R = {
     settings_get: { proxy_url: "http://u:p@185.68.187.138:8000" },
     shim_script_path: "/x",
@@ -103,6 +123,12 @@
     "plugin:app|version": "0.6.0",
     "plugin:autostart|is_enabled": true,
   };
+  // ?readme — снимки для README: нейтральные подписи, без баннера обновления.
+  if (params.has("readme")) {
+    R.proxy_labels_get = { "http://u:p@185.68.187.138:8000": "Финляндия" };
+    R.update_check = null;
+    R.update_latest = null;
+  }
   // Тесты подменяют ответы: page.addInitScript(() => { window.__mockOverrides = {...} }).
   Object.assign(R, window.__mockOverrides || {});
   window.__R = R; // тесты меняют ответы на лету (например, растущие ошибки прокси)
@@ -148,6 +174,7 @@
       }
       if (cmd.startsWith("plugin:event|")) return 1;
       if (cmd in R) return structuredClone(R[cmd]);
+      if (cmd in SITES) return structuredClone(SITES[cmd]);
       (window.__mockMisses ||= []).push(cmd);
       return null;
     },
