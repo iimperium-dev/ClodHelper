@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 300" width="960" height="300" font-family="Segoe UI, Inter, -apple-system, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#34d399"/>
+    </marker>
+    <marker id="arrow-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#5b6560"/>
+    </marker>
+    <radialGradient id="glow" cx="50%" cy="0%" r="80%">
+      <stop offset="0%" stop-color="#34d399" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#34d399" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect x="0" y="0" width="960" height="300" rx="18" fill="#0b0f0d"/>
+  <rect x="0" y="0" width="960" height="300" rx="18" fill="url(#glow)"/>
+
+  <!-- Выбранные приложения и сайты -->
+  <rect x="32" y="56" width="200" height="88" rx="14" fill="#141a17" stroke="#26302b"/>
+  <text x="132" y="94" text-anchor="middle" fill="#f3f6f4" font-size="16" font-weight="600">Выбранные</text>
+  <text x="132" y="118" text-anchor="middle" fill="#f3f6f4" font-size="16" font-weight="600">приложения и сайты</text>
+
+  <!-- Мост -->
+  <rect x="296" y="56" width="200" height="88" rx="14" fill="#10241b" stroke="#34d399" stroke-opacity="0.55"/>
+  <text x="396" y="94" text-anchor="middle" fill="#34d399" font-size="16" font-weight="700">Мост Clod Helper</text>
+  <text x="396" y="118" text-anchor="middle" fill="#8fd8b8" font-size="13" font-family="Consolas, JetBrains Mono, monospace">127.0.0.1</text>
+
+  <!-- Прокси -->
+  <rect x="560" y="56" width="200" height="88" rx="14" fill="#141a17" stroke="#26302b"/>
+  <text x="660" y="94" text-anchor="middle" fill="#f3f6f4" font-size="16" font-weight="600">Ваш прокси</text>
+  <text x="660" y="118" text-anchor="middle" fill="#8a948f" font-size="13">основной или резерв</text>
+
+  <!-- Интернет -->
+  <circle cx="864" cy="100" r="48" fill="#141a17" stroke="#26302b"/>
+  <text x="864" y="105" text-anchor="middle" fill="#f3f6f4" font-size="15" font-weight="600">Интернет</text>
+
+  <!-- Стрелки через прокси -->
+  <line x1="236" y1="100" x2="290" y2="100" stroke="#34d399" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <line x1="500" y1="100" x2="554" y2="100" stroke="#34d399" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <line x1="764" y1="100" x2="810" y2="100" stroke="#34d399" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <!-- Остальные программы — напрямую -->
+  <rect x="32" y="196" width="200" height="64" rx="14" fill="#0f1412" stroke="#1f2824" stroke-dasharray="5 5"/>
+  <text x="132" y="234" text-anchor="middle" fill="#8a948f" font-size="15">Остальные программы</text>
+  <path d="M236,228 L700,228 Q864,228 864,154" fill="none" stroke="#5b6560" stroke-width="2" stroke-dasharray="7 6" marker-end="url(#arrow-dim)"/>
+  <text x="470" y="250" text-anchor="middle" fill="#6f7a75" font-size="13">напрямую, как обычно</text>
+</svg>
