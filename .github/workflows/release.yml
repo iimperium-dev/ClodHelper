@@ -167,36 +167,16 @@ jobs:
           sparse-checkout: |
             src/whats-new.json
             scripts/make-manifest.mjs
+            scripts/release-notes.mjs
           sparse-checkout-cone-mode: false
           path: src-repo
 
+      # Описание релиза: кнопки скачивания, «Что нового», установка под
+      # спойлерами. Формат секции «Что нового» читают старые версии — см.
+      # комментарий в scripts/release-notes.mjs.
       - name: Release notes
         run: |
-          v="${GITHUB_REF_NAME#v}"
-          {
-            # Пункт — строка (для всех) или {text, platforms}: помечаем ОС.
-            items=$(jq -r --arg v "$v" '.[$v].items[]? | if type == "string" then "- " + . else "- " + .text + " (" + ((.platforms // []) | map(if . == "mac" then "macOS" else "Windows" end) | join(", ")) + ")" end' src-repo/src/whats-new.json)
-            if [ -n "$items" ]; then
-              printf '## Что нового\n\n%s\n\n' "$items"
-            fi
-            cat <<'EOF'
-          ## Установка
-
-          1. Скачайте `Clod_Helper_*_x64-setup.exe` ниже.
-          2. ПКМ → Свойства → «Разблокировать» → ОК.
-          3. Двойной клик. SmartScreen → «Подробнее» → «Выполнить в любом случае».
-          4. Установщик добавит ярлык. Запускайте.
-
-          Программа не подписана — Windows перестраховывается. Исходники открыты.
-
-          ## macOS (Apple Silicon и Intel, macOS 11+)
-
-          1. Скачайте `*_universal.dmg`, откройте и перетащите Clod Helper в «Программы».
-          2. Первый запуск: ПКМ по приложению → «Открыть» → «Открыть».
-             На macOS 15+: если кнопки «Открыть» нет — Системные настройки → Конфиденциальность и безопасность → «Всё равно открыть».
-          3. Приложение не заверено Apple (Developer ID) — поэтому такое предупреждение. Исходники открыты.
-          EOF
-          } > release-notes.md
+          node src-repo/scripts/release-notes.mjs "$GITHUB_REF_NAME" src-repo/src/whats-new.json > release-notes.md
           cat release-notes.md
 
       # Манифест обновления: программа (≥0.8.9) проверяет обновления по нему —
@@ -212,7 +192,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: release-assets/*
-          generate_release_notes: true
+          # «Full Changelog» не нужен: старые теги удаляются, ссылка вела бы в никуда.
+          generate_release_notes: false
           draft: true
           prerelease: false
           body_path: release-notes.md
