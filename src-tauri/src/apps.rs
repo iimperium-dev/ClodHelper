@@ -577,6 +577,17 @@ pub fn sites_listener_available() -> bool {
 /// не-Chromium приложения не влияет.
 const WEBRTC_GUARD: &str = "--webrtc-ip-handling-policy=disable_non_proxied_udp";
 
+/// Программа, которая не запускается с флагами прокси Chromium в командной
+/// строке. Gemini для Windows (Electron, `%LOCALAPPDATA%\Google\Gemini\`)
+/// с `--proxy-server` пишет в лог «refusing to start» и сразу выходит; через
+/// мост его ведёт системный PAC. Матчим по папке установки — внутри неё
+/// и заглушка Gemini.exe, и app-<версия>\Gemini.exe, и GeminiAppLauncher.exe.
+pub fn rejects_proxy_switch(exe: &str) -> bool {
+    let p = exe.replace('/', "\\").to_lowercase();
+    let file = p.rsplit('\\').next().unwrap_or("");
+    p.contains("\\google\\gemini\\") && file.starts_with("gemini") && file.ends_with(".exe")
+}
+
 /// Мост поднимает закреплённые входы (≥1.7)? Проба версии exe кэшируется.
 fn pinned_listeners_available() -> bool {
     use std::sync::Mutex;
@@ -795,6 +806,17 @@ fn launch_exe(p: &AppProfile, extra: &[&str]) -> Result<(), String> {
         let mut cmd = Command::new(&exe);
         apply_no_window(&mut cmd);
         cmd.spawn().map_err(|e| format!("Не удалось запустить Telegram: {e}"))?;
+        return Ok(());
+    }
+    if rejects_proxy_switch(&exe) {
+        // Gemini с --proxy-server в командной строке отказывается стартовать
+        // («refusing to start — … network-override switch»). Запускаем как
+        // есть: Electron берёт системный прокси, и его ведёт PAC моста
+        // («Сайты во всех браузерах», gemini.google.com в AI-доменах).
+        let mut cmd = Command::new(&exe);
+        apply_no_window(&mut cmd);
+        cmd.spawn()
+            .map_err(|e| format!("Не удалось запустить {}: {e}", p.name))?;
         return Ok(());
     }
     let mut cmd = Command::new(&exe);
@@ -1059,7 +1081,12 @@ pub fn create_shortcut(
     let (target_path, arguments) = match p.kind {
         LaunchKind::ExeFlag | LaunchKind::Custom => {
             let exe = location.ok_or_else(|| "Нет пути к exe".to_string())?;
-            (exe, format!("--proxy-server={proxy} {WEBRTC_GUARD}"))
+            let args = if rejects_proxy_switch(&exe) {
+                String::new()
+            } else {
+                format!("--proxy-server={proxy} {WEBRTC_GUARD}")
+            };
+            (exe, args)
         }
         LaunchKind::Msix => {
             // Ярлык на ПРЯМОЙ exe пакета с флагом --proxy-server (как в launch)
@@ -1694,6 +1721,22 @@ fn squirrel_app(update: &std::path::Path, args: &str) -> Option<PathBuf> {
         .collect();
     versions.sort();
     versions.pop().map(|(_, exe)| exe)
+}
+
+#[cfg(test)]
+mod proxy_switch_tests {
+    use super::rejects_proxy_switch;
+
+    #[test]
+    fn gemini_is_launched_without_proxy_flags() {
+        let root = r"C:\Users\u\AppData\Local\Google\Gemini";
+        for exe in ["Gemini.exe", r"app-1.16.0\Gemini.exe", "GeminiAppLauncher.exe"] {
+            assert!(rejects_proxy_switch(&format!(r"{root}\{exe}")), "{exe}");
+        }
+        assert!(!rejects_proxy_switch(r"C:\Program Files\Google\Chrome\Application\chrome.exe"));
+        assert!(!rejects_proxy_switch(r"C:\Users\u\AppData\Local\Google\Gemini\Uninstall Gemini.exe"));
+        assert!(!rejects_proxy_switch(r"D:\Apps\GeminiClone\gemini.exe"));
+    }
 }
 
 #[cfg(test)]
