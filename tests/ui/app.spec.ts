@@ -313,3 +313,19 @@ test("сторож окна: прозрачная страница восста�
   const misses = await page.evaluate(() => (window as unknown as { __mockMisses?: string[] }).__mockMisses ?? []);
   expect(misses).toContain("ui_log");
 });
+
+test("браузер: расширение снимает защиту WebRTC — понятное предупреждение", async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as unknown as { __mockOverrides: unknown }).__mockOverrides = {
+      apps_traffic: [
+        { id: "custom-1", running: true, via_bridge: 9, direct: 0, proxy_extension: { id: "tux", name: "Tuxler", webrtc_only: true } },
+      ],
+    };
+  });
+  const errors = await open(page);
+  await go(page, "Приложения");
+  await expect(page.getByText("Tuxler выдаёт ваш IP через WebRTC")).toBeVisible();
+  await expect(page.getByText("Прокси перехватывает Tuxler")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Отключить", exact: true })).toBeVisible();
+  expect(errors).toEqual([]);
+});

@@ -842,6 +842,13 @@ pub(crate) fn open_app(app: &str, proxy: &str, name: &str) -> Result<(), String>
 /// open_app с дополнительными флагами запуска.
 #[cfg(not(target_os = "windows"))]
 fn open_app_with(app: &str, proxy: &str, name: &str, extra: &[&str]) -> Result<(), String> {
+    // Защита WebRTC в профилях — пока браузер закрыт (флаг ниже соблюдают не все).
+    if crate::browser_ext::is_chromium_browser(app) && !crate::browser_ext::bundle_running(app) {
+        let n = crate::browser_ext::guard_webrtc_prefs(app);
+        if n > 0 {
+            tracing::info!("WebRTC-защита записана в {n} проф. {name}");
+        }
+    }
     let out = Command::new("/usr/bin/open")
         .arg("-a")
         .arg(app)

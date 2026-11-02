@@ -16,11 +16,16 @@ use std::time::SystemTime;
 
 use serde_json::Value;
 
-/// Включённое расширение, которое задало браузеру свой прокси.
+/// Включённое расширение, которое задало браузеру свой прокси или сняло
+/// защиту WebRTC (VPN-расширения вроде Tuxler ставят ip_handling_policy =
+/// default — такая настройка главнее и флага запуска, и настройки профиля).
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ProxyExtension {
     pub id: String,
     pub name: String,
+    /// Прокси не трогает — только выдаёт настоящий IP через WebRTC.
+    #[serde(default)]
+    pub webrtc_only: bool,
 }
 
 /// Имя файла программы без пути и расширения («…/Google Chrome.app» →
@@ -78,6 +83,58 @@ fn data_dir(app_path: &str) -> Option<PathBuf> {
     return Some(dirs::data_local_dir()?.join(windows_data_rel(stem, app_path)?));
 }
 
+/// Защита WebRTC в профилях браузера: настоящий IP не уходит через STUN
+/// мимо прокси. Флаг запуска --webrtc-ip-handling-policy соблюдают не все
+/// Chromium-браузеры (Comet 156 его игнорирует — ipleak показывал IP
+/// провайдера), а настройка профиля webrtc.ip_handling_policy работает в
+/// любом — та же, что выставляют расширения против утечки WebRTC. Пишем,
+/// только пока браузер закрыт: открытый перезапишет файл при выходе.
+/// Возвращает, сколько профилей изменено.
+pub fn guard_webrtc_prefs(app_path: &str) -> usize {
+    let Some(dir) = data_dir(app_path) else { return 0 };
+    let Ok(entries) = std::fs::read_dir(&dir) else { return 0 };
+    let mut changed = 0;
+    for e in entries.flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        if name != "Default" && !name.starts_with("Profile ") {
+            continue;
+        }
+        let file = e.path().join("Preferences");
+        let Ok(text) = std::fs::read_to_string(&file) else { continue };
+        let Ok(mut prefs) = serde_json::from_str::<Value>(&text) else { continue };
+        if !apply_webrtc_guard(&mut prefs) {
+            continue;
+        }
+        let Ok(out) = serde_json::to_string(&prefs) else { continue };
+        let tmp = file.with_extension("clod-tmp");
+        if std::fs::write(&tmp, out).is_ok() && std::fs::rename(&tmp, &file).is_ok() {
+            changed += 1;
+        }
+    }
+    changed
+}
+
+/// Выставить защиту WebRTC в настройках профиля. true — что-то изменилось.
+fn apply_webrtc_guard(prefs: &mut Value) -> bool {
+    let Some(root) = prefs.as_object_mut() else { return false };
+    let webrtc = root.entry("webrtc").or_insert_with(|| Value::Object(Default::default()));
+    let Some(w) = webrtc.as_object_mut() else { return false };
+    let want = [
+        ("ip_handling_policy", Value::from("disable_non_proxied_udp")),
+        // Старые имена той же настройки (их тоже читают сборки Chromium).
+        ("multiple_routes_enabled", Value::from(false)),
+        ("nonproxied_udp_enabled", Value::from(false)),
+    ];
+    let mut changed = false;
+    for (k, v) in want {
+        if w.get(k) != Some(&v) {
+            w.insert(k.to_string(), v);
+            changed = true;
+        }
+    }
+    changed
+}
+
 /// Имя расширения из манифеста; `__MSG_x__` — из _locales (ru → en → default).
 fn ext_name(ext_dir: &Path, manifest: &Value) -> String {
     let raw = manifest.get("name").and_then(Value::as_str).unwrap_or("Расширение");
@@ -102,21 +159,28 @@ fn ext_name(ext_dir: &Path, manifest: &Value) -> String {
 }
 
 /// Перехватчики в настройках одного профиля (без файловой системы — для тестов).
-fn scan_prefs(prefs: &[Value]) -> Vec<String> {
-    let mut ids = Vec::new();
+/// (id, только WebRTC) — расширения, перехватывающие прокси или WebRTC.
+fn scan_prefs(prefs: &[Value]) -> Vec<(String, bool)> {
+    let mut ids: Vec<(String, bool)> = Vec::new();
     for p in prefs {
         let Some(settings) = p.pointer("/extensions/settings").and_then(Value::as_object) else {
             continue;
         };
         for (id, e) in settings {
             let has_proxy = e.pointer("/preferences/proxy").is_some();
+            // Ключ с точкой: «webrtc.ip_handling_policy» — одно имя.
+            let weakens_webrtc = e.get("preferences").and_then(Value::as_object).is_some_and(|p| {
+                p.get("webrtc.ip_handling_policy").and_then(Value::as_str).is_some_and(|v| v != "disable_non_proxied_udp")
+                    || p.get("webrtc.multiple_routes_enabled") == Some(&Value::Bool(true))
+                    || p.get("webrtc.nonproxied_udp_enabled") == Some(&Value::Bool(true))
+            });
             let disabled = e
                 .get("disable_reasons")
                 .and_then(Value::as_array)
                 .is_some_and(|r| !r.is_empty())
                 || e.get("state").and_then(Value::as_i64) == Some(0);
-            if has_proxy && !disabled && !ids.contains(id) {
-                ids.push(id.clone());
+            if (has_proxy || weakens_webrtc) && !disabled && !ids.iter().any(|(i, _)| i == id) {
+                ids.push((id.clone(), !has_proxy));
             }
         }
     }
@@ -137,7 +201,7 @@ fn scan(data: &Path) -> Vec<ProxyExtension> {
             .filter_map(|f| std::fs::read_to_string(profile.join(f)).ok())
             .filter_map(|t| serde_json::from_str(&t).ok())
             .collect();
-        for id in scan_prefs(&prefs) {
+        for (id, webrtc_only) in scan_prefs(&prefs) {
             if out.iter().any(|e| e.id == id) {
                 continue;
             }
@@ -152,7 +216,7 @@ fn scan(data: &Path) -> Vec<ProxyExtension> {
                     Some(ext_name(d, &m))
                 })
                 .unwrap_or_else(|| "расширение".into());
-            out.push(ProxyExtension { id, name });
+            out.push(ProxyExtension { id, name, webrtc_only });
         }
     }
     out
@@ -349,6 +413,18 @@ pub fn bypass_candidates() -> Vec<BypassApp> {
     out
 }
 
+/// macOS: запущен ли какой-то процесс из этого бандла.
+#[cfg(not(target_os = "windows"))]
+pub fn bundle_running(app: &str) -> bool {
+    let Some(bundle) = app_dir(app) else { return false };
+    let prefix = format!("{bundle}/Contents/");
+    std::process::Command::new("/bin/ps")
+        .args(["-axo", "comm="])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).lines().any(|l| l.trim().starts_with(&prefix)))
+        .unwrap_or(false)
+}
+
 /// macOS: бандл — Chromium-браузер (известный или открывающий ссылки http
 /// и собранный на Chromium: внутри есть «… Framework.framework»).
 #[cfg(not(target_os = "windows"))]
@@ -435,6 +511,18 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[test]
+    fn webrtc_guard_in_profile_prefs() {
+        let mut p = json!({"profile": {"name": "Личный"}, "webrtc": {"ip_handling_policy": "default"}});
+        assert!(apply_webrtc_guard(&mut p));
+        assert_eq!(p["webrtc"]["ip_handling_policy"], "disable_non_proxied_udp");
+        assert_eq!(p["webrtc"]["multiple_routes_enabled"], false);
+        assert_eq!(p["profile"]["name"], "Личный", "остальные настройки не трогаем");
+        assert!(!apply_webrtc_guard(&mut p), "уже защищён — файл не переписываем");
+        let mut empty = json!({});
+        assert!(apply_webrtc_guard(&mut empty));
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn mac_app_dir_is_bundle() {
@@ -471,9 +559,15 @@ mod tests {
             "foxy": {"disable_reasons": [], "preferences": {"proxy": {"mode": "system"}}},
             "omega": {"disable_reasons": [1], "preferences": {"proxy": {"mode": "fixed_servers"}}},
             "adblock": {"disable_reasons": []},
-            "legacy": {"state": 0, "preferences": {"proxy": {}}}
+            "legacy": {"state": 0, "preferences": {"proxy": {}}},
+            "tuxler": {"disable_reasons": [], "preferences": {"webrtc.ip_handling_policy": "default"}},
+            "guard": {"disable_reasons": [], "preferences": {"webrtc.ip_handling_policy": "disable_non_proxied_udp"}}
         }}})];
-        assert_eq!(scan_prefs(&prefs), vec!["foxy".to_string()]);
+        assert_eq!(
+            scan_prefs(&prefs),
+            vec![("foxy".to_string(), false), ("tuxler".to_string(), true)],
+            "защищающее WebRTC расширение — не перехватчик"
+        );
     }
 
     /// Живая проверка: cargo test live_chrome -- --ignored --nocapture

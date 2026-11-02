@@ -288,7 +288,9 @@ export interface AppTraffic {
   via_bridge: number;
   direct: number;
   /** Браузер: включённое расширение, перехватившее прокси. */
-  proxy_extension: { id: string; name: string } | null;
+  /** Расширение-перехватчик; webrtc_only — прокси не трогает, но снимает
+      защиту WebRTC (настоящий IP виден сайтам). */
+  proxy_extension: { id: string; name: string; webrtc_only?: boolean } | null;
   /** Telegram: чужой локальный прокси («127.0.0.1:1442»), мимо моста. */
   other_proxy?: string | null;
 }

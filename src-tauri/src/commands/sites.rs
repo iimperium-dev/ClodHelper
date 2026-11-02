@@ -82,7 +82,10 @@ pub async fn sites_proxy_extensions() -> Result<Vec<BrowserProxyExtensions>, Str
         crate::browser_ext::installed_browsers()
             .into_iter()
             .filter_map(|(name, path)| {
-                let extensions = crate::browser_ext::proxy_extensions(&path);
+                // Сайтам мешают только перехватчики прокси; снятая защита
+                // WebRTC — отдельная беда, о ней говорит строка браузера в «Приложениях».
+                let extensions: Vec<_> =
+                    crate::browser_ext::proxy_extensions(&path).into_iter().filter(|e| !e.webrtc_only).collect();
                 (!extensions.is_empty()).then_some(BrowserProxyExtensions { name, path, extensions })
             })
             .collect()

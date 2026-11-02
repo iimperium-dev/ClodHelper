@@ -257,11 +257,15 @@ export function Apps() {
       return { status: st, action: st.tone === "warn" ? connect : null, menu };
     }
 
-    // Браузер: расширение (FoxyProxy, SwitchyOmega…) перебивает --proxy-server.
+    // Браузер: расширение (FoxyProxy, SwitchyOmega…) перебивает --proxy-server
+    // или снимает защиту WebRTC (VPN-расширения вроде Tuxler).
     if (t?.proxy_extension) {
       const ext = t.proxy_extension;
       return {
-        status: { tone: "warn", text: `Прокси перехватывает ${ext.name}` },
+        status: {
+          tone: "warn",
+          text: ext.webrtc_only ? `${ext.name} выдаёт ваш IP через WebRTC` : `Прокси перехватывает ${ext.name}`,
+        },
         action: {
           label: "Отключить",
           run: () =>
