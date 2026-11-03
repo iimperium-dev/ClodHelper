@@ -94,6 +94,14 @@ pub fn run() {
     }
 
     let builder = tauri::Builder::default();
+    // Одна копия: второй запуск сразу выходит, а запущенная показывает окно
+    // (кроме тихого автозапуска --tray). Плагин должен стоять первым.
+    #[cfg(target_os = "windows")]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+        if !args.iter().any(|a| a == "--tray") {
+            show_main_window(app);
+        }
+    }));
     // Автозапуск: на Windows — плагин (ключ Run), на macOS — SMAppService
     // (src/autostart.rs); плагин там больше не регистрируется.
     #[cfg(target_os = "windows")]

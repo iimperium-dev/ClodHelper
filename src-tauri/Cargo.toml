@@ -58,6 +58,9 @@ windows-sys = { version = "0.61", features = [
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
 ] }
+# Одна копия программы: повторный запуск (ярлык, автозапуск) не плодит
+# второй значок в трее, а показывает уже запущенную.
+tauri-plugin-single-instance = "2"
 
 # Автозапуск на macOS: SMAppService (13+) — штатные «Объекты входа» с
 # иконкой и именем приложения вместо LaunchAgent «Clod Helper.plist».
