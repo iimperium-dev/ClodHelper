@@ -140,8 +140,43 @@ fn confirm(services: &str, real: LeakGuardStatus) -> Result<LeakGuardStatus, Str
     Ok(real)
 }
 
-#[cfg(not(target_os = "windows"))]
+/// Состояние защиты с живой проверкой для Claude.
 pub fn status() -> Result<LeakGuardStatus, String> {
+    status_raw().map(probed)
+}
+
+/// Закрыт ли прямой выход для сервиса — по правилам, без живой проверки
+/// (для частых опросов статуса приложений).
+pub fn guards(service: &str) -> bool {
+    status_raw().is_ok_and(|st| covers(&st, service))
+}
+
+fn covers(st: &LeakGuardStatus, service: &str) -> bool {
+    st.enabled && st.services.split(',').any(|s| s == service)
+}
+
+/// Включить защиту для сервиса, не трогая остальные. Уже включена — прав не
+/// просит.
+pub fn add(service: &str) -> Result<(), String> {
+    let cur = status_raw()?;
+    if covers(&cur, service) {
+        return Ok(());
+    }
+    set(&with_service(&cur, service, true)?).map(|_| ())
+}
+
+/// Снять защиту с одного сервиса, оставив остальные (приложение убрали из
+/// списка). Не закрыт — прав не просит.
+pub fn release(service: &str) -> Result<(), String> {
+    let cur = status_raw()?;
+    if !covers(&cur, service) {
+        return Ok(());
+    }
+    set(&with_service(&cur, service, false)?).map(|_| ())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn status_raw() -> Result<LeakGuardStatus, String> {
     use std::io::Write;
     let mut child = std::process::Command::new("/bin/sh")
         .args(["-s", "--", "Status"])
@@ -154,7 +189,7 @@ pub fn status() -> Result<LeakGuardStatus, String> {
         let _ = stdin.write_all(SCRIPT.as_bytes());
     }
     let out = child.wait_with_output().map_err(|e| format!("Защита от утечек: {e}"))?;
-    Ok(probed(parse(&String::from_utf8_lossy(&out.stdout))?))
+    parse(&String::from_utf8_lossy(&out.stdout))
 }
 
 /// Включить для `services` ("claude,telegram") или снять (пустая строка).
@@ -171,7 +206,7 @@ pub fn set(services: &str) -> Result<LeakGuardStatus, String> {
         format!("{}; /bin/sh '/Library/Application Support/ClodHelper/leak-guard.sh' Status; exit 0", shell_enable(services))
     };
     let apple = format!(
-        "do shell script \"{shell}\" with prompt \"Clod Helper включает защиту от утечек в брандмауэре.\" with administrator privileges"
+        "do shell script \"{shell}\" with prompt \"Clod Helper меняет защиту от утечек в брандмауэре.\" with administrator privileges"
     );
     let out = std::process::Command::new("/usr/bin/osascript")
         .args(["-e", &apple])
@@ -201,7 +236,7 @@ fn rule_blocks(rule: &str) -> bool {
 /// Windows: правила брандмауэра читаются без прав администратора — прямо из
 /// его хранилища в реестре (Get-NetFirewallRule через PowerShell — секунды).
 #[cfg(target_os = "windows")]
-pub fn status() -> Result<LeakGuardStatus, String> {
+fn status_raw() -> Result<LeakGuardStatus, String> {
     let mut on = Vec::new();
     for service in SERVICES {
         match crate::win::firewall_rule(&rule_name(service)) {
@@ -211,17 +246,17 @@ pub fn status() -> Result<LeakGuardStatus, String> {
             Err(_) => {
                 let payload = crate::elevate::read_status(SCRIPT, "-Action Status")
                     .map_err(|e| format!("Защита от утечек: {e}"))?;
-                return Ok(probed(parse(&payload)?));
+                return parse(&payload);
             }
         }
     }
     let services = on.join(",");
-    Ok(probed(LeakGuardStatus {
+    Ok(LeakGuardStatus {
         enabled: !services.is_empty(),
         auto_restore: !services.is_empty(),
         services,
         verified: None,
-    }))
+    })
 }
 
 /// Windows: включить для `services` ("claude,telegram") или снять (пустая

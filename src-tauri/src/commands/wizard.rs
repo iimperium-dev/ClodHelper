@@ -137,24 +137,12 @@ pub async fn wizard_install(
         }
     }
 
-    // 6) Telegram (macOS): мост уже слушает SOCKS — открываем окно «Добавить
-    //    прокси». Нет Telegram — шаг пропускается. Не фатально.
-    #[cfg(not(target_os = "windows"))]
-    {
-        step("telegram", "start");
-        let installed = tokio::task::spawn_blocking(|| {
-            let st = crate::telegram::status();
-            if st.app_path.is_some() && st.socks_ready && st.via_bridge == 0 {
-                let _ = crate::telegram::setup();
-            }
-            st.app_path.is_some()
-        })
-        .await
-        .unwrap_or(false);
-        step("telegram", if installed { "ok" } else { "skip" });
-    }
+    // Telegram мастер не трогает: подключается по выбору пользователя кнопкой
+    // в «Приложениях». Раньше мастер сам включал Telegram защиту от утечек
+    // (закрывая прямой выход) — и тот оставался без связи, если человек не
+    // нажал «Подключить» в окне Telegram или прокси ему был не нужен.
 
-    // 7) Честная проверка: реальный запрос через мост, не зелёный pill.
+    // 6) Честная проверка: реальный запрос через мост, не зелёный pill.
     step("test", "start");
     tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
     let test = shim::test().await;

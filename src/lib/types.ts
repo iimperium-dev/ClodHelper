@@ -306,6 +306,8 @@ export interface TelegramStatus {
   via_bridge: number;
   /** Соединений Telegram наружу мимо моста. */
   direct: number;
+  /** Защита от утечек закрывает Telegram прямой выход. */
+  guarded: boolean;
 }
 
 /** Версии моста: установленного и встроенного в приложение. */

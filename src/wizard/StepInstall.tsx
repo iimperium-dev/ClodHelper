@@ -19,13 +19,9 @@ const PHASES: { id: string; label: string }[] = [
   { id: "task", label: "Автозапуск и старт моста" },
   { id: "env", label: "Системное проксирование" },
   { id: "presets", label: "Профили приложений" },
-  // macOS: Claude просит пароль Mac один раз, Telegram — нажать «Подключить».
-  ...(isMac
-    ? [
-        { id: "claude", label: "Claude Desktop — macOS спросит пароль" },
-        { id: "telegram", label: "Telegram — нажмите «Подключить» в его окне" },
-      ]
-    : []),
+  // macOS: Claude просит пароль Mac один раз. Telegram мастер не трогает —
+  // он подключается по выбору в «Приложениях».
+  ...(isMac ? [{ id: "claude", label: "Claude Desktop — macOS спросит пароль" }] : []),
   { id: "test", label: "Проверка соединения" },
 ];
 

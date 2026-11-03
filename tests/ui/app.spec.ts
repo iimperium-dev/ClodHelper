@@ -278,7 +278,29 @@ test("windows: Telegram через чужой локальный прокси �
   // Раньше: «Открыт · сейчас без соединений».
   await expect(page.getByText("Через другой прокси, мимо моста")).toBeVisible();
   await page.getByRole("button", { name: "Подключить", exact: true }).click();
+  // Пока Telegram не подключился через мост — подсказка в строке.
   await expect(page.getByText("В окне Telegram нажмите «Подключить»")).toBeVisible();
+  await expect(page.getByText("Готово: Telegram идёт через мост, мимо прокси не пойдёт")).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("Telegram без связи из-за защиты — видно в строке, «Убрать из списка» снимает защиту", async ({ page }) => {
+  const errors = await open(page, "still&tg=blocked");
+  await go(page, "Приложения");
+  // Раньше: спокойное «Открыт · сейчас без соединений».
+  await expect(page.getByText("Без связи: в Telegram не включён прокси")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Подключить", exact: true })).toBeVisible();
+  const row = page.getByText("Telegram", { exact: true });
+  await row.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Убрать из списка" }).click();
+  await expect(row).toHaveCount(0);
+  await page.getByRole("button", { name: "Добавить" }).click();
+  await page.getByPlaceholder("Название программы").fill("teleg");
+  await page.getByRole("option").filter({ hasText: "Telegram" }).getByRole("button").click();
+  await expect(row).toBeVisible();
+  await expect(page.getByText("Без связи: в Telegram не включён прокси")).toHaveCount(0);
+  await gear(page, "Telegram");
+  await expect(page.getByRole("dialog").getByRole("switch", { name: "Не пускать мимо прокси" })).not.toBeChecked();
   expect(errors).toEqual([]);
 });
 

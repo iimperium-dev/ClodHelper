@@ -31,6 +31,9 @@ pub struct TelegramStatus {
     pub via_bridge: u32,
     /// Соединений Telegram наружу мимо моста (не loopback).
     pub direct: u32,
+    /// Защита от утечек закрывает Telegram прямой выход: без прокси в самом
+    /// Telegram он не подключится.
+    pub guarded: bool,
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -45,6 +48,7 @@ pub fn status() -> TelegramStatus {
         socks_ready: socks_listening(),
         via_bridge,
         direct,
+        guarded: crate::leak_guard::guards("telegram"),
     }
 }
 
@@ -69,26 +73,52 @@ pub fn status() -> TelegramStatus {
         socks_ready: socks_listening(),
         via_bridge: t.via_bridge,
         direct: t.direct,
+        guarded: crate::leak_guard::guards("telegram"),
     }
 }
 
-/// «Подключить» (действие пользователя): защита от утечек для Telegram и окно
-/// «Добавить прокси» в самом Telegram с нашим SOCKS-входом.
+/// Сколько ждать, пока пользователь нажмёт «Подключить» в окне Telegram.
+const CONNECT_WAIT: std::time::Duration = std::time::Duration::from_secs(90);
+
+/// «Подключить» (действие пользователя): окно «Добавить прокси» в самом
+/// Telegram с нашим SOCKS-входом, ожидание, пока Telegram пойдёт через мост,
+/// и только потом защита от утечек.
+///
+/// Порядок важен: защита закрывает Telegram прямой выход. Включённая раньше,
+/// чем в Telegram подтверждён прокси, она оставляла его без связи
+/// («Соединение…»), если окно Telegram закрыли или не заметили.
 pub fn setup() -> Result<TelegramStatus, String> {
     let st = ready()?;
-    // Защита от утечек по умолчанию: Telegram не пойдёт мимо прокси. Одно
-    // окно прав администратора; отказ не мешает подключению — защиту можно
+    if st.via_bridge == 0 {
+        open_proxy_window(st.app_path.as_deref().unwrap_or_default())?;
+        mark_prompted();
+        wait_via_bridge()?;
+    }
+    // Telegram уже идёт через мост — теперь защита ему не мешает. Одно окно
+    // прав администратора; отказ не мешает подключению — защиту можно
     // включить позже в настройках Telegram.
-    if let Ok(cur) = crate::leak_guard::status() {
-        if let Ok(list) = crate::leak_guard::with_service(&cur, "telegram", true) {
-            if !cur.enabled || cur.services != list {
-                let _ = crate::leak_guard::set(&list);
-            }
+    let _ = crate::leak_guard::add("telegram");
+    Ok(status())
+}
+
+/// Ждать, пока у Telegram появятся соединения через мост.
+fn wait_via_bridge() -> Result<(), String> {
+    let deadline = std::time::Instant::now() + CONNECT_WAIT;
+    while std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        if status().via_bridge > 0 {
+            return Ok(());
         }
     }
-    open_proxy_window(st.app_path.as_deref().unwrap_or_default())?;
-    mark_prompted();
-    Ok(st)
+    Err(if crate::leak_guard::guards("telegram") {
+        // Защита осталась с прошлой настройки: без прокси Telegram без связи.
+        "Telegram не подключился к мосту — в его окне «Прокси» нажмите «Подключить». \
+         Пока прокси не подключён, Telegram без связи: в его настройках можно выключить «Не пускать мимо прокси»"
+    } else {
+        "Telegram не подключился к мосту — в его окне «Прокси» нажмите «Подключить». \
+         Прямой доступ Telegram не закрыт"
+    }
+    .into())
 }
 
 /// Telegram найден и мост принимает SOCKS — можно открывать окно прокси.

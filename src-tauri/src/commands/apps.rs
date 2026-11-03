@@ -211,6 +211,15 @@ pub async fn apps_remove(id: String) -> Result<Vec<AppProfileStatus>, String> {
                 .map_err(|e| format!("Не удалось снять «Всегда через мост»: {e}"))?;
         }
     }
+    // Telegram и Claude: убрать из списка = снять и их защиту от утечек.
+    // Иначе брандмауэр так и закрывает им прямой выход, а переключатель
+    // «Не пускать мимо прокси» живёт в настройках уже скрытой строки.
+    if let Some(service) = guard_service_of(&id) {
+        tokio::task::spawn_blocking(move || crate::leak_guard::release(service))
+            .await
+            .map_err(|e| format!("Внутренняя ошибка: {e}"))?
+            .map_err(|e| format!("Не удалось снять защиту от утечек: {e}"))?;
+    }
     let mut s = settings::load_with_presets();
     // Встроенный не удаляем (пресеты пересеялись бы при запуске) — прячем.
     if let Some(p) = s.app_profiles.iter_mut().find(|p| p.id == id && p.builtin) {
@@ -220,6 +229,15 @@ pub async fn apps_remove(id: String) -> Result<Vec<AppProfileStatus>, String> {
     }
     let saved = settings::set_profiles(s.app_profiles)?;
     Ok(apps::statuses(&saved.app_profiles))
+}
+
+/// Сервис защиты от утечек, который закрывает прямой выход приложению.
+fn guard_service_of(id: &str) -> Option<&'static str> {
+    match id {
+        crate::apps::TELEGRAM_ID => Some("telegram"),
+        crate::claude_desktop::PROFILE_ID => Some("claude"),
+        _ => None,
+    }
 }
 
 /// Запустить приложение через мост.

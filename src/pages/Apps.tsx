@@ -73,6 +73,8 @@ export function Apps() {
   const [traffic, setTraffic] = useState<Record<string, AppTraffic>>({});
   const [claude, setClaude] = useState<ClaudeProxyStatus | null>(null);
   const [telegram, setTelegram] = useState<TelegramStatus | null>(null);
+  /** «Подключить» Telegram ждёт, пока в его окне нажмут «Подключить». */
+  const [tgWaiting, setTgWaiting] = useState(false);
   const [icons, setIcons] = useState<Record<string, string>>({});
   const [savedLayout, setSavedLayout] = useState<AppsLayout | null | undefined>(undefined);
   const [editing, setEditing] = useState(false);
@@ -241,17 +243,37 @@ export function Apps() {
     }
 
     if (app.id === TELEGRAM_ID) {
+      // Бэкенд открывает окно прокси в Telegram и ждёт, пока тот пойдёт через
+      // мост; защиту от утечек включает только после этого.
       const connect: RowAction = {
         label: "Подключить",
-        run: () => after(telegramSetup()).then(() => "В окне Telegram нажмите «Подключить»"),
+        run: async () => {
+          setTgWaiting(true);
+          try {
+            const st = await after(telegramSetup());
+            return st.guarded
+              ? "Готово: Telegram идёт через мост, мимо прокси не пойдёт"
+              : "Готово: Telegram идёт через мост";
+          } finally {
+            setTgWaiting(false);
+          }
+        },
       };
       const menu: RowAction[] = [{ label: "Открыть окно прокси в Telegram", run: connect.run }];
       if (telegram && !telegram.socks_ready) {
         return { status: { tone: "warn", text: "Мосту нужно обновление — «Обновить» в Обзоре" }, action: null, menu: [] };
       }
+      if (tgWaiting) {
+        return { status: { tone: "warn", text: "В окне Telegram нажмите «Подключить»" }, action: connect, menu };
+      }
       // Свой локальный прокси (tg-ws-proxy и т.п.) ведёт Telegram мимо моста.
       if (t?.running && t.via_bridge === 0 && t.direct === 0 && t.other_proxy) {
         return { status: { tone: "warn", text: "Через другой прокси, мимо моста" }, action: connect, menu };
+      }
+      // Прямой выход закрыт защитой, а прокси в Telegram не включён: он без
+      // связи и соединений нет вовсе — раньше это выглядело как «без соединений».
+      if (telegram?.guarded && t?.running && t.via_bridge === 0) {
+        return { status: { tone: "warn", text: "Без связи: в Telegram не включён прокси" }, action: connect, menu };
       }
       const st = trafficStatus(t, "Не запущен");
       return { status: st, action: st.tone === "warn" ? connect : null, menu };
@@ -283,6 +305,8 @@ export function Apps() {
   const removeApp = async (id: string) => {
     try {
       setApps(await appsRemove(id));
+      // Telegram и Claude теряют и защиту от утечек — перечитать их статус.
+      void loadSetup();
     } catch {
       await load();
     }

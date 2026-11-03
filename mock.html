@@ -51,7 +51,9 @@
     ],
   };
   let layout = null;
-  let leak = { enabled: true, services: "claude", auto_restore: true, verified: true };
+  let leak = params.get("tg") === "blocked"
+    ? { enabled: true, services: "claude,telegram", auto_restore: true, verified: true }
+    : { enabled: true, services: "claude", auto_restore: true, verified: true };
   // «Сайты»: список сайтов, браузеры и системная автонастройка прокси.
   const SITES = {
     sites_get: [
@@ -91,7 +93,10 @@
       { id: "claude-desktop", running: true, via_bridge: 6, direct: 0, proxy_extension: null },
       { id: "codex", running: true, via_bridge: 12, direct: 0, proxy_extension: null },
       // ?tg=other — Telegram ходит через чужой локальный прокси (tg-ws-proxy).
-      params.get("tg") === "other"
+      // ?tg=blocked — защита закрывает Telegram, прокси в нём не включён: без связи.
+      params.get("tg") === "blocked"
+        ? { id: "telegram", running: true, via_bridge: 0, direct: 0, proxy_extension: null }
+        : params.get("tg") === "other"
         ? { id: "telegram", running: true, via_bridge: 0, direct: 0, proxy_extension: null, other_proxy: "127.0.0.1:1442" }
         : { id: "telegram", running: true, via_bridge: 4, direct: 0, proxy_extension: null },
       { id: "custom-1", running: true, via_bridge: 0, direct: 9, proxy_extension: { id: "foxy", name: "FoxyProxy" } },
@@ -147,6 +152,18 @@
         return leak;
       }
       if (cmd === "leak_guard_status") return leak;
+      // Как бэкенд: статус Telegram знает, закрыт ли ему прямой выход.
+      const tgGuarded = () => leak.enabled && leak.services.split(",").includes("telegram");
+      if (cmd === "telegram_status") return { ...structuredClone(R.telegram_status), guarded: tgGuarded() };
+      // «Подключить»: окно прокси в Telegram, ожидание подключения через мост,
+      // и только потом защита от утечек.
+      if (cmd === "telegram_setup") {
+        await new Promise((r) => setTimeout(r, 800));
+        R.apps_traffic = R.apps_traffic.map((t) => (t.id === "telegram" ? { ...t, via_bridge: 3, direct: 0, other_proxy: null } : t));
+        const services = leak.enabled && leak.services.includes("claude") ? ["claude", "telegram"] : ["telegram"];
+        leak = { enabled: true, services: services.join(","), auto_restore: true, verified: services.includes("claude") ? true : null };
+        return { ...structuredClone(R.telegram_status), via_bridge: 3, guarded: true };
+      }
       if (cmd === "claude_proxy_enable") {
         // Как бэкенд: политика и защита от утечек для Claude — одним окном прав.
         R.claude_proxy_status.policy = { ...R.claude_proxy_status.policy, configured: true, managed: true, proxy_url: "http://127.0.0.1:8890" };
@@ -158,7 +175,17 @@
       if (cmd === "clear_global_proxy_env") return (R.global_proxy_env = { present: false, points_to_bridge: false, values: [] });
       if (cmd === "bridge_set_route_mode") { health.mode = args.mode; return null; }
       if (cmd === "browser_policy_status") return args.id === "custom-1" ? structuredClone(R.browser_policy_status) : null;
-      if (cmd === "apps_remove") { const a = apps.find((x) => x.id === args.id); if (a) a.hidden = true; return apps; }
+      if (cmd === "apps_remove") {
+        // Как бэкенд: убранные Telegram и Claude теряют и защиту от утечек.
+        const guard = { telegram: "telegram", "claude-desktop": "claude" }[args.id];
+        if (guard && leak.enabled) {
+          const rest = leak.services.split(",").filter((x) => x && x !== guard);
+          leak = { enabled: rest.length > 0, services: rest.join(","), auto_restore: rest.length > 0, verified: rest.includes("claude") ? true : null };
+        }
+        const a = apps.find((x) => x.id === args.id);
+        if (a) a.hidden = true;
+        return apps;
+      }
       // Как бэкенд: убранные из списка (и встроенные) тоже находятся, выбор
       // возвращает их в список.
       if (cmd === "apps_search") {
