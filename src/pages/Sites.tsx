@@ -28,6 +28,8 @@ import {
   sitesStatus,
   systemPacSet,
   systemPacStatus,
+  googleAdsGet,
+  googleAdsSet,
 } from "../lib/api";
 import { useStatus } from "../lib/status";
 import type { BrowserProxyExtensions, BypassApp, SitesScope, SeenHost, SiteEntry, SitesStatus, SystemPacStatus } from "../lib/types";
@@ -612,6 +614,10 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
         )}
       </motion.section>
 
+      <motion.section variants={fadeInUp} className="mt-4">
+        <AdBlockCard />
+      </motion.section>
+
       {/* ── Расширенные настройки: «Во всех браузерах» (системный PAC: Windows и macOS) ── */}
       {pac?.supported && (
         <motion.section variants={fadeInUp} className="mt-6">
@@ -874,6 +880,51 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
   настоящего IP. Правило — на папку программы: у антидетект-браузера
   (1browser и т.п.) сразу на все профили, сколько их ни открой.
 */
+/*
+  Реклама и счётчики Google (doubleclick, googlesyndication…) в браузерах с
+  «Сайтами»: мост ведёт эти домены к себе и не выпускает. Рекламу внутри
+  роликов YouTube это не убирает — она идёт с тех же серверов, что и видео.
+*/
+function AdBlockCard() {
+  const [on, setOn] = useState<boolean | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    void googleAdsGet().then(setOn).catch(() => setOn(null));
+  }, []);
+
+  if (on === null) return null;
+
+  const toggle = async () => {
+    setSaving(true);
+    setErr(null);
+    try {
+      setOn(await googleAdsSet(!on));
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="surface-card">
+      <div className="flex items-center justify-between gap-3 px-4 py-3">
+        <div className="min-w-0">
+          <div className="text-[14px] font-semibold text-vb-fg">Блокировать рекламу Google</div>
+          <div className="mt-px text-[11px] leading-snug text-vb-silver-faint">
+            Рекламные сети и счётчики Google (DoubleClick, AdSense, Analytics) не загружаются. Рекламу внутри роликов
+            YouTube это не убирает — для неё нужен блокировщик в браузере
+          </div>
+        </div>
+        <Toggle checked={on} disabled={saving} onChange={() => void toggle()} label="Блокировать рекламу Google" />
+      </div>
+      {err && <p className="px-4 pb-3 text-[11px] leading-snug text-vb-warn">{err}</p>}
+    </div>
+  );
+}
+
 function BypassCard() {
   const [apps, setApps] = useState<BypassApp[] | null>(null);
   const [candidates, setCandidates] = useState<BypassApp[] | null>(null);

@@ -399,6 +399,16 @@ export async function claudeTelemetryGet(): Promise<boolean> {
   return invoke<boolean>("claude_telemetry_get");
 }
 
+/** Блокируется ли реклама и счётчики Google в браузерах с «Сайтами». */
+export async function googleAdsGet(): Promise<boolean> {
+  return invoke<boolean>("google_ads_get");
+}
+
+/** Включить/выключить блокировку рекламы Google (без перезапуска моста). */
+export async function googleAdsSet(on: boolean): Promise<boolean> {
+  return invoke<boolean>("google_ads_set", { on });
+}
+
 /** Включить/выключить блокировку телеметрии Claude (без перезапуска моста). */
 export async function claudeTelemetrySet(on: boolean): Promise<boolean> {
   return invoke<boolean>("claude_telemetry_set", { on });

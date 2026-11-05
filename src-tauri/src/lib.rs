@@ -226,6 +226,8 @@ pub fn run() {
             commands::proxy_label_set,
             commands::claude_telemetry_get,
             commands::claude_telemetry_set,
+            commands::google_ads_get,
+            commands::google_ads_set,
             commands::proxies_ping,
             // Окна (трей-попап)
             commands::show_main_window,

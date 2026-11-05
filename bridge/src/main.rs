@@ -479,6 +479,10 @@ struct RulesFile {
 /// Заблокированные домены — общие для всех входов, меняются на лету.
 static BLOCKED: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(Vec::new());
 
+fn blocked_domains() -> Vec<String> {
+    BLOCKED.read().map(|b| b.clone()).unwrap_or_default()
+}
+
 fn is_blocked(host: &str) -> bool {
     BLOCKED.read().map(|b| b.iter().any(|d| host_matches(host, d))).unwrap_or(false)
 }
@@ -1811,6 +1815,9 @@ fn pac_js(state: &State, all: bool) -> String {
         .cloned()
         .chain(state.assignments.iter().map(|(d, _)| d.clone()))
         .chain(state.sites.get().iter().map(|(d, _)| d.clone()))
+        // Заблокированное (реклама Google, телеметрия) тоже ведём в мост: иначе
+        // браузер пошёл бы к ним напрямую, мимо блокировки.
+        .chain(blocked_domains())
         .filter(|d| !d.is_empty())
         .collect();
     domains.sort();
@@ -3798,6 +3805,9 @@ mod tests {
         assert!(is_blocked("blocked-telemetry.invalid"));
         assert!(is_blocked("o1.ingest.blocked-telemetry.invalid"), "поддомены тоже");
         assert!(!is_blocked("notblocked-telemetry.invalid"));
+        // PAC ведёт заблокированное в мост — иначе браузер пошёл бы напрямую.
+        let pac = pac_js(&sites_state(RoutingPolicy::Sites, r#"{"sites":[]}"#), false);
+        assert!(pac.contains("\"blocked-telemetry.invalid\""), "{pac}");
         let st = Arc::new(test_state(RoutingPolicy::Rules, Vec::new()));
         for req in [
             "CONNECT o1.blocked-telemetry.invalid:443 HTTP/1.1\r\nHost: o1.blocked-telemetry.invalid:443\r\n\r\n",
