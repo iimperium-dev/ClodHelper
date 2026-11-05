@@ -191,6 +191,47 @@ pub const CLAUDE_TELEMETRY_DOMAINS: &[&str] = &[
     "browser-intake-ddog-gov.com",
 ];
 
+/// Реклама и счётчики Google — из открытого списка v2fly/domain-list-community
+/// (`geosite:google@ads`, им же блокируют рекламу Happ, Hiddify и Xray).
+/// Без сайтов, куда ходят сами люди (adsense.com, analytics.google.com,
+/// marketingplatform.google.com): их блокировка ломала бы кабинеты.
+/// Рекламу внутри роликов YouTube это не убирает: она идёт с тех же
+/// серверов, что и видео, а мост не вскрывает шифрование.
+pub const GOOGLE_ADS_DOMAINS: &[&str] = &[
+    "2mdn.net",
+    "admob.com",
+    "ads.youtube.com",
+    "adservice.google.com",
+    "adtrafficquality.google",
+    "app-measurement.com",
+    "doubleclick.com",
+    "doubleclick.net",
+    "fcmatch.google.com",
+    "google-analytics.com",
+    "googleadapis.com",
+    "googleads.com",
+    "googleadservices.com",
+    "googlesyndication.com",
+    "googletagmanager.com",
+    "googletagservices.com",
+    "googletraveladservices.com",
+    "mobileads.google.com",
+    "pagead.l.google.com",
+    "partnerad.l.google.com",
+];
+
+/// Что мост не выпускает никуда: телеметрия Claude и реклама Google — по тумблерам.
+fn block_domains(s: &crate::settings::Settings) -> Vec<&'static str> {
+    let mut v: Vec<&str> = Vec::new();
+    if crate::settings::claude_telemetry_blocked(s) {
+        v.extend_from_slice(CLAUDE_TELEMETRY_DOMAINS);
+    }
+    if crate::settings::google_ads_blocked(s) {
+        v.extend_from_slice(GOOGLE_ADS_DOMAINS);
+    }
+    v
+}
+
 /// Записать rules-файл моста из settings (route_mode + proxy_assignments).
 /// Вызывается при регистрации задачи и при изменениях в UI. Возвращает путь
 /// для аргумента --rules.
@@ -229,7 +270,8 @@ pub fn write_rules_file_if_changed() -> Result<(PathBuf, bool), String> {
     proxy_domains.dedup();
     let fallbacks = crate::settings::bridge_fallbacks(&s);
     // Мост ≥1.13 перечитывает block_domains на лету; старый поле игнорирует.
-    let block: &[&str] = if crate::settings::claude_telemetry_blocked(&s) { CLAUDE_TELEMETRY_DOMAINS } else { &[] };
+    // Мост ≥1.14 ещё и ведёт их в себя через PAC «Сайтов».
+    let block = block_domains(&s);
     let json = serde_json::json!({
         "mode": mode,
         "proxy_domains": proxy_domains,
@@ -903,5 +945,27 @@ mod version_tests {
         assert!(parse_version("1.10.0") > parse_version("1.9.9"));
         assert_eq!(parse_version("abc"), None);
         assert_eq!(parse_version(""), None);
+    }
+}
+
+#[cfg(test)]
+mod block_tests {
+    use super::*;
+
+    #[test]
+    fn block_list_follows_toggles() {
+        let mut s = crate::settings::Settings::default();
+        let all = block_domains(&s);
+        assert!(all.contains(&"doubleclick.net") && all.contains(&"o1158394.ingest.us.sentry.io"), "по умолчанию оба");
+        s.block_google_ads = Some(false);
+        assert!(!block_domains(&s).contains(&"doubleclick.net"));
+        s.block_claude_telemetry = Some(false);
+        assert!(block_domains(&s).is_empty());
+        s.block_google_ads = Some(true);
+        assert_eq!(block_domains(&s), GOOGLE_ADS_DOMAINS);
+        // Кабинеты, куда люди ходят сами, не трогаем; YouTube и Google — тоже.
+        for d in ["adsense.com", "analytics.google.com", "youtube.com", "google.com", "googlevideo.com"] {
+            assert!(!GOOGLE_ADS_DOMAINS.contains(&d), "{d}");
+        }
     }
 }

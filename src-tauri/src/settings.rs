@@ -80,6 +80,10 @@ pub struct Settings {
     /// в них имя компьютера и железо. None — включено (по умолчанию).
     #[serde(default)]
     pub block_claude_telemetry: Option<bool>,
+    /// Не пускать рекламу и счётчики Google (doubleclick и т.п.) в браузерах
+    /// с «Сайтами». None — включено (по умолчанию).
+    #[serde(default)]
+    pub block_google_ads: Option<bool>,
     /// Резервы прокси: URL прокси пула → его резервы по порядку (до 5).
     /// Ключ — URL, а не индекс: при перестановке пула резервы едут вместе
     /// со своим прокси.
@@ -360,6 +364,18 @@ pub fn claude_telemetry_blocked(s: &Settings) -> bool {
 pub fn set_claude_telemetry_blocked(on: bool) -> Result<Settings, String> {
     with_settings(|s| {
         s.block_claude_telemetry = Some(on);
+        Ok(())
+    })
+}
+
+/// Блокировать ли рекламу Google (по умолчанию — да).
+pub fn google_ads_blocked(s: &Settings) -> bool {
+    s.block_google_ads.unwrap_or(true)
+}
+
+pub fn set_google_ads_blocked(on: bool) -> Result<Settings, String> {
+    with_settings(|s| {
+        s.block_google_ads = Some(on);
         Ok(())
     })
 }

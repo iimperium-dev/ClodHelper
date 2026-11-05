@@ -209,6 +209,30 @@ pub async fn claude_telemetry_set(on: bool) -> Result<bool, String> {
     Ok(on)
 }
 
+/// Блокируется ли реклама Google (тумблер на экране «Сайты»).
+#[tauri::command]
+pub fn google_ads_get() -> bool {
+    settings::google_ads_blocked(&settings::load())
+}
+
+/// Включить/выключить блокировку рекламы Google. Мост перечитывает правила
+/// сам; системный PAC обновляем, чтобы браузеры взяли новый список доменов.
+#[tauri::command]
+pub async fn google_ads_set(on: bool) -> Result<bool, String> {
+    settings::set_google_ads_blocked(on)?;
+    tokio::task::spawn_blocking(crate::tasks::write_rules_file)
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))??;
+    std::thread::spawn(|| {
+        // Мост перечитывает правила раз в 2 с — PAC после этого.
+        std::thread::sleep(std::time::Duration::from_millis(2500));
+        if let Err(e) = crate::system_pac::refresh() {
+            tracing::warn!("обновление системного PAC: {e}");
+        }
+    });
+    Ok(on)
+}
+
 /// Имена (тэги) прокси: URL → имя.
 #[tauri::command]
 pub fn proxy_labels_get() -> std::collections::HashMap<String, String> {
