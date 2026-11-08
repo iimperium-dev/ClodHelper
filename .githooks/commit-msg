@@ -1,0 +1,10 @@
+#!/bin/sh
+# Вырезает из сообщения коммита подписи ИИ-помощников (Co-Authored-By Claude,
+# «Generated with Claude Code», Claude-Session). Владелец не хочет видеть
+# Claude среди участников репозитория.
+msg="$1"
+tmp="$msg.clean"
+grep -viE '^[[:space:]]*co-authored-by:.*(claude|anthropic)|generated with \[?claude code|^[[:space:]]*claude-session:' "$msg" > "$tmp"
+# Убрать пустые строки в конце, оставшиеся от вырезанного блока.
+awk '{ lines[NR] = $0 } END { n = NR; while (n > 0 && lines[n] ~ /^[[:space:]]*$/) n--; for (i = 1; i <= n; i++) print lines[i] }' "$tmp" > "$msg"
+rm -f "$tmp"

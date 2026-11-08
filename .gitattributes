@@ -1,3 +1,6 @@
 # sh-скрипты встраиваются в бинарник (include_str!) и исполняются на macOS —
 # только LF, CRLF ломает /bin/sh.
 *.sh text eol=lf
+
+# git-хуки исполняются через /bin/sh — только LF.
+.githooks/* text eol=lf

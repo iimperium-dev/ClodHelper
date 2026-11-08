@@ -9,6 +9,23 @@ on:
   pull_request:
 
 jobs:
+  # Подпись ИИ-помощника в коммите делает Claude участником репозитория на
+  # GitHub. Такие коммиты в main не допускаются.
+  no-ai-coauthor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: No Claude attribution in commits
+        run: |
+          bad=$(git log --format="%h %s%n%b" HEAD | grep -iE "^[[:space:]]*co-authored-by:.*(claude|anthropic)|generated with .?claude code|^[[:space:]]*claude-session:" || true)
+          if [ -n "$bad" ]; then
+            echo "::error::В истории есть коммиты с подписью Claude:"
+            git log --format="%h %s" -i -E --grep="co-authored-by:.*(claude|anthropic)" --grep="generated with .?claude code" --grep="claude-session:" HEAD
+            exit 1
+          fi
+
   rust:
     runs-on: macos-latest
     steps:
