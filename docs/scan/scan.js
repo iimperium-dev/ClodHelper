@@ -6,7 +6,10 @@
   const CUTOFF = new Date('2026-09-15T00:00:00');
   const REPO = 'https://github.com/iimperium-dev/ClodHelper';
   const ID = 'clod-scan-root';
-  const DEMO = window.__CLOD_SCAN_DEMO__; // пример на странице закладки
+  // пример на странице закладки: читаем один раз и сразу стираем,
+  // чтобы следующее нажатие закладки не показало пример вместо ошибки
+  const DEMO = window.__CLOD_SCAN_DEMO__;
+  try { delete window.__CLOD_SCAN_DEMO__; } catch (e) { window.__CLOD_SCAN_DEMO__ = undefined; }
 
   // ===== утилиты =====
   const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -293,7 +296,7 @@
     let s = '', y;
 
     s += head(P);
-    const p1 = 'Сканирование', p2 = 'Проверено';
+    const p1 = 'Сканирование', p2 = res.demo ? 'Пример' : 'Проверено';
     // пилюля статуса: ширина ровно по тексту, после проверки плавно сжимается под «Проверено»
     const pw1 = tw(p1, `500 12px ${SANS}`) + 36, pw2 = tw(p2, `500 12px ${SANS}`) + 36;
     const px = w - P - pw1, px2 = w - P - pw2;
@@ -331,7 +334,7 @@
 
     // результат
     let r = '';
-    y += 22; r += ln(y); y += 34;
+    y += 22; r += ln(y); const y0r = y; y += 34;
     const copy = [];
     const fit = (v, font, room) => { // длинное значение: середину — в «…»
       if (tw(v, font) <= room) return v;
@@ -347,7 +350,7 @@
       const x0 = Math.round((w - lw - 10 - vw) / 2);
       r += t(x0, y, lab, { size: 11, fill: C.faint }) +
            t(x0 + lw + 10, y, val, { size: 13, wt: 500, mono: !!res.org, fill: res.org ? C.fg : C.warn });
-      if (res.org) copy.push({ x: x0 - 10, y: y - 18, w: lw + vw + 30, h: 26, text: res.org, label: lab, at: T + .9 });
+      if (res.org && !res.demo) copy.push({ x: x0 - 10, y: y - 18, w: lw + vw + 30, h: 26, text: res.org, label: lab, at: T + .9 });
       y += 22;
       r += t(w / 2, y, fit(res.mail || 'почта: нет данных', `400 12px ${SANS}`, bw), { size: 12, fill: C.dim, anchor: 'middle' });
       y += 22; r += ln(y); y += 30;
@@ -380,8 +383,16 @@
          t(P + 54, fy + 40, 'iimperium-dev/ClodHelper · открытый код', { size: 11, fill: C.faint }) +
          ico(w - P - 28, fy + 19, 16, ['m9 18 6-6-6-6'], C.em, 2.2);
     // когда сделана проверка — неброско, по центру внизу (видно и на снимке)
-    r += t(w / 2, fy + 54 + 24, res.when, { size: 11, mono: 1, fill: C.faint, anchor: 'middle' });
+    r += res.demo
+      ? t(w / 2, fy + 54 + 24, 'ПРИМЕР · не настоящие данные', { size: 11, wt: 600, fill: C.warn, anchor: 'middle' })
+      : t(w / 2, fy + 54 + 24, res.when, { size: 11, mono: 1, fill: C.faint, anchor: 'middle' });
     const H = fy + 54 + 38;
+    // пример: крупный косой штамп поверх результата — попадает и в снимок
+    if (res.demo) {
+      const cy = Math.round((y0r + fy + 54) / 2);
+      const stamp = (yy, sz) => `<text x='${w / 2}' y='${yy}' text-anchor='middle' font-family='${SANS}' font-size='${sz}' font-weight='800' letter-spacing='6' fill='${C.warn}' fill-opacity='.13' stroke='${C.warn}' stroke-opacity='.45' stroke-width='1.5' transform='rotate(-24 ${w / 2} ${yy})'>ПРИМЕР</text>`;
+      r += stamp(cy - 140, 60) + stamp(cy + 20, 84) + stamp(cy + 170, 60);
+    }
 
     const defs = `<defs>${glow}<filter id='gl' x='-5%' y='-300%' width='110%' height='700%'><feGaussianBlur stdDeviation='3'/></filter></defs>`;
     const bg = `<rect x='.5' y='.5' width='${w - 1}' height='${H0 - 1}' rx='10' fill='${C.surf}' stroke='${C.border}'>` +
@@ -396,7 +407,9 @@
 
   // ===== запуск =====
   if (!DEMO && !/(^|\.)claude\.ai$/.test(location.hostname))
-    return show(fail('Откройте claude.ai', ['Закладка работает только на сайте claude.ai.', 'Войдите в аккаунт и нажмите её там.']));
+    return show(/github\.io$/.test(location.hostname)
+      ? fail('Это страница инструкции', ['Закладку нажимают на claude.ai, а не здесь.', 'Откройте claude.ai, войдите и нажмите её там.'])
+      : fail('Откройте claude.ai', ['Закладка работает только на сайте claude.ai.', 'Войдите в аккаунт и нажмите её там.']));
 
   let j, kycData;
   try { ({ acc: j, kyc: kycData } = DEMO || await load()); }
@@ -429,7 +442,7 @@
 
   const dur = STEPS.map(([, ms]) => Math.round(ms * (0.85 + Math.random() * 0.3)));
   const card = build(dur, {
-    state,
+    state, demo: !!DEMO,
     org: org?.uuid, mail,
     when: now.toLocaleDateString('ru-RU') + ' · ' + now.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
     big:   { ok: 'Разрешено', warn: 'Внимание', deny: 'Запрещено' }[state],
