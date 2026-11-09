@@ -226,7 +226,16 @@
   if (d < 0) { m--; d += new Date(now.getFullYear(), now.getMonth(), 0).getDate(); }
   if (m < 0) { y--; m += 12; }
   const age = [y && `${y} ${plural(y, ['год', 'года', 'лет'])}`, m && `${m} мес.`, `${d} ${plural(d, ['день', 'дня', 'дней'])}`].filter(Boolean).join(' ');
-  const kycOk = kycData?.status === 'verified';
+  // статус KYC от Claude → русская подпись и цвет; ok — проверка не мешает активации
+  const KYC = {
+    verified: ['пройден', 'ok'], not_required: ['не требуется', 'ok'],
+    pending: ['на проверке', 'warn'], in_progress: ['на проверке', 'warn'], in_review: ['на проверке', 'warn'], submitted: ['на проверке', 'warn'],
+    required: ['требуется', 'warn'], not_started: ['требуется', 'warn'],
+    failed: ['не пройден', 'deny'], rejected: ['отклонён', 'deny'], declined: ['отклонён', 'deny'], expired: ['истёк', 'deny']
+  };
+  const ks = String(kycData?.status || '').toLowerCase();
+  const kyc = KYC[ks] || [ks ? ks.replace(/_/g, ' ') : 'нет данных', 'warn'];
+  const kycOk = kyc[1] === 'ok';
   const earlyReg = created < CUTOFF;
   const state = !earlyReg ? 'deny' : kycOk ? 'ok' : 'warn';
   const yn = (v, yes, no) => v === true ? [yes, 'ok'] : v === false ? [no, 'deny'] : ['нет данных', 'warn'];
@@ -241,7 +250,7 @@
       ['Создан', fmt(j.created_at)],
       ['Верификация', ...yn(j.is_verified, 'пройдена', 'не пройдена')],
       ['Возраст 18+', ...yn(j.age_is_verified, 'подтверждён', 'не подтверждён')],
-      ['KYC', ...(kycOk ? ['verified', 'ok'] : [kycData?.status || 'нет данных', state === 'deny' ? 'deny' : 'warn'])],
+      ['KYC', ...kyc],
       ['Регистрация до ' + CUTOFF.toLocaleDateString('ru-RU'), ...(earlyReg ? ['да', 'ok'] : ['нет', 'deny'])]
     ]
   });
