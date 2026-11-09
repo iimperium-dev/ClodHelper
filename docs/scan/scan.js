@@ -56,22 +56,166 @@
   back.addEventListener('click', close);
   requestAnimationFrame(() => { back.style.opacity = '1'; });
 
-  // показать готовую SVG-карточку; links — кликабельные зоны поверх неё
-  const show = (card, links = []) => {
+  // стили кнопок поверх карточки (живут в закрытом shadow DOM — сайт их не видит и не ломает)
+  const css = el('style');
+  css.textContent = `
+    .z{position:absolute;visibility:hidden;cursor:pointer;border-radius:8px;transition:background .15s}
+    .z.on{visibility:visible}
+    .cp:hover,.cp:focus-visible{background:rgba(255,255,255,.045);outline:none}
+    .tag{position:absolute;top:50%;display:flex;align-items:center;gap:5px;transform:translateY(-50%);padding:2px 8px 2px 6px;border-radius:6px;background:${C.surf2};box-shadow:inset 0 0 0 1px #303633;color:${C.dim};font:500 11px ${SANS};white-space:nowrap;opacity:0;transition:opacity .15s,color .15s;pointer-events:none}
+    .cp:hover .tag,.cp:focus-visible .tag,.tag.ok{opacity:1}
+    .tag.ok{color:${C.em}}
+    .tag img{width:12px;height:12px;display:block}
+    .snap{all:unset;box-sizing:border-box;position:absolute;display:flex;align-items:center;justify-content:center;transform:translateX(-50%);border-radius:999px;background:transparent;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08);color:${C.dim};font-family:${SANS};font-weight:500;white-space:nowrap;cursor:pointer;visibility:hidden;opacity:0;transition:opacity .4s,background .15s,box-shadow .15s,color .15s}
+    .snap.on{visibility:visible;opacity:1}
+    .snap:hover,.snap:focus-visible{background:rgba(34,192,132,.08);box-shadow:inset 0 0 0 1px rgba(34,192,132,.35);color:${C.fg}}
+    .snap:active{transform:translateX(-50%) scale(.96)}
+    .snap img{display:block;opacity:.85}
+    .flash{position:absolute;inset:0;border-radius:inherit;background:#fff;opacity:0;pointer-events:none}
+    .flash.go{animation:fl .5s ease-out}
+    @keyframes fl{0%{opacity:.9}100%{opacity:0}}
+    .shot{animation:sh .45s cubic-bezier(.22,1,.36,1)}
+    @keyframes sh{0%{scale:1}30%{scale:.975}100%{scale:1}}
+    .toast{position:absolute;left:50%;bottom:18px;transform:translate(-50%,6px);display:flex;align-items:center;gap:8px;padding:9px 14px;border-radius:10px;background:${C.surf2};box-shadow:inset 0 0 0 1px #303633,0 12px 30px rgba(0,0,0,.4);color:${C.fg};font:500 13px ${SANS};white-space:nowrap;opacity:0;transition:opacity .2s,transform .3s;pointer-events:none}
+    .toast.on{opacity:1;transform:translate(-50%,0)}
+    .toast img{width:15px;height:15px;display:block}`;
+  root.append(css);
+  const svgUrl = s => 'data:image/svg+xml;base64,' + b64(s);
+  const icon = (paths, col, sw = 2) => svgUrl(`<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='${col}' stroke-width='${sw}' stroke-linecap='round' stroke-linejoin='round'>${paths.map(d => `<path d='${d}'/>`).join('')}</svg>`);
+  const I_COPY = ['M8 8h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2z', 'M4 16a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2'];
+  const I_OK = ['M20 6 9 17l-5-5'];
+  const I_CAM = ['M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z', 'M12 16.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z'];
+  const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+
+  // звук затвора: синтезируется на месте (без файлов) — два коротких щелчка шума
+  let ac;
+  const shutter = () => {
+    try {
+      ac = ac || new (window.AudioContext || window.webkitAudioContext)();
+      if (ac.state === 'suspended') ac.resume();
+      const len = Math.floor(ac.sampleRate * .05), buf = ac.createBuffer(1, len, ac.sampleRate), d = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3);
+      const click = (at, gain, freq) => {
+        const src = ac.createBufferSource(), bp = ac.createBiquadFilter(), g = ac.createGain();
+        src.buffer = buf; bp.type = 'bandpass'; bp.frequency.value = freq; bp.Q.value = .9;
+        g.gain.setValueAtTime(gain, ac.currentTime + at);
+        src.connect(bp).connect(g).connect(ac.destination);
+        src.start(ac.currentTime + at);
+      };
+      click(0, .55, 2600);   // открытие шторки
+      click(.075, .4, 1700); // закрытие
+    } catch {}
+  };
+
+  const copyText = async text => {
+    try { await navigator.clipboard.writeText(text); return true; } catch {}
+    const ta = el('textarea', 'position:fixed;opacity:0;'); ta.value = text; root.append(ta); ta.select();
+    let ok = false; try { ok = document.execCommand('copy'); } catch {} ta.remove(); return ok;
+  };
+
+  // снимок: та же карточка в конечном состоянии → PNG. При рисовании в canvas браузер
+  // плавные анимации не проигрывает, а мгновенные <set> применяет — поэтому каждую
+  // анимацию меняем на <set> с её конечным значением, начавшийся «давно».
+  const stillSvg = s => s
+    .replace(/<animate\b([^>]*?)\/>/g, (m, at) => {
+      const name = /attributeName='([^']*)'/.exec(at)[1];
+      const to = /\bto='([^']*)'/.exec(at)?.[1] ?? (/values='([^']*)'/.exec(at)?.[1] || '').split(';').pop();
+      return `<set attributeName='${name}' to='${to}' fill='freeze'/>`;
+    })
+    .replace(/<set\b([^>]*?)\sbegin='[^']*'/g, '<set$1')
+    .replace(/<set\b/g, "<set begin='-100s'");
+  const toPng = (svg, w, h) => new Promise((ok, bad) => {
+    const im = new Image();
+    im.onload = () => {
+      setTimeout(() => {
+        try {
+          const s = 2, cv2 = document.createElement('canvas');
+          cv2.width = w * s; cv2.height = h * s;
+          const g = cv2.getContext('2d');
+          g.fillStyle = C.bg; g.fillRect(0, 0, cv2.width, cv2.height);
+          g.drawImage(im, 0, 0, cv2.width, cv2.height);
+          cv2.toBlob(b => b ? ok(b) : bad(new Error('пустой снимок')), 'image/png');
+        } catch (e) { bad(e); }
+      }, 60);
+    };
+    im.onerror = () => bad(new Error('не удалось нарисовать снимок'));
+    im.src = svgUrl(stillSvg(svg));
+  });
+
+  // показать готовую SVG-карточку; поверх — ссылки, зоны копирования и кнопка снимка
+  const show = (card, o = {}) => {
     const k = Math.min(1.25, (innerHeight - 64) / card.h, (innerWidth - 48) / card.w);
     wrap.style.width = card.w * k + 'px';
     wrap.style.height = card.h * k + 'px';
+    wrap.style.borderRadius = 10 * k + 'px';
     const img = el('img', `display:block;width:100%;height:100%;max-width:none;margin:0;border:0;user-select:none;`, {
-      src: 'data:image/svg+xml;base64,' + b64(card.svg), alt: 'Clod Scan', draggable: 'false'
+      src: svgUrl(card.svg), alt: 'Clod Scan', draggable: 'false'
     });
     const x = el('button', `all:initial;position:absolute;top:-12px;right:-12px;width:30px;height:30px;border-radius:50%;background:${C.surf2};box-shadow:inset 0 0 0 1px ${C.border};cursor:pointer;display:grid;place-items:center;`, { 'aria-label': 'Закрыть', title: 'Закрыть (Esc)' });
-    x.append(el('img', 'display:block;width:14px;height:14px;', { src: 'data:image/svg+xml;base64,' + b64(`<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='${C.silver}' stroke-width='2.4' stroke-linecap='round'><path d='M18 6 6 18M6 6l12 12'/></svg>`), alt: '' }));
+    x.append(el('img', 'display:block;width:14px;height:14px;', { src: icon(['M18 6 6 18', 'M6 6l12 12'], C.silver, 2.4), alt: '' }));
     x.addEventListener('click', close);
-    wrap.append(img, x);
-    for (const l of links) {
-      const a = el('a', `position:absolute;left:${l.x * k}px;top:${l.y * k}px;width:${l.w * k}px;height:${l.h * k}px;border-radius:${10 * k}px;cursor:pointer;visibility:hidden;`, { href: l.href, target: '_blank', rel: 'noopener', 'aria-label': l.label });
-      setTimeout(() => { a.style.visibility = 'visible'; }, l.at * 1000);
-      wrap.append(a);
+    const flash = el('div'); flash.className = 'flash';
+    const toast = el('div'); toast.className = 'toast';
+    wrap.append(img, flash, x, toast);
+    const later = (node, at) => setTimeout(() => node.classList.add('on'), at * 1000);
+    const pos = (z, pad = 0) => `left:${(z.x - pad) * k}px;top:${z.y * k}px;width:${(z.w + 2 * pad) * k}px;height:${z.h * k}px;`;
+    let tt;
+    const say = (text, ico) => {
+      toast.replaceChildren(el('img', '', { src: icon(ico, C.em, 2.4), alt: '' }), document.createTextNode(text));
+      toast.classList.add('on'); clearTimeout(tt); tt = setTimeout(() => toast.classList.remove('on'), 2600);
+    };
+
+    for (const l of o.links || []) {
+      const a = el('a', pos(l) + `border-radius:${10 * k}px;`, { href: l.href, target: '_blank', rel: 'noopener', 'aria-label': l.label });
+      a.className = 'z'; later(a, l.at); wrap.append(a);
+    }
+
+    // строка с Org ID: наведение — «Копировать», нажатие — копирует
+    for (const c of o.copy || []) {
+      const z = el('div', pos(c, 8), { role: 'button', tabindex: '0', 'aria-label': 'Скопировать ' + c.label, title: c.text });
+      z.className = 'z cp';
+      // подсказка: справа от подписи строки, а у центрированного блока — над ним
+      const tag = el('span', c.tagX != null ? `left:${(c.tagX + 16) * k}px;font-size:${11 * k}px;`
+        : `left:50%;top:auto;bottom:calc(100% + ${4 * k}px);transform:translateX(-50%);font-size:${11 * k}px;`);
+      tag.className = 'tag';
+      const ti = el('img', '', { src: icon(I_COPY, C.dim), alt: '' }), tl = document.createTextNode('Копировать');
+      tag.append(ti, tl); z.append(tag);
+      const go = async () => {
+        if (!(await copyText(c.text))) return say('Не получилось скопировать', I_COPY);
+        tag.classList.add('ok'); ti.src = icon(I_OK, C.em, 2.6); tl.data = 'Скопировано';
+        setTimeout(() => { tag.classList.remove('ok'); ti.src = icon(I_COPY, C.dim); tl.data = 'Копировать'; }, 1600);
+      };
+      z.addEventListener('click', go);
+      z.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });
+      later(z, c.at); wrap.append(z);
+    }
+
+    // кнопка снимка в центре шапки
+    if (o.snap) {
+      const b = el('button', `left:${card.w / 2 * k}px;top:${20 * k}px;height:${26 * k}px;padding:0 ${11 * k}px 0 ${9 * k}px;gap:${6 * k}px;font-size:${12 * k}px;`, { 'aria-label': 'Снимок результата', title: 'Снимок результата — в буфер обмена' });
+      b.className = 'snap';
+      b.append(el('img', `width:${14 * k}px;height:${14 * k}px;`, { src: icon(I_CAM, C.silver, 1.9), alt: '' }), document.createTextNode('Снимок'));
+      let busy = false;
+      b.addEventListener('click', async () => {
+        if (busy) return; busy = true;
+        shutter();
+        flash.classList.remove('go'); wrap.classList.remove('shot'); void wrap.offsetWidth;
+        flash.classList.add('go'); wrap.classList.add('shot');
+        const blob = toPng(card.svg, card.w, card.h);
+        try {
+          await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+          say(`Снимок в буфере — вставьте ${isMac ? '⌘V' : 'Ctrl+V'}`, I_OK);
+        } catch (e) {
+          console.warn('Clod Scan: буфер обмена не принял снимок —', e?.name, e?.message);
+          try {
+            const a = el('a', '', { href: URL.createObjectURL(await blob), download: 'clod-scan.png' });
+            root.append(a); a.click(); a.remove();
+            say('Снимок сохранён в загрузки', I_OK);
+          } catch { say('Не удалось сделать снимок', I_CAM); }
+        }
+        setTimeout(() => { busy = false; }, 600);
+      });
+      later(b, o.snap.at); wrap.append(b);
     }
     requestAnimationFrame(() => { wrap.style.opacity = '1'; wrap.style.transform = 'translate(-50%,-50%)'; });
   };
@@ -89,13 +233,26 @@
       return { ok: false, error: e.name === 'AbortError' ? 'сервер не ответил вовремя' : e.message };
     } finally { clearTimeout(tm); }
   };
+  // Личная организация аккаунта. У человека в рабочей подписке (Team / Enterprise) организаций
+  // несколько: такие у Claude помечены возможностью «raven» (или полем raven_type / тарифом *raven*).
+  // Личная — с чатом и без raven; при равенстве — та, в названии которой есть почта.
+  const pickOrg = acc => {
+    const orgs = (acc.memberships || []).map(m => m.organization).filter(o => o?.uuid);
+    const mail = String(acc.email_address || acc.email || '').toLowerCase();
+    const team = o => (o.capabilities || []).includes('raven') || !!o.raven_type || /raven/i.test(o.rate_limit_tier || '');
+    const chat = o => !o.capabilities || o.capabilities.includes('chat');
+    const named = o => !!mail && String(o.name || '').toLowerCase().includes(mail);
+    const score = o => (team(o) ? 0 : 4) + (chat(o) ? 2 : 0) + (named(o) ? 1 : 0);
+    return orgs.slice().sort((a, b) => score(b) - score(a))[0] || null;
+  };
   const load = async () => {
     const accR = await getJSON('/api/account');
     if (!accR.ok) throw accR;
     const acc = accR.data;
-    const activeId = document.cookie.match(/lastActiveOrg=([^;]+)/)?.[1];
+    const own = pickOrg(acc);
     const orgs = (acc.memberships || []).map(m => m.organization?.uuid).filter(Boolean);
-    const order = activeId ? [activeId, ...orgs.filter(o => o !== activeId)] : orgs;
+    // KYC — сначала у личной организации, а не у той, что последней открыта на сайте
+    const order = own ? [own.uuid, ...orgs.filter(o => o !== own.uuid)] : orgs;
     let kyc = null;
     for (const id of order) {
       const r = await getJSON(`/api/organizations/${id}/kyc_status`);
@@ -137,12 +294,15 @@
 
     s += head(P);
     const p1 = 'Сканирование', p2 = 'Проверено';
-    const pw = Math.max(tw(p1, `500 12px ${SANS}`), tw(p2, `500 12px ${SANS}`)) + 34, px = w - P - pw;
-    s += `<rect x='${px}' y='20' width='${pw}' height='26' rx='13' fill='#0a0a0a' fill-opacity='.55' stroke='#fff' stroke-opacity='.05'/>`;
+    // пилюля статуса: ширина ровно по тексту, после проверки плавно сжимается под «Проверено»
+    const pw1 = tw(p1, `500 12px ${SANS}`) + 36, pw2 = tw(p2, `500 12px ${SANS}`) + 36;
+    const px = w - P - pw1, px2 = w - P - pw2;
+    const glide = (a, to) => `<animate attributeName='${a}' to='${to}' begin='${fT}s' dur='.4s' calcMode='spline' keyTimes='0;1' keySplines='.22 1 .36 1' fill='freeze'/>`;
+    s += `<rect x='${px}' y='20' width='${pw1}' height='26' rx='13' fill='#0a0a0a' fill-opacity='.55' stroke='#fff' stroke-opacity='.05'>${glide('x', px2)}${glide('width', pw2)}</rect>`;
     s += `<circle cx='${px + 13}' cy='33' r='6' fill='${C.em}' opacity='0'><animate attributeName='r' values='3;8' dur='1.6s' repeatCount='indefinite'/><animate attributeName='opacity' values='.45;0' dur='1.6s' repeatCount='indefinite'/>${setAt('visibility', 'hidden', fT)}</circle>`;
-    s += `<circle cx='${px + 13}' cy='33' r='3' fill='${C.em}'>${setAt('fill', ac, fT)}</circle>`;
-    s += t(px + 23, 37, p1, { size: 12, wt: 500, fill: C.silver, kids: setAt('opacity', '0', fT) }) +
-         t(px + 23, 37, p2, { size: 12, wt: 500, fill: C.silver, op: 0, kids: setAt('opacity', '1', fT) });
+    s += `<circle cx='${px + 13}' cy='33' r='3' fill='${C.em}'>${setAt('fill', ac, fT)}${glide('cx', px2 + 13)}</circle>`;
+    s += t(px + 24, 37, p1, { size: 12, wt: 500, fill: C.silver, kids: setAt('opacity', '0', fT) }) +
+         t(px2 + 24, 37, p2, { size: 12, wt: 500, fill: C.silver, op: 0, kids: fadeIn(f(T + .15), .3) });
 
     // изумрудная шкала с мягким свечением
     const vals = c.map(x => Math.round(bw * x / T)).join(';');
@@ -171,12 +331,35 @@
 
     // результат
     let r = '';
-    y += 22; r += ln(y); y += 30;
-    res.rows.forEach(([k, v, l]) => {
+    y += 22; r += ln(y); y += 34;
+    const copy = [];
+    const fit = (v, font, room) => { // длинное значение: середину — в «…»
+      if (tw(v, font) <= room) return v;
+      let a = Math.ceil(v.length / 2), b = a;
+      while (a > 3 && tw(v.slice(0, a) + '…' + v.slice(b), font) > room) { a--; b++; }
+      return v.slice(0, a) + '…' + v.slice(b);
+    };
+
+    // кто это: Org ID и почта — блоком по центру
+    {
+      const lab = 'Org ID', lf = `400 11px ${SANS}`, vf = `500 13px ${MONO}`;
+      const val = res.org || 'нет данных', vw = tw(val, res.org ? vf : `500 13px ${SANS}`), lw = tw(lab, lf);
+      const x0 = Math.round((w - lw - 10 - vw) / 2);
+      r += t(x0, y, lab, { size: 11, fill: C.faint }) +
+           t(x0 + lw + 10, y, val, { size: 13, wt: 500, mono: !!res.org, fill: res.org ? C.fg : C.warn });
+      if (res.org) copy.push({ x: x0 - 10, y: y - 18, w: lw + vw + 30, h: 26, text: res.org, label: lab, at: T + .9 });
+      y += 22;
+      r += t(w / 2, y, fit(res.mail || 'почта: нет данных', `400 12px ${SANS}`, bw), { size: 12, fill: C.dim, anchor: 'middle' });
+      y += 22; r += ln(y); y += 30;
+    }
+    res.rows.forEach(([k, v, l, o = {}]) => {
       const cc = l ? COL[l] : C.fg;
+      const font = o.mono ? `500 12px ${MONO}` : `500 13px ${SANS}`;
+      v = fit(v, font, bw - tw(k, `400 13px ${SANS}`) - (l ? 40 : 24));
       r += t(P, y, k, { fill: C.dim });
-      if (l) r += `<circle cx='${w - P - tw(v, `500 13px ${SANS}`) - 10}' cy='${y - 4.5}' r='3' fill='${cc}'/>`;
-      r += t(w - P, y, v, { wt: 500, fill: cc, anchor: 'end' });
+      if (l) r += `<circle cx='${w - P - tw(v, font) - 10}' cy='${y - 4.5}' r='3' fill='${cc}'/>`;
+      r += t(w - P, y, v, { wt: 500, fill: cc, anchor: 'end', mono: o.mono, size: o.mono ? 12 : 13 });
+      if (o.copy) copy.push({ x: P, y: y - 19, w: bw, h: 27, tagX: tw(k, `400 13px ${SANS}`) + 6, text: o.copy, label: k, at: T + .9 });
       y += 28;
     });
 
@@ -196,7 +379,9 @@
          t(P + 54, fy + 24, 'Clod Helper на GitHub', { size: 13, wt: 500 }) +
          t(P + 54, fy + 40, 'iimperium-dev/ClodHelper · открытый код', { size: 11, fill: C.faint }) +
          ico(w - P - 28, fy + 19, 16, ['m9 18 6-6-6-6'], C.em, 2.2);
-    const H = fy + 54 + P;
+    // когда сделана проверка — неброско, по центру внизу (видно и на снимке)
+    r += t(w / 2, fy + 54 + 24, res.when, { size: 11, mono: 1, fill: C.faint, anchor: 'middle' });
+    const H = fy + 54 + 38;
 
     const defs = `<defs>${glow}<filter id='gl' x='-5%' y='-300%' width='110%' height='700%'><feGaussianBlur stdDeviation='3'/></filter></defs>`;
     const bg = `<rect x='.5' y='.5' width='${w - 1}' height='${H0 - 1}' rx='10' fill='${C.surf}' stroke='${C.border}'>` +
@@ -205,7 +390,7 @@
                `<line x1='12' x2='${w - 12}' y1='1.5' y2='1.5' stroke='#fff' stroke-opacity='.04'/>`;
     return {
       svg: `<svg xmlns='http://www.w3.org/2000/svg' width='${w}' height='${H}'>${defs}${bg}${s}<g opacity='0'>${fadeIn(f(T + .35), .45)}${r}</g></svg>`,
-      w, h: H, T, gh: { x: P, y: fy, w: bw, h: 54 }
+      w, h: H, T, gh: { x: P, y: fy, w: bw, h: 54 }, copy
     };
   };
 
@@ -236,6 +421,8 @@
   const ks = String(kycData?.status || '').toLowerCase();
   const kyc = KYC[ks] || [ks ? ks.replace(/_/g, ' ') : 'нет данных', 'warn'];
   const kycOk = kyc[1] === 'ok';
+  const org = pickOrg(j);
+  const mail = j.email_address || j.email || '';
   const earlyReg = created < CUTOFF;
   const state = !earlyReg ? 'deny' : kycOk ? 'ok' : 'warn';
   const yn = (v, yes, no) => v === true ? [yes, 'ok'] : v === false ? [no, 'deny'] : ['нет данных', 'warn'];
@@ -243,6 +430,8 @@
   const dur = STEPS.map(([, ms]) => Math.round(ms * (0.85 + Math.random() * 0.3)));
   const card = build(dur, {
     state,
+    org: org?.uuid, mail,
+    when: now.toLocaleDateString('ru-RU') + ' · ' + now.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
     big:   { ok: 'Разрешено', warn: 'Внимание', deny: 'Запрещено' }[state],
     title: { ok: 'Активации по Org ID доступны', warn: 'Активация возможна, может понадобиться KYC', deny: 'Активации по Org ID недоступны' }[state],
     rows: [
@@ -255,5 +444,9 @@
     ]
   });
   await sleep(120);
-  show(card, [{ ...card.gh, href: REPO, label: 'Clod Helper на GitHub', at: card.T + .5 }]);
+  show(card, {
+    links: [{ ...card.gh, href: REPO, label: 'Clod Helper на GitHub', at: card.T + .5 }],
+    copy: card.copy,
+    snap: { at: card.T + .9 }
+  });
 })();
