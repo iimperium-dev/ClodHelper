@@ -1,0 +1,691 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Проверка аккаунта Claude · Clod Scan</title>
+<meta name="description" content="Дата регистрации, верификация и KYC аккаунта Claude — за 5 секунд. Закладка от Clod Helper, код открыт.">
+<meta property="og:title" content="Проверка аккаунта Claude">
+<meta property="og:description" content="Дата регистрации, верификация и KYC — за 5 секунд.">
+<meta property="og:image" content="media/instruction.jpg">
+<meta name="theme-color" content="#0b0e0d">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7.5' fill='%23161c19'/%3E%3Cpath d='M 23.09 21.54 A 9 9 0 1 1 23.09 10.46' fill='none' stroke='%2322c084' stroke-width='3.1' stroke-linecap='round'/%3E%3Ccircle cx='25.2' cy='16' r='2.3' fill='%233ad897'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0b0e0d;--surf:#121614;--surf2:#1a1e1c;--border:#252a28;--border2:#303633;
+  --fg:#f1f4f2;--silver:#ccd1ce;--dim:#8b918e;--faint:#646a67;
+  --em:#22c084;--emB:#3ad897;--warn:#e0a33d;
+  --sans:Inter,"Segoe UI Variable","Segoe UI",-apple-system,system-ui,sans-serif;
+  --mono:"JetBrains Mono","Cascadia Mono",Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%;scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 var(--sans);-webkit-font-smoothing:antialiased}
+a{color:inherit}
+button{font:inherit;color:inherit}
+.page{max-width:1000px;margin:0 auto;padding:0 24px}
+svg.i{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+
+/* шапка */
+.top{display:flex;align-items:center;justify-content:space-between;gap:12px;height:68px;border-bottom:1px solid var(--border)}
+.brand{display:flex;align-items:center;gap:10px;text-decoration:none;font-weight:600;font-size:14px;white-space:nowrap}
+.brand small{color:var(--faint);font-weight:400;font-size:13px;margin-left:2px}
+.mark{width:28px;height:28px;display:block;flex:none}
+.nav{display:flex;align-items:center;gap:6px}
+.navlink{display:flex;align-items:center;gap:8px;color:var(--dim);text-decoration:none;font-size:13.5px;padding:7px 12px;border-radius:9px;white-space:nowrap;transition:color .15s,background .15s}
+.navlink:hover{color:var(--fg);background:var(--surf2)}
+.navlink svg.gh{width:16px;height:16px;fill:currentColor}
+.navlink.vpn{color:var(--fg);border:1px solid var(--border2);background:var(--surf)}
+.navlink.vpn .dot{width:7px;height:7px;border-radius:50%;background:var(--em);box-shadow:0 0 0 3px rgba(34,192,132,.16)}
+.navlink.vpn svg.i{width:15px;height:15px;color:var(--faint);transition:transform .2s,color .2s}
+.navlink.vpn:hover svg.i{transform:translateY(2px);color:var(--em)}
+
+/* первый экран */
+.hero{padding:72px 0 36px;display:flex;flex-direction:column;align-items:center;text-align:center;gap:22px}
+h1{font-size:clamp(34px,5.6vw,58px);line-height:1.05;letter-spacing:-.028em;font-weight:700;margin:0;text-wrap:balance}
+.lead{font-size:clamp(16px,2vw,19px);color:var(--silver);margin:-6px 0 0;text-wrap:balance}
+.cta{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:12px;margin-top:6px}
+.bm{display:inline-flex;align-items:center;gap:10px;height:52px;padding:0 22px 0 18px;border-radius:12px;background:var(--em);color:#04120b;text-decoration:none;font-size:0;cursor:grab;box-shadow:0 0 0 1px rgba(255,255,255,.08) inset,0 10px 30px -12px rgba(34,192,132,.6);transition:transform .15s,background .15s}
+.bm::after{content:"Проверить аккаунт";font:600 16px var(--sans)}
+.bm svg.i{width:20px;height:20px;stroke-width:2.2}
+.bm:hover{background:var(--emB)}
+.bm:active{cursor:grabbing;transform:scale(.98)}
+.bm.nudge{animation:nudge .5s}
+@keyframes nudge{20%,60%{transform:translateX(-5px)}40%,80%{transform:translateX(5px)}}
+.ghost{display:inline-flex;align-items:center;gap:8px;height:52px;padding:0 18px;border-radius:12px;border:1px solid var(--border2);background:transparent;color:var(--silver);font-weight:500;font-size:15px;cursor:pointer;transition:background .15s,color .15s}
+.ghost:hover{background:var(--surf2);color:var(--fg)}
+.hint{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:6px 8px;color:var(--dim);font-size:14px;margin:0}
+kbd{font:500 12.5px var(--mono);color:var(--fg);background:var(--surf2);border:1px solid var(--border2);border-bottom-width:2px;border-radius:6px;padding:2px 7px;white-space:nowrap}
+.tip{position:fixed;left:50%;bottom:28px;transform:translate(-50%,12px);opacity:0;pointer-events:none;background:var(--surf2);border:1px solid var(--border2);color:var(--fg);padding:11px 16px;border-radius:10px;font-size:14px;transition:opacity .2s,transform .3s;z-index:10;max-width:calc(100vw - 32px)}
+.tip.on{opacity:1;transform:translate(-50%,0)}
+.mobile{display:none;gap:14px;align-items:flex-start;text-align:left;padding:16px 18px;border-radius:12px;background:var(--surf);border:1px solid var(--border);color:var(--silver);max-width:520px}
+.mobile svg.i{color:var(--warn);margin-top:3px}
+.mobile b{color:var(--fg);font-weight:600;display:block}
+body.is-phone .cta,body.is-phone .hint{display:none}
+body.is-phone .mobile{display:flex}
+
+/* плеер */
+.player{position:relative;border-radius:16px;overflow:hidden;border:1px solid var(--border);background:#000;aspect-ratio:16/9;outline:none;-webkit-tap-highlight-color:transparent;isolation:isolate}
+.player:focus-visible{box-shadow:0 0 0 2px var(--em)}
+.player video{display:block;width:100%;height:100%;object-fit:contain;background:#000}
+.player .cover{position:absolute;inset:0;display:grid;place-items:center;cursor:pointer;background-size:cover;background-position:center;transition:opacity .35s}
+.player .cover::before{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(11,14,13,.12) 0%,rgba(11,14,13,.3) 42%,rgba(11,14,13,.9) 74%,rgba(11,14,13,.98) 100%)}
+.player .big{position:relative;width:76px;height:76px;border-radius:50%;background:var(--em);color:#04120b;display:grid;place-items:center;box-shadow:0 0 0 10px rgba(34,192,132,.14),0 18px 40px -10px rgba(0,0,0,.7);transition:transform .25s cubic-bezier(.22,1,.36,1),box-shadow .25s}
+.player .big svg{width:30px;height:30px;fill:currentColor;margin-left:4px}
+.player .cover:hover .big{transform:scale(1.06);box-shadow:0 0 0 14px rgba(34,192,132,.18),0 18px 40px -10px rgba(0,0,0,.7)}
+.player .meta{position:absolute;left:26px;right:26px;bottom:22px;display:flex;align-items:flex-end;justify-content:space-between;gap:16px;text-align:left}
+.player .meta b{display:block;font-size:clamp(16px,2.2vw,21px);font-weight:650;letter-spacing:-.01em;line-height:1.25}
+.player .meta span{color:var(--silver);font-size:13.5px}
+.player .dur{font:500 12.5px var(--mono);color:var(--fg);background:rgba(11,14,13,.7);border:1px solid rgba(255,255,255,.08);border-radius:7px;padding:4px 8px;white-space:nowrap;backdrop-filter:blur(6px)}
+.player.started .cover{opacity:0;pointer-events:none}
+.player.ended .cover{opacity:1;pointer-events:auto}
+.player .bar{position:absolute;left:12px;right:12px;bottom:12px;display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:12px;background:rgba(11,14,13,.78);border:1px solid rgba(255,255,255,.07);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);opacity:0;transform:translateY(8px);pointer-events:none;transition:opacity .25s,transform .3s cubic-bezier(.22,1,.36,1)}
+.player.started:not(.ended).ui .bar,.player.started.paused:not(.ended) .bar{opacity:1;transform:none;pointer-events:auto}
+.player.started:not(.ui):not(.paused){cursor:none}
+.player .btn{all:unset;box-sizing:border-box;width:36px;height:36px;border-radius:9px;display:grid;place-items:center;color:var(--silver);cursor:pointer;flex:none;transition:background .15s,color .15s}
+.player .btn:hover{background:rgba(255,255,255,.07);color:var(--fg)}
+.player .btn:focus-visible{box-shadow:0 0 0 2px var(--em)}
+.player .btn svg{width:18px;height:18px}
+.player .btn svg.f{fill:currentColor;stroke:none}
+.player .time{font:500 12px var(--mono);color:var(--silver);white-space:nowrap;padding:0 6px;min-width:94px;text-align:center}
+.player .track{position:relative;flex:1;height:36px;cursor:pointer;touch-action:none;display:flex;align-items:center}
+.player .rail{position:relative;width:100%;height:4px;border-radius:2px;background:rgba(255,255,255,.12);overflow:visible;transition:height .15s}
+.player .track:hover .rail,.player .track.drag .rail{height:6px}
+.player .buf,.player .fill{position:absolute;left:0;top:0;bottom:0;border-radius:inherit}
+.player .buf{background:rgba(255,255,255,.14)}
+.player .fill{background:var(--em)}
+.player .knob{position:absolute;top:50%;width:14px;height:14px;margin:-7px 0 0 -7px;border-radius:50%;background:var(--fg);box-shadow:0 0 0 4px rgba(34,192,132,.35);transform:scale(0);transition:transform .15s}
+.player .track:hover .knob,.player .track.drag .knob{transform:scale(1)}
+.player .pv{position:absolute;bottom:34px;transform:translateX(-50%);font:500 11.5px var(--mono);background:var(--surf2);border:1px solid var(--border2);border-radius:6px;padding:2px 6px;opacity:0;pointer-events:none;transition:opacity .15s}
+.player .track:hover .pv,.player .track.drag .pv{opacity:1}
+.player .flash{position:absolute;left:50%;top:50%;width:64px;height:64px;margin:-32px;border-radius:50%;background:rgba(11,14,13,.6);display:grid;place-items:center;color:var(--fg);opacity:0;pointer-events:none;backdrop-filter:blur(6px)}
+.player .flash svg{width:26px;height:26px;fill:currentColor}
+.player .flash.go{animation:flash .55s ease-out}
+@keyframes flash{0%{opacity:1;transform:scale(.85)}100%{opacity:0;transform:scale(1.25)}}
+.player:fullscreen{border:0;border-radius:0}
+.player:-webkit-full-screen{border:0;border-radius:0;width:100%;height:100%}
+
+/* вкладки: шаги, безопасность, код */
+.tabs{margin-top:22px;border:1px solid var(--border);border-radius:16px;background:var(--surf)}
+.tabbar{display:flex;gap:4px;padding:6px;border-bottom:1px solid var(--border);overflow-x:auto;scrollbar-width:none}
+.tabbar::-webkit-scrollbar{display:none}
+.tab{all:unset;box-sizing:border-box;display:flex;align-items:center;gap:8px;height:38px;padding:0 14px;border-radius:10px;color:var(--dim);font-size:14px;font-weight:500;cursor:pointer;white-space:nowrap;transition:color .15s,background .15s}
+.tab svg.i{width:16px;height:16px}
+.tab:hover{color:var(--fg)}
+.tab[aria-selected=true]{background:var(--surf2);color:var(--fg);box-shadow:inset 0 0 0 1px var(--border2)}
+.tab[aria-selected=true] svg.i{color:var(--em)}
+.tab:focus-visible{box-shadow:0 0 0 2px var(--em)}
+.pane{padding:22px 22px 24px;animation:pane .3s ease-out}
+.pane[hidden]{display:none}
+@keyframes pane{from{opacity:0;transform:translateY(4px)}}
+.row3{display:grid;grid-template-columns:repeat(3,1fr);gap:22px}
+.it{display:flex;gap:12px}
+.it .n{font:500 12px var(--mono);color:var(--em);width:22px;height:22px;border-radius:6px;background:rgba(34,192,132,.1);display:grid;place-items:center;flex:none;margin-top:1px}
+.it svg.i{color:var(--em);margin-top:2px}
+.it b{display:block;font-weight:600;font-size:14.5px;margin-bottom:2px}
+.it span{color:var(--dim);font-size:13.5px;line-height:1.5}
+.it span a{color:var(--silver)}
+.codebox{position:relative;border-radius:12px;background:var(--bg);border:1px solid var(--border);overflow:hidden}
+.codebox::after{content:"";position:absolute;left:0;right:0;bottom:0;height:40px;background:linear-gradient(transparent,var(--bg));pointer-events:none;transition:opacity .2s}
+.codebox.end::after{opacity:0}
+.codebox pre{margin:0;max-height:360px;overflow-y:auto;overflow-x:hidden;padding:16px 18px 20px;font:12px/1.7 var(--mono);font-variant-ligatures:none;font-feature-settings:"liga" 0,"calt" 0;color:var(--silver);white-space:pre-wrap;overflow-wrap:anywhere;tab-size:2;scrollbar-width:thin;scrollbar-color:var(--border2) transparent}
+.codebox pre::-webkit-scrollbar{width:10px}
+.codebox pre::-webkit-scrollbar-track{background:transparent}
+.codebox pre::-webkit-scrollbar-thumb{background:var(--border2);border-radius:10px;border:3px solid var(--bg)}
+.codebox pre::-webkit-scrollbar-thumb:hover{background:var(--faint)}
+.codebox pre::-webkit-scrollbar-button{display:none;height:0;width:0}
+.codebox pre::selection{background:rgba(34,192,132,.28)}
+.codehead{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 12px}
+.pane .note{color:var(--dim);font-size:13.5px;margin:0}
+.copy{all:unset;box-sizing:border-box;display:inline-flex;align-items:center;gap:7px;height:32px;padding:0 12px;border-radius:8px;border:1px solid var(--border2);color:var(--silver);font-size:13px;font-weight:500;cursor:pointer;white-space:nowrap;transition:background .15s,color .15s,border-color .15s}
+.copy:hover{background:var(--surf2);color:var(--fg)}
+.copy:focus-visible{box-shadow:0 0 0 2px var(--em)}
+.copy svg.i{width:15px;height:15px}
+.copy.ok{color:var(--em);border-color:rgba(34,192,132,.4)}
+
+/* Clod Helper */
+section{padding:72px 0 8px;scroll-margin-top:16px}
+h2{font-size:clamp(24px,3.4vw,34px);line-height:1.15;letter-spacing:-.022em;font-weight:650;margin:0 0 10px;text-wrap:balance}
+.sub{color:var(--dim);margin:0;max-width:60ch}
+.promo{border:1px solid var(--border);border-radius:20px;background:linear-gradient(180deg,rgba(34,192,132,.06),transparent 220px),var(--surf);padding:44px 40px 40px}
+.promo .head{display:flex;align-items:center;gap:12px;margin-bottom:22px;font-weight:600}
+.promo .head .mark{width:36px;height:36px}
+.promo .head small{display:block;color:var(--faint);font-weight:400;font-size:12.5px;line-height:1.2}
+.promo .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px 28px;margin:28px 0 32px}
+.rec{display:flex;align-items:center;gap:14px;margin-top:14px;padding:14px 16px;border-radius:12px;background:var(--surf2);border:1px solid var(--border);text-decoration:none;transition:border-color .15s}
+.rec:hover{border-color:var(--border2)}
+.rec .ic{width:38px;height:38px;border-radius:9px;background:var(--bg);display:grid;place-items:center;color:var(--em);flex:none;border:1px solid var(--border)}
+.rec b{display:block;font-weight:600;font-size:14.5px}
+.rec span{color:var(--dim);font-size:13px}
+.rec .go{margin-left:auto;color:var(--em)}
+.dl{display:flex;flex-wrap:wrap;gap:12px;margin-top:30px}
+.btn2{display:inline-flex;align-items:center;gap:9px;height:46px;padding:0 18px;border-radius:11px;text-decoration:none;font-weight:600;font-size:14.5px;transition:background .15s}
+.btn2.pri{background:var(--em);color:#04120b}
+.btn2.pri:hover{background:var(--emB)}
+.btn2.sec{border:1px solid var(--border2);color:var(--silver);font-weight:500}
+.btn2.sec:hover{background:var(--surf2);color:var(--fg)}
+.btn2 svg.gh{width:16px;height:16px;fill:currentColor}
+
+footer{border-top:1px solid var(--border);margin-top:64px;padding:26px 0 40px;display:flex;flex-wrap:wrap;gap:8px 24px;justify-content:space-between;color:var(--faint);font-size:13px}
+footer a{color:var(--dim);text-decoration:none}
+footer a:hover{color:var(--fg)}
+
+@media (max-width:820px){
+  .row3{grid-template-columns:1fr;gap:16px}
+  .promo{padding:28px 20px 24px;border-radius:16px}
+  .promo .grid{grid-template-columns:1fr}
+}
+@media (max-width:600px){
+  .page{padding:0 16px}
+  .hero{padding:44px 0 28px}
+  .brand small,.navlink.gh-l span{display:none}
+  .navlink.vpn{padding:7px 10px}
+  .player{border-radius:12px}
+  .player .big{width:60px;height:60px}
+  .player .big svg{width:24px;height:24px}
+  .player .meta{left:14px;right:14px;bottom:12px}
+  .player .meta span{display:none}
+  .player .bar{left:6px;right:6px;bottom:6px;padding:4px;gap:2px}
+  .player .time{min-width:0;font-size:11px;padding:0 4px}
+  .player .vol{display:none}
+  .pane{padding:18px 16px 20px}
+}
+@media (max-width:380px){.navlink.vpn .t2{display:none}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}html{scroll-behavior:auto}}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="mark" viewBox="0 0 32 32"><rect width="32" height="32" rx="7.5" fill="#161c19"/><rect x=".5" y=".5" width="31" height="31" rx="7" fill="none" stroke="#fff" stroke-opacity=".06"/><path d="M 23.09 21.54 A 9 9 0 1 1 23.09 10.46" fill="none" stroke="#22c084" stroke-width="3.1" stroke-linecap="round"/><circle cx="25.2" cy="16" r="2.3" fill="#3ad897"/></symbol>
+  <symbol id="gh" viewBox="0 0 24 24"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></symbol>
+  <symbol id="play" viewBox="0 0 24 24"><path d="M7 4.6v14.8a1 1 0 0 0 1.52.85l12.1-7.4a1 1 0 0 0 0-1.7L8.52 3.75A1 1 0 0 0 7 4.6z"/></symbol>
+  <symbol id="pause" viewBox="0 0 24 24"><rect x="5.5" y="4" width="4.5" height="16" rx="1.2"/><rect x="14" y="4" width="4.5" height="16" rx="1.2"/></symbol>
+</svg>
+
+<div class="page">
+  <header class="top">
+    <a class="brand" href="./"><svg class="mark"><use href="#mark"/></svg>Clod Helper <small>· Clod Scan</small></a>
+    <nav class="nav">
+      <a class="navlink vpn" href="#helper"><span class="dot"></span><span>Замена VPN<span class="t2"> — Clod Helper</span></span><svg class="i" viewBox="0 0 24 24"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg></a>
+      <a class="navlink gh-l" href="https://github.com/iimperium-dev/ClodHelper" aria-label="GitHub"><svg class="gh"><use href="#gh"/></svg><span>GitHub</span></a>
+    </nav>
+  </header>
+
+  <main>
+    <div class="hero">
+      <h1>Проверка аккаунта Claude</h1>
+      <p class="lead">Дата регистрации, верификация и KYC — за 5 секунд.</p>
+      <div class="cta">
+        <a class="bm" id="bm" href="javascript:(async()%3D%3E%7Bconst%20R%3Dnew%20Date(%222026-09-15T00%3A00%3A00%22)%2Cht%3D%22https%3A%2F%2Fgithub.com%2Fiimperium-dev%2FClodHelper%22%2CU%3D%22clod-scan-root%22%2CY%3Dwindow.__CLOD_SCAN_DEMO__%2Cpt%3Dt%3D%3Enew%20Promise(i%3D%3EsetTimeout(i%2Ct))%2CK%3D(t%2Ci)%3D%3Ei%5Bt%2510%3D%3D1%26%26t%25100!%3D11%3F0%3At%2510%3E%3D2%26%26t%2510%3C%3D4%26%26(t%25100%3C10%7C%7Ct%25100%3E%3D20)%3F1%3A2%5D%2Cgt%3Dt%3D%3Enew%20Date(t).toLocaleString(%22ru-RU%22%2C%7Bday%3A%222-digit%22%2Cmonth%3A%222-digit%22%2Cyear%3A%22numeric%22%2Chour%3A%222-digit%22%2Cminute%3A%222-digit%22%7D)%2C%24t%3Dt%3D%3EString(t).replace(%2F%26%2Fg%2C%22%26amp%3B%22).replace(%2F%3C%2Fg%2C%22%26lt%3B%22)%2Cq%3Ddocument.createElement(%22canvas%22).getContext(%222d%22)%2CA%3D(t%2Ci)%3D%3E(q.font%3Di%2CMath.ceil(q.measureText(t).width))%2CJ%3Dt%3D%3Ebtoa(unescape(encodeURIComponent(t)))%2Cu%3D(t%2Ci%2Co%3D%7B%7D)%3D%3E%7Bconst%20a%3Ddocument.createElement(t)%3Bi%26%26(a.style.cssText%3Di)%3Bfor(const%20r%20in%20o)a.setAttribute(r%2Co%5Br%5D)%3Breturn%20a%7D%2CE%3D'Inter%2C%22Segoe%20UI%20Variable%22%2C%22Segoe%20UI%22%2C-apple-system%2Csystem-ui%2Csans-serif'%2Cwt%3D'%22JetBrains%20Mono%22%2C%22Cascadia%20Mono%22%2CMenlo%2CConsolas%2Cmonospace'%2Ce%3D%7Bbg%3A%22%230b0e0d%22%2Csurf%3A%22%23121614%22%2Csurf2%3A%22%231a1e1c%22%2Cborder%3A%22%23252a28%22%2Cfg%3A%22%23f1f4f2%22%2Csilver%3A%22%23ccd1ce%22%2Cdim%3A%22%238b918e%22%2Cfaint%3A%22%23646a67%22%2Cem%3A%22%2322c084%22%2CemB%3A%22%233ad897%22%2Cwarn%3A%22%23e0a33d%22%2Closs%3A%22%23ef6767%22%7D%2CV%3D%7Bok%3Ae.em%2Cwarn%3Ae.warn%2Cdeny%3Ae.loss%7D%2CW%3D%22M20%2013c0%205-3.5%207.5-7.66%208.95a1%201%200%200%201-.67-.01C7.5%2020.5%204%2018%204%2013V6a1%201%200%200%201%201-1c2%200%204.5-1.2%206.24-2.72a1.17%201.17%200%200%201%201.52%200C14.51%203.81%2017%205%2019%205a1%201%200%200%201%201%201z%22%2CQ%3D%7Bok%3A%5BW%2C%22m9%2012%202%202%204-4%22%5D%2Cwarn%3A%5B%22m21.73%2018-8-14a2%202%200%200%200-3.48%200l-8%2014A2%202%200%200%200%204%2021h16a2%202%200%200%200%201.73-3%22%2C%22M12%209v4%22%2C%22M12%2017h.01%22%5D%2Cdeny%3A%5BW%2C%22m14.5%209.5-5%205%22%2C%22m9.5%209.5%205%205%22%5D%7D%2Cut%3D%22M12%20.297c-6.63%200-12%205.373-12%2012%200%205.303%203.438%209.8%208.205%2011.385.6.113.82-.258.82-.577%200-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422%2018.07%203.633%2017.7%203.633%2017.7c-1.087-.744.084-.729.084-.729%201.205.084%201.838%201.236%201.838%201.236%201.07%201.835%202.809%201.305%203.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93%200-1.31.465-2.38%201.235-3.22-.135-.303-.54-1.523.105-3.176%200%200%201.005-.322%203.3%201.23.96-.267%201.98-.399%203-.405%201.02.006%202.04.138%203%20.405%202.28-1.552%203.285-1.23%203.285-1.23.645%201.653.24%202.873.12%203.176.765.84%201.23%201.91%201.23%203.22%200%204.61-2.805%205.625-5.475%205.92.42.36.81%201.096.81%202.22%200%201.606-.015%202.896-.015%203.286%200%20.315.21.69.825.57C20.565%2022.092%2024%2017.592%2024%2012.297c0-6.627-5.373-12-12-12%22%3Bdocument.getElementById(U)%3F.remove()%3Bconst%20B%3Du(%22div%22%2C%22all%3Ainitial%3Bposition%3Afixed%3Binset%3A0%3Bz-index%3A2147483647%3B%22%2C%7Bid%3AU%7D)%2Cmt%3DB.attachShadow(%7Bmode%3A%22closed%22%7D)%2CS%3Du(%22div%22%2C%22position%3Afixed%3Binset%3A0%3Bbackground%3Argba(5%2C7%2C6%2C.62)%3Bbackdrop-filter%3Ablur(6px)%3B-webkit-backdrop-filter%3Ablur(6px)%3Bopacity%3A0%3Btransition%3Aopacity%20.3s%3B%22)%2C%24%3Du(%22div%22%2C%22position%3Afixed%3Bleft%3A50%25%3Btop%3A50%25%3Btransform%3Atranslate(-50%25%2Ccalc(-50%25%20%2B%2010px))%3Bopacity%3A0%3Btransition%3Aopacity%20.35s%2Ctransform%20.45s%20cubic-bezier(.22%2C1%2C.36%2C1)%3Bfilter%3Adrop-shadow(0%2024px%2060px%20rgba(0%2C0%2C0%2C.55))%3B%22)%3Bmt.append(S%2C%24)%2C(document.body%7C%7Cdocument.documentElement).append(B)%3Bconst%20X%3Dt%3D%3E%7Bt.key%3D%3D%3D%22Escape%22%26%26I()%7D%2CI%3D()%3D%3E%7BremoveEventListener(%22keydown%22%2CX%2C!0)%2CS.style.opacity%3D%220%22%2C%24.style.opacity%3D%220%22%2CsetTimeout(()%3D%3EB.remove()%2C320)%7D%3BaddEventListener(%22keydown%22%2CX%2C!0)%2CS.addEventListener(%22click%22%2CI)%2CrequestAnimationFrame(()%3D%3E%7BS.style.opacity%3D%221%22%7D)%3Bconst%20N%3D(t%2Ci%3D%5B%5D)%3D%3E%7Bconst%20o%3DMath.min(1.25%2C(innerHeight-64)%2Ft.h%2C(innerWidth-48)%2Ft.w)%3B%24.style.width%3Dt.w*o%2B%22px%22%2C%24.style.height%3Dt.h*o%2B%22px%22%3Bconst%20a%3Du(%22img%22%2C%22display%3Ablock%3Bwidth%3A100%25%3Bheight%3A100%25%3Bmax-width%3Anone%3Bmargin%3A0%3Bborder%3A0%3Buser-select%3Anone%3B%22%2C%7Bsrc%3A%22data%3Aimage%2Fsvg%2Bxml%3Bbase64%2C%22%2BJ(t.svg)%2Calt%3A%22Clod%20Scan%22%2Cdraggable%3A%22false%22%7D)%2Cr%3Du(%22button%22%2C%60all%3Ainitial%3Bposition%3Aabsolute%3Btop%3A-12px%3Bright%3A-12px%3Bwidth%3A30px%3Bheight%3A30px%3Bborder-radius%3A50%25%3Bbackground%3A%24%7Be.surf2%7D%3Bbox-shadow%3Ainset%200%200%200%201px%20%24%7Be.border%7D%3Bcursor%3Apointer%3Bdisplay%3Agrid%3Bplace-items%3Acenter%3B%60%2C%7B%22aria-label%22%3A%22%5Cu0417%5Cu0430%5Cu043A%5Cu0440%5Cu044B%5Cu0442%5Cu044C%22%2Ctitle%3A%22%5Cu0417%5Cu0430%5Cu043A%5Cu0440%5Cu044B%5Cu0442%5Cu044C%20(Esc)%22%7D)%3Br.append(u(%22img%22%2C%22display%3Ablock%3Bwidth%3A14px%3Bheight%3A14px%3B%22%2C%7Bsrc%3A%22data%3Aimage%2Fsvg%2Bxml%3Bbase64%2C%22%2BJ(%60%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2024%2024'%20fill%3D'none'%20stroke%3D'%24%7Be.silver%7D'%20stroke-width%3D'2.4'%20stroke-linecap%3D'round'%3E%3Cpath%20d%3D'M18%206%206%2018M6%206l12%2012'%2F%3E%3C%2Fsvg%3E%60)%2Calt%3A%22%22%7D))%2Cr.addEventListener(%22click%22%2CI)%2C%24.append(a%2Cr)%3Bfor(const%20s%20of%20i)%7Bconst%20n%3Du(%22a%22%2C%60position%3Aabsolute%3Bleft%3A%24%7Bs.x*o%7Dpx%3Btop%3A%24%7Bs.y*o%7Dpx%3Bwidth%3A%24%7Bs.w*o%7Dpx%3Bheight%3A%24%7Bs.h*o%7Dpx%3Bborder-radius%3A%24%7B10*o%7Dpx%3Bcursor%3Apointer%3Bvisibility%3Ahidden%3B%60%2C%7Bhref%3As.href%2Ctarget%3A%22_blank%22%2Crel%3A%22noopener%22%2C%22aria-label%22%3As.label%7D)%3BsetTimeout(()%3D%3E%7Bn.style.visibility%3D%22visible%22%7D%2Cs.at*1e3)%2C%24.append(n)%7DrequestAnimationFrame(()%3D%3E%7B%24.style.opacity%3D%221%22%2C%24.style.transform%3D%22translate(-50%25%2C-50%25)%22%7D)%7D%2CZ%3Dasync(t%2Ci%3D8e3)%3D%3E%7Bconst%20o%3Dnew%20AbortController%2Ca%3DsetTimeout(()%3D%3Eo.abort()%2Ci)%3Btry%7Bconst%20r%3Dawait%20fetch(t%2C%7Bcredentials%3A%22include%22%2Csignal%3Ao.signal%7D)%3Breturn%20r.ok%3F(r.headers.get(%22content-type%22)%7C%7C%22%22).includes(%22json%22)%3F%7Bok%3A!0%2Cdata%3Aawait%20r.json()%7D%3A%7Bok%3A!1%2Cstatus%3A401%2Cerror%3A%22%5Cu043D%5Cu0435%5Cu0442%20%5Cu0434%5Cu0430%5Cu043D%5Cu043D%5Cu044B%5Cu0445%20%5Cu0430%5Cu043A%5Cu043A%5Cu0430%5Cu0443%5Cu043D%5Cu0442%5Cu0430%22%7D%3A%7Bok%3A!1%2Cstatus%3Ar.status%2Cerror%3A%60HTTP%20%24%7Br.status%7D%60%7D%7Dcatch(r)%7Breturn%7Bok%3A!1%2Cerror%3Ar.name%3D%3D%3D%22AbortError%22%3F%22%5Cu0441%5Cu0435%5Cu0440%5Cu0432%5Cu0435%5Cu0440%20%5Cu043D%5Cu0435%20%5Cu043E%5Cu0442%5Cu0432%5Cu0435%5Cu0442%5Cu0438%5Cu043B%20%5Cu0432%5Cu043E%5Cu0432%5Cu0440%5Cu0435%5Cu043C%5Cu044F%22%3Ar.message%7D%7Dfinally%7BclearTimeout(a)%7D%7D%2Cyt%3Dasync()%3D%3E%7Bconst%20t%3Dawait%20Z(%22%2Fapi%2Faccount%22)%3Bif(!t.ok)throw%20t%3Bconst%20i%3Dt.data%2Co%3Ddocument.cookie.match(%2FlastActiveOrg%3D(%5B%5E%3B%5D%2B)%2F)%3F.%5B1%5D%2Ca%3D(i.memberships%7C%7C%5B%5D).map(n%3D%3En.organization%3F.uuid).filter(Boolean)%2Cr%3Do%3F%5Bo%2C...a.filter(n%3D%3En!%3D%3Do)%5D%3Aa%3Blet%20s%3Dnull%3Bfor(const%20n%20of%20r)%7Bconst%20d%3Dawait%20Z(%60%2Fapi%2Forganizations%2F%24%7Bn%7D%2Fkyc_status%60)%3Bif(d.ok)%7Bs%3Dd.data%3Bbreak%7D%7Dreturn%7Bacc%3Ai%2Ckyc%3As%7D%7D%2Ctt%3D%5B%5B%22%5Cu0417%5Cu0430%5Cu0449%5Cu0438%5Cu0449%5Cu0451%5Cu043D%5Cu043D%5Cu043E%5Cu0435%20%5Cu0441%5Cu043E%5Cu0435%5Cu0434%5Cu0438%5Cu043D%5Cu0435%5Cu043D%5Cu0438%5Cu0435%22%2C620%5D%2C%5B%22%5Cu041F%5Cu0440%5Cu043E%5Cu0444%5Cu0438%5Cu043B%5Cu044C%20%5Cu0430%5Cu043A%5Cu043A%5Cu0430%5Cu0443%5Cu043D%5Cu0442%5Cu0430%22%2C940%5D%2C%5B%22%5Cu0412%5Cu043E%5Cu0437%5Cu0440%5Cu0430%5Cu0441%5Cu0442%20%5Cu0438%20%5Cu0438%5Cu0441%5Cu0442%5Cu043E%5Cu0440%5Cu0438%5Cu044F%22%2C700%5D%2C%5B%22%5Cu041E%5Cu0440%5Cu0433%5Cu0430%5Cu043D%5Cu0438%5Cu0437%5Cu0430%5Cu0446%5Cu0438%5Cu0438%22%2C880%5D%2C%5B%22%5Cu0421%5Cu0442%5Cu0430%5Cu0442%5Cu0443%5Cu0441%20KYC%22%2C1060%5D%2C%5B%22%5Cu0421%5Cu0432%5Cu0435%5Cu0440%5Cu043A%5Cu0430%20%5Cu0441%20%5Cu043F%5Cu043E%5Cu043B%5Cu0438%5Cu0442%5Cu0438%5Cu043A%5Cu043E%5Cu0439%22%2C800%5D%5D%2Cc%3D(t%2Ci%2Co%2Ca%3D%7B%7D)%3D%3E%60%3Ctext%20x%3D'%24%7Bt%7D'%20y%3D'%24%7Bi%7D'%20font-family%3D'%24%7Ba.mono%3Fwt%3AE%7D'%20font-size%3D'%24%7Ba.size%7C%7C13%7D'%20font-weight%3D'%24%7Ba.wt%7C%7C400%7D'%20fill%3D'%24%7Ba.fill%7C%7Ce.fg%7D'%24%7Ba.anchor%3F%60%20text-anchor%3D'%24%7Ba.anchor%7D'%60%3A%22%22%7D%24%7Ba.op!%3Dnull%3F%60%20opacity%3D'%24%7Ba.op%7D'%60%3A%22%22%7D%3E%24%7B%24t(o)%7D%24%7Ba.kids%7C%7C%22%22%7D%3C%2Ftext%3E%60%2Cp%3D(t%2Ci%2Co)%3D%3E%60%3Cset%20attributeName%3D'%24%7Bt%7D'%20to%3D'%24%7Bi%7D'%20begin%3D'%24%7Bo%7Ds'%20fill%3D'freeze'%2F%3E%60%2Cet%3D(t%2Ci%3D.3)%3D%3E%60%3Canimate%20attributeName%3D'opacity'%20from%3D'0'%20to%3D'1'%20begin%3D'%24%7Bt%7Ds'%20dur%3D'%24%7Bi%7Ds'%20fill%3D'freeze'%2F%3E%60%2CD%3D(t%2Ci%2Co%2Ca%2Cr%2Cs%3D2)%3D%3E%60%3Csvg%20x%3D'%24%7Bt%7D'%20y%3D'%24%7Bi%7D'%20width%3D'%24%7Bo%7D'%20height%3D'%24%7Bo%7D'%20viewBox%3D'0%200%2024%2024'%20fill%3D'none'%20stroke%3D'%24%7Br%7D'%20stroke-width%3D'%24%7Bs%7D'%20stroke-linecap%3D'round'%20stroke-linejoin%3D'round'%3E%24%7Ba.map(n%3D%3E%60%3Cpath%20d%3D'%24%7Bn%7D'%2F%3E%60).join(%22%22)%7D%3C%2Fsvg%3E%60%2Cxt%3D(t%2Ci%2Co)%3D%3E%60%3Csvg%20x%3D'%24%7Bt%7D'%20y%3D'%24%7Bi%7D'%20width%3D'%24%7Bo%7D'%20height%3D'%24%7Bo%7D'%20viewBox%3D'0%200%2032%2032'%3E%3Crect%20width%3D'32'%20height%3D'32'%20rx%3D'7.5'%20fill%3D'%23161c19'%2F%3E%3Crect%20x%3D'.5'%20y%3D'.5'%20width%3D'31'%20height%3D'31'%20rx%3D'7'%20fill%3D'none'%20stroke%3D'%23fff'%20stroke-opacity%3D'.06'%2F%3E%3Cpath%20d%3D'M%2023.09%2021.54%20A%209%209%200%201%201%2023.09%2010.46'%20fill%3D'none'%20stroke%3D'%24%7Be.em%7D'%20stroke-width%3D'3.1'%20stroke-linecap%3D'round'%2F%3E%3Ccircle%20cx%3D'25.2'%20cy%3D'16'%20r%3D'2.3'%20fill%3D'%24%7Be.emB%7D'%2F%3E%3C%2Fsvg%3E%60%2Cit%3Dt%3D%3Ext(t%2C18%2C30)%2Bc(t%2B40%2C31%2C%22Clod%20Helper%22%2C%7Bsize%3A13%2Cwt%3A600%7D)%2Bc(t%2B40%2C45%2C%22Account%20scan%22%2C%7Bsize%3A10%2Cfill%3Ae.faint%7D)%2Cot%3D%60%3CradialGradient%20id%3D'glo'%20cx%3D'50%25'%20cy%3D'0%25'%20r%3D'75%25'%3E%3Cstop%20offset%3D'0'%20stop-color%3D'%24%7Be.em%7D'%20stop-opacity%3D'.10'%2F%3E%3Cstop%20offset%3D'1'%20stop-color%3D'%24%7Be.em%7D'%20stop-opacity%3D'0'%2F%3E%3C%2FradialGradient%3E%60%2Cj%3D(t%2Ci)%3D%3E%7Bconst%20r%3D120%2Bi.length*20%2Cs%3D%60%3Crect%20x%3D'.5'%20y%3D'.5'%20width%3D'459'%20height%3D'%24%7Br-1%7D'%20rx%3D'10'%20fill%3D'%24%7Be.surf%7D'%20stroke%3D'%24%7Be.border%7D'%2F%3E%3Crect%20x%3D'1'%20y%3D'1'%20width%3D'458'%20height%3D'120'%20rx%3D'10'%20fill%3D'url(%23glo)'%2F%3E%60%2Bit(22)%2B%60%3Cline%20x1%3D'22'%20x2%3D'438'%20y1%3D'66'%20y2%3D'66'%20stroke%3D'%24%7Be.border%7D'%2F%3E%60%2BD(22%2C84%2C18%2CQ.warn%2Ce.warn%2C2)%2Bc(50%2C98%2Ct%2C%7Bsize%3A15%2Cwt%3A600%7D)%2Bi.map((n%2Cd)%3D%3Ec(50%2C122%2Bd*20%2Cn%2C%7Bfill%3Ae.dim%7D)).join(%22%22)%3Breturn%7Bsvg%3A%60%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20width%3D'460'%20height%3D'%24%7Br%7D'%3E%3Cdefs%3E%24%7Bot%7D%3C%2Fdefs%3E%24%7Bs%7D%3C%2Fsvg%3E%60%2Cw%3A460%2Ch%3Ar%7D%7D%2Cbt%3D(t%2Ci)%3D%3E%7Bconst%20s%3DV%5Bi.state%5D%2Cn%3Df%3D%3Ef.toFixed(3)%2Cd%3D%5B0%5D%3Bt.forEach(f%3D%3Ed.push(d%5Bd.length-1%5D%2Bf%2F1e3))%3Bconst%20x%3Dd%5Bd.length-1%5D%2Cm%3Dn(x)%3Blet%20h%3D%22%22%2Cl%3Bh%2B%3Dit(22)%3Bconst%20nt%3D%22%5Cu0421%5Cu043A%5Cu0430%5Cu043D%5Cu0438%5Cu0440%5Cu043E%5Cu0432%5Cu0430%5Cu043D%5Cu0438%5Cu0435%22%2Clt%3D%22%5Cu041F%5Cu0440%5Cu043E%5Cu0432%5Cu0435%5Cu0440%5Cu0435%5Cu043D%5Cu043E%22%2Cct%3DMath.max(A(nt%2C%60500%2012px%20%24%7BE%7D%60)%2CA(lt%2C%60500%2012px%20%24%7BE%7D%60))%2B34%2Cz%3D438-ct%3Bh%2B%3D%60%3Crect%20x%3D'%24%7Bz%7D'%20y%3D'20'%20width%3D'%24%7Bct%7D'%20height%3D'26'%20rx%3D'13'%20fill%3D'%230a0a0a'%20fill-opacity%3D'.55'%20stroke%3D'%23fff'%20stroke-opacity%3D'.05'%2F%3E%60%2Ch%2B%3D%60%3Ccircle%20cx%3D'%24%7Bz%2B13%7D'%20cy%3D'33'%20r%3D'6'%20fill%3D'%24%7Be.em%7D'%20opacity%3D'0'%3E%3Canimate%20attributeName%3D'r'%20values%3D'3%3B8'%20dur%3D'1.6s'%20repeatCount%3D'indefinite'%2F%3E%3Canimate%20attributeName%3D'opacity'%20values%3D'.45%3B0'%20dur%3D'1.6s'%20repeatCount%3D'indefinite'%2F%3E%24%7Bp(%22visibility%22%2C%22hidden%22%2Cm)%7D%3C%2Fcircle%3E%60%2Ch%2B%3D%60%3Ccircle%20cx%3D'%24%7Bz%2B13%7D'%20cy%3D'33'%20r%3D'3'%20fill%3D'%24%7Be.em%7D'%3E%24%7Bp(%22fill%22%2Cs%2Cm)%7D%3C%2Fcircle%3E%60%2Ch%2B%3Dc(z%2B23%2C37%2Cnt%2C%7Bsize%3A12%2Cwt%3A500%2Cfill%3Ae.silver%2Ckids%3Ap(%22opacity%22%2C%220%22%2Cm)%7D)%2Bc(z%2B23%2C37%2Clt%2C%7Bsize%3A12%2Cwt%3A500%2Cfill%3Ae.silver%2Cop%3A0%2Ckids%3Ap(%22opacity%22%2C%221%22%2Cm)%7D)%3Bconst%20Pt%3Dd.map(f%3D%3EMath.round(416*f%2Fx)).join(%22%3B%22)%2CCt%3Dd.map((f%2Cg)%3D%3Eg%3D%3D%3Dd.length-1%3F%221%22%3An(f%2Fx)).join(%22%3B%22)%2Cdt%3D%60%3Canimate%20attributeName%3D'width'%20values%3D'%24%7BPt%7D'%20keyTimes%3D'%24%7BCt%7D'%20dur%3D'%24%7Bm%7Ds'%20fill%3D'freeze'%2F%3E%60%3Bh%2B%3D%60%3Crect%20x%3D'22'%20y%3D'66'%20width%3D'416'%20height%3D'3'%20rx%3D'1.5'%20fill%3D'%24%7Be.surf2%7D'%2F%3E%3Crect%20x%3D'22'%20y%3D'65'%20width%3D'0'%20height%3D'5'%20rx%3D'2.5'%20fill%3D'%24%7Be.em%7D'%20opacity%3D'.55'%20filter%3D'url(%23gl)'%3E%24%7Bdt%7D%24%7Bp(%22fill%22%2Cs%2Cm)%7D%3C%2Frect%3E%3Crect%20x%3D'22'%20y%3D'66'%20width%3D'0'%20height%3D'3'%20rx%3D'1.5'%20fill%3D'%24%7Be.em%7D'%3E%24%7Bdt%7D%24%7Bp(%22fill%22%2Cs%2Cm)%7D%3C%2Frect%3E%60%2Cl%3D102%2Ctt.forEach((%5Bf%5D%2Cg)%3D%3E%7Bconst%20k%3Dn(d%5Bg%5D)%2Cv%3Dn(d%5Bg%2B1%5D)%3Bh%2B%3Dc(22%2Cl%2CString(g%2B1).padStart(2%2C%220%22)%2C%7Bsize%3A11%2Cmono%3A1%2Cfill%3Ae.faint%7D)%2Ch%2B%3Dc(50%2Cl%2Cf%2C%7Bfill%3A%22%233a403d%22%2Ckids%3Ap(%22fill%22%2Ce.fg%2Ck)%2Bp(%22fill%22%2Ce.silver%2Cv)%7D)%2Ch%2B%3D%60%3Cg%20opacity%3D'0'%3E%24%7Bp(%22opacity%22%2C%221%22%2Ck)%7D%24%7Bp(%22opacity%22%2C%220%22%2Cv)%7D%3Ccircle%20cx%3D'432'%20cy%3D'%24%7Bl-4%7D'%20r%3D'3'%20fill%3D'%24%7Be.em%7D'%3E%3Canimate%20attributeName%3D'opacity'%20values%3D'1%3B.3%3B1'%20dur%3D'1s'%20repeatCount%3D'indefinite'%2F%3E%3C%2Fcircle%3E%60%2Bc(422%2Cl%2C%22%5Cu0432%5Cu044B%5Cu043F%5Cu043E%5Cu043B%5Cu043D%5Cu044F%5Cu0435%5Cu0442%5Cu0441%5Cu044F%22%2C%7Bsize%3A12%2Cfill%3Ae.dim%2Canchor%3A%22end%22%7D)%2B%22%3C%2Fg%3E%22%2Ch%2B%3D%60%3Cg%20opacity%3D'0'%3E%24%7Bet(v)%7D%24%7BD(424%2Cl-12%2C14%2C%5B%22M20%206%209%2017l-5-5%22%5D%2Ce.em%2C2.6)%7D%60%2Bc(416%2Cl%2Ct%5Bg%5D%2B%22%20%5Cu043C%5Cu0441%22%2C%7Bsize%3A11%2Cmono%3A1%2Cfill%3Ae.faint%2Canchor%3A%22end%22%7D)%2B%22%3C%2Fg%3E%22%2Cl%2B%3D28%7D)%2Cl-%3D28%3Bconst%20ft%3Dl%2B24%2CMt%3Df%3D%3E%60%3Cline%20x1%3D'22'%20x2%3D'438'%20y1%3D'%24%7Bf%7D'%20y2%3D'%24%7Bf%7D'%20stroke%3D'%24%7Be.border%7D'%2F%3E%60%3Blet%20y%3D%22%22%3Bl%2B%3D22%2Cy%2B%3DMt(l)%2Cl%2B%3D30%2Ci.rows.forEach((%5Bf%2Cg%2Ck%5D)%3D%3E%7Bconst%20v%3Dk%3FV%5Bk%5D%3Ae.fg%3By%2B%3Dc(22%2Cl%2Cf%2C%7Bfill%3Ae.dim%7D)%2Ck%26%26(y%2B%3D%60%3Ccircle%20cx%3D'%24%7B438-A(g%2C%60500%2013px%20%24%7BE%7D%60)-10%7D'%20cy%3D'%24%7Bl-4.5%7D'%20r%3D'3'%20fill%3D'%24%7Bv%7D'%2F%3E%60)%2Cy%2B%3Dc(438%2Cl%2Cg%2C%7Bwt%3A500%2Cfill%3Av%2Canchor%3A%22end%22%7D)%2Cl%2B%3D28%7D)%3Bconst%20b%3Dl-6%3By%2B%3D%60%3Crect%20x%3D'22'%20y%3D'%24%7Bb%7D'%20width%3D'416'%20height%3D'64'%20rx%3D'10'%20fill%3D'%24%7Bs%7D'%20fill-opacity%3D'.07'%20stroke%3D'%24%7Bs%7D'%20stroke-opacity%3D'.28'%2F%3E%3Crect%20x%3D'36'%20y%3D'%24%7Bb%2B14%7D'%20width%3D'36'%20height%3D'36'%20rx%3D'8'%20fill%3D'%24%7Bs%7D'%20fill-opacity%3D'.14'%2F%3E%60%2BD(44%2Cb%2B22%2C20%2CQ%5Bi.state%5D%2Cs%2C2)%2Bc(84%2Cb%2B29%2Ci.big%2C%7Bsize%3A15%2Cwt%3A600%2Cfill%3As%7D)%2Bc(84%2Cb%2B47%2Ci.title%2C%7Bsize%3A12%2Cfill%3Ae.dim%7D)%3Bconst%20w%3Db%2B64%2B12%3By%2B%3D%60%3Crect%20x%3D'22'%20y%3D'%24%7Bw%7D'%20width%3D'416'%20height%3D'54'%20rx%3D'10'%20fill%3D'%24%7Be.surf2%7D'%20stroke%3D'%24%7Be.border%7D'%2F%3E%3Crect%20x%3D'34'%20y%3D'%24%7Bw%2B12%7D'%20width%3D'30'%20height%3D'30'%20rx%3D'7'%20fill%3D'%24%7Be.bg%7D'%20stroke%3D'%23fff'%20stroke-opacity%3D'.06'%2F%3E%3Csvg%20x%3D'41'%20y%3D'%24%7Bw%2B19%7D'%20width%3D'16'%20height%3D'16'%20viewBox%3D'0%200%2024%2024'%3E%3Cpath%20d%3D'%24%7But%7D'%20fill%3D'%23C9CFCB'%2F%3E%3C%2Fsvg%3E%60%2Bc(76%2Cw%2B24%2C%22Clod%20Helper%20%5Cu043D%5Cu0430%20GitHub%22%2C%7Bsize%3A13%2Cwt%3A500%7D)%2Bc(76%2Cw%2B40%2C%22iimperium-dev%2FClodHelper%20%5CxB7%20%5Cu043E%5Cu0442%5Cu043A%5Cu0440%5Cu044B%5Cu0442%5Cu044B%5Cu0439%20%5Cu043A%5Cu043E%5Cu0434%22%2C%7Bsize%3A11%2Cfill%3Ae.faint%7D)%2BD(410%2Cw%2B19%2C16%2C%5B%22m9%2018%206-6-6-6%22%5D%2Ce.em%2C2.2)%3Bconst%20G%3Dw%2B54%2B22%2Czt%3D%60%3Cdefs%3E%24%7Bot%7D%3Cfilter%20id%3D'gl'%20x%3D'-5%25'%20y%3D'-300%25'%20width%3D'110%25'%20height%3D'700%25'%3E%3CfeGaussianBlur%20stdDeviation%3D'3'%2F%3E%3C%2Ffilter%3E%3C%2Fdefs%3E%60%2CEt%3D%60%3Crect%20x%3D'.5'%20y%3D'.5'%20width%3D'459'%20height%3D'%24%7Bft-1%7D'%20rx%3D'10'%20fill%3D'%24%7Be.surf%7D'%20stroke%3D'%24%7Be.border%7D'%3E%3Canimate%20attributeName%3D'height'%20from%3D'%24%7Bft-1%7D'%20to%3D'%24%7BG-1%7D'%20begin%3D'%24%7Bn(x%2B.15)%7Ds'%20dur%3D'.5s'%20calcMode%3D'spline'%20keyTimes%3D'0%3B1'%20keySplines%3D'.22%201%20.36%201'%20fill%3D'freeze'%2F%3E%3C%2Frect%3E%3Crect%20x%3D'1'%20y%3D'1'%20width%3D'458'%20height%3D'170'%20rx%3D'10'%20fill%3D'url(%23glo)'%2F%3E%3Cline%20x1%3D'12'%20x2%3D'448'%20y1%3D'1.5'%20y2%3D'1.5'%20stroke%3D'%23fff'%20stroke-opacity%3D'.04'%2F%3E%60%3Breturn%7Bsvg%3A%60%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20width%3D'460'%20height%3D'%24%7BG%7D'%3E%24%7Bzt%7D%24%7BEt%7D%24%7Bh%7D%3Cg%20opacity%3D'0'%3E%24%7Bet(n(x%2B.35)%2C.45)%7D%24%7By%7D%3C%2Fg%3E%3C%2Fsvg%3E%60%2Cw%3A460%2Ch%3AG%2CT%3Ax%2Cgh%3A%7Bx%3A22%2Cy%3Aw%2Cw%3A416%2Ch%3A54%7D%7D%7D%3Bif(!Y%26%26!%2F(%5E%7C%5C.)claude%5C.ai%24%2F.test(location.hostname))return%20N(j(%22%5Cu041E%5Cu0442%5Cu043A%5Cu0440%5Cu043E%5Cu0439%5Cu0442%5Cu0435%20claude.ai%22%2C%5B%22%5Cu0417%5Cu0430%5Cu043A%5Cu043B%5Cu0430%5Cu0434%5Cu043A%5Cu0430%20%5Cu0440%5Cu0430%5Cu0431%5Cu043E%5Cu0442%5Cu0430%5Cu0435%5Cu0442%20%5Cu0442%5Cu043E%5Cu043B%5Cu044C%5Cu043A%5Cu043E%20%5Cu043D%5Cu0430%20%5Cu0441%5Cu0430%5Cu0439%5Cu0442%5Cu0435%20claude.ai.%22%2C%22%5Cu0412%5Cu043E%5Cu0439%5Cu0434%5Cu0438%5Cu0442%5Cu0435%20%5Cu0432%20%5Cu0430%5Cu043A%5Cu043A%5Cu0430%5Cu0443%5Cu043D%5Cu0442%20%5Cu0438%20%5Cu043D%5Cu0430%5Cu0436%5Cu043C%5Cu0438%5Cu0442%5Cu0435%20%5Cu0435%5Cu0451%20%5Cu0442%5Cu0430%5Cu043C.%22%5D))%3Blet%20P%2CF%3Btry%7B(%7Bacc%3AP%2Ckyc%3AF%7D%3DY%7C%7Cawait%20yt())%7Dcatch(t)%7Breturn%20N(t.status%3D%3D%3D401%7C%7Ct.status%3D%3D%3D403%3Fj(%22%5Cu0412%5Cu044B%20%5Cu043D%5Cu0435%20%5Cu0432%5Cu043E%5Cu0448%5Cu043B%5Cu0438%20%5Cu0432%20%5Cu0430%5Cu043A%5Cu043A%5Cu0430%5Cu0443%5Cu043D%5Cu0442%22%2C%5B%22%5Cu0412%5Cu043E%5Cu0439%5Cu0434%5Cu0438%5Cu0442%5Cu0435%20%5Cu0432%20Claude%20%5Cu043D%5Cu0430%20%5Cu044D%5Cu0442%5Cu043E%5Cu0439%20%5Cu0441%5Cu0442%5Cu0440%5Cu0430%5Cu043D%5Cu0438%5Cu0446%5Cu0435%22%2C%22%5Cu0438%20%5Cu043D%5Cu0430%5Cu0436%5Cu043C%5Cu0438%5Cu0442%5Cu0435%20%5Cu0437%5Cu0430%5Cu043A%5Cu043B%5Cu0430%5Cu0434%5Cu043A%5Cu0443%20%5Cu0435%5Cu0449%5Cu0451%20%5Cu0440%5Cu0430%5Cu0437.%22%5D)%3Aj(%22%5Cu041D%5Cu0435%20%5Cu0443%5Cu0434%5Cu0430%5Cu043B%5Cu043E%5Cu0441%5Cu044C%20%5Cu043F%5Cu043E%5Cu043B%5Cu0443%5Cu0447%5Cu0438%5Cu0442%5Cu044C%20%5Cu0434%5Cu0430%5Cu043D%5Cu043D%5Cu044B%5Cu0435%22%2C%5BString(t.error%7C%7Ct.message%7C%7Ct).slice(0%2C56)%2C%22%5Cu041E%5Cu0431%5Cu043D%5Cu043E%5Cu0432%5Cu0438%5Cu0442%5Cu0435%20%5Cu0441%5Cu0442%5Cu0440%5Cu0430%5Cu043D%5Cu0438%5Cu0446%5Cu0443%20%5Cu0438%20%5Cu043F%5Cu043E%5Cu043F%5Cu0440%5Cu043E%5Cu0431%5Cu0443%5Cu0439%5Cu0442%5Cu0435%20%5Cu0435%5Cu0449%5Cu0451%20%5Cu0440%5Cu0430%5Cu0437.%22%5D))%7Dconst%20T%3Dnew%20Date(P.created_at)%2CC%3Dnew%20Date%3Blet%20H%3DC.getFullYear()-T.getFullYear()%2CM%3DC.getMonth()-T.getMonth()%2CO%3DC.getDate()-T.getDate()%3BO%3C0%26%26(M--%2CO%2B%3Dnew%20Date(C.getFullYear()%2CC.getMonth()%2C0).getDate())%2CM%3C0%26%26(H--%2CM%2B%3D12)%3Bconst%20kt%3D%5BH%26%26%60%24%7BH%7D%20%24%7BK(H%2C%5B%22%5Cu0433%5Cu043E%5Cu0434%22%2C%22%5Cu0433%5Cu043E%5Cu0434%5Cu0430%22%2C%22%5Cu043B%5Cu0435%5Cu0442%22%5D)%7D%60%2CM%26%26%60%24%7BM%7D%20%5Cu043C%5Cu0435%5Cu0441.%60%2C%60%24%7BO%7D%20%24%7BK(O%2C%5B%22%5Cu0434%5Cu0435%5Cu043D%5Cu044C%22%2C%22%5Cu0434%5Cu043D%5Cu044F%22%2C%22%5Cu0434%5Cu043D%5Cu0435%5Cu0439%22%5D)%7D%60%5D.filter(Boolean).join(%22%20%22)%2Cat%3DF%3F.status%3D%3D%3D%22verified%22%2Crt%3DT%3CR%2C_%3Drt%3Fat%3F%22ok%22%3A%22warn%22%3A%22deny%22%2Cst%3D(t%2Ci%2Co)%3D%3Et%3D%3D%3D!0%3F%5Bi%2C%22ok%22%5D%3At%3D%3D%3D!1%3F%5Bo%2C%22deny%22%5D%3A%5B%22%5Cu043D%5Cu0435%5Cu0442%20%5Cu0434%5Cu0430%5Cu043D%5Cu043D%5Cu044B%5Cu0445%22%2C%22warn%22%5D%2Cvt%3Dtt.map((%5B%2Ct%5D)%3D%3EMath.round(t*(.85%2BMath.random()*.3)))%2CL%3Dbt(vt%2C%7Bstate%3A_%2Cbig%3A%7Bok%3A%22%5Cu0420%5Cu0430%5Cu0437%5Cu0440%5Cu0435%5Cu0448%5Cu0435%5Cu043D%5Cu043E%22%2Cwarn%3A%22%5Cu0412%5Cu043D%5Cu0438%5Cu043C%5Cu0430%5Cu043D%5Cu0438%5Cu0435%22%2Cdeny%3A%22%5Cu0417%5Cu0430%5Cu043F%5Cu0440%5Cu0435%5Cu0449%5Cu0435%5Cu043D%5Cu043E%22%7D%5B_%5D%2Ctitle%3A%7Bok%3A%22%5Cu0410%5Cu043A%5Cu0442%5Cu0438%5Cu0432%5Cu0430%5Cu0446%5Cu0438%5Cu0438%20%5Cu043F%5Cu043E%20Org%20ID%20%5Cu0434%5Cu043E%5Cu0441%5Cu0442%5Cu0443%5Cu043F%5Cu043D%5Cu044B%22%2Cwarn%3A%22%5Cu0410%5Cu043A%5Cu0442%5Cu0438%5Cu0432%5Cu0430%5Cu0446%5Cu0438%5Cu044F%20%5Cu0432%5Cu043E%5Cu0437%5Cu043C%5Cu043E%5Cu0436%5Cu043D%5Cu0430%2C%20%5Cu043C%5Cu043E%5Cu0436%5Cu0435%5Cu0442%20%5Cu043F%5Cu043E%5Cu043D%5Cu0430%5Cu0434%5Cu043E%5Cu0431%5Cu0438%5Cu0442%5Cu044C%5Cu0441%5Cu044F%20KYC%22%2Cdeny%3A%22%5Cu0410%5Cu043A%5Cu0442%5Cu0438%5Cu0432%5Cu0430%5Cu0446%5Cu0438%5Cu0438%20%5Cu043F%5Cu043E%20Org%20ID%20%5Cu043D%5Cu0435%5Cu0434%5Cu043E%5Cu0441%5Cu0442%5Cu0443%5Cu043F%5Cu043D%5Cu044B%22%7D%5B_%5D%2Crows%3A%5B%5B%22%5Cu0412%5Cu043E%5Cu0437%5Cu0440%5Cu0430%5Cu0441%5Cu0442%22%2Ckt%5D%2C%5B%22%5Cu0421%5Cu043E%5Cu0437%5Cu0434%5Cu0430%5Cu043D%22%2Cgt(P.created_at)%5D%2C%5B%22%5Cu0412%5Cu0435%5Cu0440%5Cu0438%5Cu0444%5Cu0438%5Cu043A%5Cu0430%5Cu0446%5Cu0438%5Cu044F%22%2C...st(P.is_verified%2C%22%5Cu043F%5Cu0440%5Cu043E%5Cu0439%5Cu0434%5Cu0435%5Cu043D%5Cu0430%22%2C%22%5Cu043D%5Cu0435%20%5Cu043F%5Cu0440%5Cu043E%5Cu0439%5Cu0434%5Cu0435%5Cu043D%5Cu0430%22)%5D%2C%5B%22%5Cu0412%5Cu043E%5Cu0437%5Cu0440%5Cu0430%5Cu0441%5Cu0442%2018%2B%22%2C...st(P.age_is_verified%2C%22%5Cu043F%5Cu043E%5Cu0434%5Cu0442%5Cu0432%5Cu0435%5Cu0440%5Cu0436%5Cu0434%5Cu0451%5Cu043D%22%2C%22%5Cu043D%5Cu0435%20%5Cu043F%5Cu043E%5Cu0434%5Cu0442%5Cu0432%5Cu0435%5Cu0440%5Cu0436%5Cu0434%5Cu0451%5Cu043D%22)%5D%2C%5B%22KYC%22%2C...at%3F%5B%22verified%22%2C%22ok%22%5D%3A%5BF%3F.status%7C%7C%22%5Cu043D%5Cu0435%5Cu0442%20%5Cu0434%5Cu0430%5Cu043D%5Cu043D%5Cu044B%5Cu0445%22%2C_%3D%3D%3D%22deny%22%3F%22deny%22%3A%22warn%22%5D%5D%2C%5B%22%5Cu0420%5Cu0435%5Cu0433%5Cu0438%5Cu0441%5Cu0442%5Cu0440%5Cu0430%5Cu0446%5Cu0438%5Cu044F%20%5Cu0434%5Cu043E%20%22%2BR.toLocaleDateString(%22ru-RU%22)%2C...rt%3F%5B%22%5Cu0434%5Cu0430%22%2C%22ok%22%5D%3A%5B%22%5Cu043D%5Cu0435%5Cu0442%22%2C%22deny%22%5D%5D%5D%7D)%3Bawait%20pt(120)%2CN(L%2C%5B%7B...L.gh%2Chref%3Aht%2Clabel%3A%22Clod%20Helper%20%5Cu043D%5Cu0430%20GitHub%22%2Cat%3AL.T%2B.5%7D%5D)%7D)()%3B" aria-label="Проверить аккаунт — перетащите на панель закладок"><svg class="i" viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/></svg>Clod Scan</a>
+        <button class="ghost" id="demo" type="button"><svg class="i" viewBox="0 0 24 24"><path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/></svg>Посмотреть пример</button>
+      </div>
+      <p class="hint">Перетащите кнопку на панель закладок. Панели не видно? <span id="keys"><kbd>Ctrl+Shift+B</kbd> · на Mac <kbd>⌘ Cmd+Shift+B</kbd></span></p>
+      <div class="mobile"><svg class="i" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg><div><b>Откройте эту страницу на компьютере</b>Закладка работает в браузере на Windows и macOS: Chrome, Edge, Яндекс Браузер, Safari. Видео ниже можно посмотреть и с телефона.</div></div>
+    </div>
+
+    <div class="player" data-src="media/instruction.mp4" data-poster="media/instruction.jpg" data-title="Как поставить закладку" data-note="Видеоинструкция с диктором" data-dur="0:44"></div>
+
+    <div class="tabs">
+      <div class="tabbar" role="tablist">
+        <button class="tab" role="tab" aria-selected="true" aria-controls="p-steps" id="t-steps"><svg class="i" viewBox="0 0 24 24"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>Три шага</button>
+        <button class="tab" role="tab" aria-selected="false" aria-controls="p-safe" id="t-safe" tabindex="-1"><svg class="i" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg>Безопасность</button>
+        <button class="tab" role="tab" aria-selected="false" aria-controls="p-code" id="t-code" tabindex="-1"><svg class="i" viewBox="0 0 24 24"><path d="m16 18 6-6-6-6"/><path d="m8 6-6 6 6 6"/></svg>Код закладки</button>
+      </div>
+      <div class="pane" role="tabpanel" id="p-steps" aria-labelledby="t-steps">
+        <div class="row3">
+          <div class="it"><span class="n">1</span><div><b>Перетащите кнопку</b><span>Зажмите «Проверить аккаунт» и отпустите на панели закладок.</span></div></div>
+          <div class="it"><span class="n">2</span><div><b>Откройте Claude</b><span>Зайдите на <a href="https://claude.ai" rel="noopener">claude.ai</a> под нужным аккаунтом.</span></div></div>
+          <div class="it"><span class="n">3</span><div><b>Нажмите закладку</b><span>«Clod Scan» на панели. Закрыть — крестиком или Esc.</span></div></div>
+        </div>
+      </div>
+      <div class="pane" role="tabpanel" id="p-safe" aria-labelledby="t-safe" hidden>
+        <div class="row3">
+          <div class="it"><svg class="i" viewBox="0 0 24 24"><path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/></svg><div><b>Только чтение</b><span>Смотрит дату регистрации, верификацию и KYC. Ничего не меняет.</span></div></div>
+          <div class="it"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></svg><div><b>Никуда не отправляет</b><span>Запросы идут только к claude.ai. Сторонних серверов нет.</span></div></div>
+          <div class="it"><svg class="i" viewBox="0 0 24 24"><path d="m16 18 6-6-6-6"/><path d="m8 6-6 6 6 6"/></svg><div><b>Код открыт</b><span>Весь код — на соседней вкладке. Проверьте сами или дайте знакомому программисту.</span></div></div>
+        </div>
+      </div>
+      <div class="pane" role="tabpanel" id="p-code" aria-labelledby="t-code" hidden>
+        <div class="codehead"><p class="note">Это и есть закладка — целиком, без сокращений.</p><button class="copy" id="copy" type="button"><svg class="i" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg><span>Скопировать</span></button></div>
+        <div class="codebox"><pre id="code">// Clod Scan — проверка аккаунта Claude (закладка).
+// Читает только claude.ai: /api/account и /api/organizations/{id}/kyc_status.
+// Ничего никуда не отправляет. Код открыт: https://github.com/iimperium-dev/ClodHelper
+(async () =&gt; {
+  // ===== настройки =====
+  const CUTOFF = new Date('2026-09-15T00:00:00');
+  const REPO = 'https://github.com/iimperium-dev/ClodHelper';
+  const ID = 'clod-scan-root';
+  const DEMO = window.__CLOD_SCAN_DEMO__; // пример на странице закладки
+
+  // ===== утилиты =====
+  const sleep = ms =&gt; new Promise(r =&gt; setTimeout(r, ms));
+  const plural = (n, f) =&gt; f[(n % 10 == 1 &amp;&amp; n % 100 != 11) ? 0 : (n % 10 &gt;= 2 &amp;&amp; n % 10 &lt;= 4 &amp;&amp; (n % 100 &lt; 10 || n % 100 &gt;= 20)) ? 1 : 2];
+  const fmt = d =&gt; new Date(d).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const esc = s =&gt; String(s).replace(/&amp;/g, '&amp;amp;').replace(/&lt;/g, '&amp;lt;');
+  const cv = document.createElement('canvas').getContext('2d');
+  const tw = (txt, font) =&gt; { cv.font = font; return Math.ceil(cv.measureText(txt).width); };
+  const b64 = s =&gt; btoa(unescape(encodeURIComponent(s)));
+  const el = (tag, css, attrs = {}) =&gt; { const e = document.createElement(tag); if (css) e.style.cssText = css; for (const k in attrs) e.setAttribute(k, attrs[k]); return e; };
+
+  // ===== дизайн-токены Clod Helper =====
+  const SANS = 'Inter,&quot;Segoe UI Variable&quot;,&quot;Segoe UI&quot;,-apple-system,system-ui,sans-serif';
+  const MONO = '&quot;JetBrains Mono&quot;,&quot;Cascadia Mono&quot;,Menlo,Consolas,monospace';
+  const C = {
+    bg: '#0b0e0d', surf: '#121614', surf2: '#1a1e1c', border: '#252a28',
+    fg: '#f1f4f2', silver: '#ccd1ce', dim: '#8b918e', faint: '#646a67',
+    em: '#22c084', emB: '#3ad897', warn: '#e0a33d', loss: '#ef6767'
+  };
+  const COL = { ok: C.em, warn: C.warn, deny: C.loss };
+
+  // ===== иконки (lucide + simple-icons) =====
+  const SHIELD = 'M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z';
+  const ICONS = {
+    ok:   [SHIELD, 'm9 12 2 2 4-4'],
+    warn: ['m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3', 'M12 9v4', 'M12 17h.01'],
+    deny: [SHIELD, 'm14.5 9.5-5 5', 'm9.5 9.5 5 5']
+  };
+  const GH = 'M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12';
+
+  // ===== окно поверх страницы =====
+  document.getElementById(ID)?.remove();
+  const host = el('div', 'all:initial;position:fixed;inset:0;z-index:2147483647;', { id: ID });
+  const root = host.attachShadow({ mode: 'closed' });
+  const back = el('div', 'position:fixed;inset:0;background:rgba(5,7,6,.62);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);opacity:0;transition:opacity .3s;');
+  const wrap = el('div', 'position:fixed;left:50%;top:50%;transform:translate(-50%,calc(-50% + 10px));opacity:0;transition:opacity .35s,transform .45s cubic-bezier(.22,1,.36,1);filter:drop-shadow(0 24px 60px rgba(0,0,0,.55));');
+  root.append(back, wrap);
+  (document.body || document.documentElement).append(host);
+
+  const onKey = e =&gt; { if (e.key === 'Escape') close(); };
+  const close = () =&gt; {
+    removeEventListener('keydown', onKey, true);
+    back.style.opacity = '0'; wrap.style.opacity = '0';
+    setTimeout(() =&gt; host.remove(), 320);
+  };
+  addEventListener('keydown', onKey, true);
+  back.addEventListener('click', close);
+  requestAnimationFrame(() =&gt; { back.style.opacity = '1'; });
+
+  // показать готовую SVG-карточку; links — кликабельные зоны поверх неё
+  const show = (card, links = []) =&gt; {
+    const k = Math.min(1.25, (innerHeight - 64) / card.h, (innerWidth - 48) / card.w);
+    wrap.style.width = card.w * k + 'px';
+    wrap.style.height = card.h * k + 'px';
+    const img = el('img', `display:block;width:100%;height:100%;max-width:none;margin:0;border:0;user-select:none;`, {
+      src: 'data:image/svg+xml;base64,' + b64(card.svg), alt: 'Clod Scan', draggable: 'false'
+    });
+    const x = el('button', `all:initial;position:absolute;top:-12px;right:-12px;width:30px;height:30px;border-radius:50%;background:${C.surf2};box-shadow:inset 0 0 0 1px ${C.border};cursor:pointer;display:grid;place-items:center;`, { 'aria-label': 'Закрыть', title: 'Закрыть (Esc)' });
+    x.append(el('img', 'display:block;width:14px;height:14px;', { src: 'data:image/svg+xml;base64,' + b64(`&lt;svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='${C.silver}' stroke-width='2.4' stroke-linecap='round'&gt;&lt;path d='M18 6 6 18M6 6l12 12'/&gt;&lt;/svg&gt;`), alt: '' }));
+    x.addEventListener('click', close);
+    wrap.append(img, x);
+    for (const l of links) {
+      const a = el('a', `position:absolute;left:${l.x * k}px;top:${l.y * k}px;width:${l.w * k}px;height:${l.h * k}px;border-radius:${10 * k}px;cursor:pointer;visibility:hidden;`, { href: l.href, target: '_blank', rel: 'noopener', 'aria-label': l.label });
+      setTimeout(() =&gt; { a.style.visibility = 'visible'; }, l.at * 1000);
+      wrap.append(a);
+    }
+    requestAnimationFrame(() =&gt; { wrap.style.opacity = '1'; wrap.style.transform = 'translate(-50%,-50%)'; });
+  };
+
+  // ===== запросы =====
+  const getJSON = async (url, ms = 8000) =&gt; {
+    const ctrl = new AbortController();
+    const tm = setTimeout(() =&gt; ctrl.abort(), ms);
+    try {
+      const r = await fetch(url, { credentials: 'include', signal: ctrl.signal });
+      if (!r.ok) return { ok: false, status: r.status, error: `HTTP ${r.status}` };
+      if (!(r.headers.get('content-type') || '').includes('json')) return { ok: false, status: 401, error: 'нет данных аккаунта' };
+      return { ok: true, data: await r.json() };
+    } catch (e) {
+      return { ok: false, error: e.name === 'AbortError' ? 'сервер не ответил вовремя' : e.message };
+    } finally { clearTimeout(tm); }
+  };
+  const load = async () =&gt; {
+    const accR = await getJSON('/api/account');
+    if (!accR.ok) throw accR;
+    const acc = accR.data;
+    const activeId = document.cookie.match(/lastActiveOrg=([^;]+)/)?.[1];
+    const orgs = (acc.memberships || []).map(m =&gt; m.organization?.uuid).filter(Boolean);
+    const order = activeId ? [activeId, ...orgs.filter(o =&gt; o !== activeId)] : orgs;
+    let kyc = null;
+    for (const id of order) {
+      const r = await getJSON(`/api/organizations/${id}/kyc_status`);
+      if (r.ok) { kyc = r.data; break; }
+    }
+    return { acc, kyc };
+  };
+
+  // ===== SVG-хелперы =====
+  const STEPS = [
+    ['Защищённое соединение', 620], ['Профиль аккаунта', 940], ['Возраст и история', 700],
+    ['Организации', 880], ['Статус KYC', 1060], ['Сверка с политикой', 800]
+  ];
+  const t = (x, y, str, o = {}) =&gt; `&lt;text x='${x}' y='${y}' font-family='${o.mono ? MONO : SANS}' font-size='${o.size || 13}' font-weight='${o.wt || 400}' fill='${o.fill || C.fg}'${o.anchor ? ` text-anchor='${o.anchor}'` : ''}${o.op != null ? ` opacity='${o.op}'` : ''}&gt;${esc(str)}${o.kids || ''}&lt;/text&gt;`;
+  const setAt = (a, to, at) =&gt; `&lt;set attributeName='${a}' to='${to}' begin='${at}s' fill='freeze'/&gt;`;
+  const fadeIn = (at, d = .3) =&gt; `&lt;animate attributeName='opacity' from='0' to='1' begin='${at}s' dur='${d}s' fill='freeze'/&gt;`;
+  const ico = (x, y, s, ps, col, sw = 2) =&gt; `&lt;svg x='${x}' y='${y}' width='${s}' height='${s}' viewBox='0 0 24 24' fill='none' stroke='${col}' stroke-width='${sw}' stroke-linecap='round' stroke-linejoin='round'&gt;${ps.map(d =&gt; `&lt;path d='${d}'/&gt;`).join('')}&lt;/svg&gt;`;
+  const logo = (x, y, s) =&gt; `&lt;svg x='${x}' y='${y}' width='${s}' height='${s}' viewBox='0 0 32 32'&gt;&lt;rect width='32' height='32' rx='7.5' fill='#161c19'/&gt;&lt;rect x='.5' y='.5' width='31' height='31' rx='7' fill='none' stroke='#fff' stroke-opacity='.06'/&gt;&lt;path d='M 23.09 21.54 A 9 9 0 1 1 23.09 10.46' fill='none' stroke='${C.em}' stroke-width='3.1' stroke-linecap='round'/&gt;&lt;circle cx='25.2' cy='16' r='2.3' fill='${C.emB}'/&gt;&lt;/svg&gt;`;
+  const head = P =&gt; logo(P, 18, 30) + t(P + 40, 31, 'Clod Helper', { size: 13, wt: 600 }) + t(P + 40, 45, 'Account scan', { size: 10, fill: C.faint });
+  const glow = `&lt;radialGradient id='glo' cx='50%' cy='0%' r='75%'&gt;&lt;stop offset='0' stop-color='${C.em}' stop-opacity='.10'/&gt;&lt;stop offset='1' stop-color='${C.em}' stop-opacity='0'/&gt;&lt;/radialGradient&gt;`;
+
+  // карточка ошибки: заголовок + до двух строк пояснения
+  const fail = (title, lines) =&gt; {
+    const w = 460, P = 22, H = 120 + lines.length * 20;
+    const s = `&lt;rect x='.5' y='.5' width='${w - 1}' height='${H - 1}' rx='10' fill='${C.surf}' stroke='${C.border}'/&gt;` +
+      `&lt;rect x='1' y='1' width='${w - 2}' height='120' rx='10' fill='url(#glo)'/&gt;` + head(P) +
+      `&lt;line x1='${P}' x2='${w - P}' y1='66' y2='66' stroke='${C.border}'/&gt;` +
+      ico(P, 84, 18, ICONS.warn, C.warn, 2) + t(P + 28, 98, title, { size: 15, wt: 600 }) +
+      lines.map((l, i) =&gt; t(P + 28, 122 + i * 20, l, { fill: C.dim })).join('');
+    return { svg: `&lt;svg xmlns='http://www.w3.org/2000/svg' width='${w}' height='${H}'&gt;&lt;defs&gt;${glow}&lt;/defs&gt;${s}&lt;/svg&gt;`, w, h: H };
+  };
+
+  // ===== одна анимированная карточка =====
+  const build = (dur, res) =&gt; {
+    const w = 460, P = 22, bw = w - 2 * P, ac = COL[res.state], f = n =&gt; n.toFixed(3), c = [0];
+    dur.forEach(x =&gt; c.push(c[c.length - 1] + x / 1000));
+    const T = c[c.length - 1], fT = f(T);
+    let s = '', y;
+
+    s += head(P);
+    const p1 = 'Сканирование', p2 = 'Проверено';
+    const pw = Math.max(tw(p1, `500 12px ${SANS}`), tw(p2, `500 12px ${SANS}`)) + 34, px = w - P - pw;
+    s += `&lt;rect x='${px}' y='20' width='${pw}' height='26' rx='13' fill='#0a0a0a' fill-opacity='.55' stroke='#fff' stroke-opacity='.05'/&gt;`;
+    s += `&lt;circle cx='${px + 13}' cy='33' r='6' fill='${C.em}' opacity='0'&gt;&lt;animate attributeName='r' values='3;8' dur='1.6s' repeatCount='indefinite'/&gt;&lt;animate attributeName='opacity' values='.45;0' dur='1.6s' repeatCount='indefinite'/&gt;${setAt('visibility', 'hidden', fT)}&lt;/circle&gt;`;
+    s += `&lt;circle cx='${px + 13}' cy='33' r='3' fill='${C.em}'&gt;${setAt('fill', ac, fT)}&lt;/circle&gt;`;
+    s += t(px + 23, 37, p1, { size: 12, wt: 500, fill: C.silver, kids: setAt('opacity', '0', fT) }) +
+         t(px + 23, 37, p2, { size: 12, wt: 500, fill: C.silver, op: 0, kids: setAt('opacity', '1', fT) });
+
+    // изумрудная шкала с мягким свечением
+    const vals = c.map(x =&gt; Math.round(bw * x / T)).join(';');
+    const kt = c.map((x, i) =&gt; i === c.length - 1 ? '1' : f(x / T)).join(';');
+    const anim = `&lt;animate attributeName='width' values='${vals}' keyTimes='${kt}' dur='${fT}s' fill='freeze'/&gt;`;
+    s += `&lt;rect x='${P}' y='66' width='${bw}' height='3' rx='1.5' fill='${C.surf2}'/&gt;` +
+         `&lt;rect x='${P}' y='65' width='0' height='5' rx='2.5' fill='${C.em}' opacity='.55' filter='url(#gl)'&gt;${anim}${setAt('fill', ac, fT)}&lt;/rect&gt;` +
+         `&lt;rect x='${P}' y='66' width='0' height='3' rx='1.5' fill='${C.em}'&gt;${anim}${setAt('fill', ac, fT)}&lt;/rect&gt;`;
+
+    // шаги
+    y = 102;
+    STEPS.forEach(([name], i) =&gt; {
+      const a = f(c[i]), b = f(c[i + 1]);
+      s += t(P, y, String(i + 1).padStart(2, '0'), { size: 11, mono: 1, fill: C.faint });
+      s += t(P + 28, y, name, { fill: '#3a403d', kids: setAt('fill', C.fg, a) + setAt('fill', C.silver, b) });
+      s += `&lt;g opacity='0'&gt;${setAt('opacity', '1', a)}${setAt('opacity', '0', b)}` +
+           `&lt;circle cx='${w - P - 6}' cy='${y - 4}' r='3' fill='${C.em}'&gt;&lt;animate attributeName='opacity' values='1;.3;1' dur='1s' repeatCount='indefinite'/&gt;&lt;/circle&gt;` +
+           t(w - P - 16, y, 'выполняется', { size: 12, fill: C.dim, anchor: 'end' }) + `&lt;/g&gt;`;
+      s += `&lt;g opacity='0'&gt;${fadeIn(b)}${ico(w - P - 14, y - 12, 14, ['M20 6 9 17l-5-5'], C.em, 2.6)}` +
+           t(w - P - 22, y, dur[i] + ' мс', { size: 11, mono: 1, fill: C.faint, anchor: 'end' }) + `&lt;/g&gt;`;
+      y += 28;
+    });
+    y -= 28;
+    const H0 = y + 24;
+    const ln = yy =&gt; `&lt;line x1='${P}' x2='${w - P}' y1='${yy}' y2='${yy}' stroke='${C.border}'/&gt;`;
+
+    // результат
+    let r = '';
+    y += 22; r += ln(y); y += 30;
+    res.rows.forEach(([k, v, l]) =&gt; {
+      const cc = l ? COL[l] : C.fg;
+      r += t(P, y, k, { fill: C.dim });
+      if (l) r += `&lt;circle cx='${w - P - tw(v, `500 13px ${SANS}`) - 10}' cy='${y - 4.5}' r='3' fill='${cc}'/&gt;`;
+      r += t(w - P, y, v, { wt: 500, fill: cc, anchor: 'end' });
+      y += 28;
+    });
+
+    // вердикт
+    const vy = y - 6;
+    r += `&lt;rect x='${P}' y='${vy}' width='${bw}' height='64' rx='10' fill='${ac}' fill-opacity='.07' stroke='${ac}' stroke-opacity='.28'/&gt;` +
+         `&lt;rect x='${P + 14}' y='${vy + 14}' width='36' height='36' rx='8' fill='${ac}' fill-opacity='.14'/&gt;` +
+         ico(P + 22, vy + 22, 20, ICONS[res.state], ac, 2) +
+         t(P + 62, vy + 29, res.big, { size: 15, wt: 600, fill: ac }) +
+         t(P + 62, vy + 47, res.title, { size: 12, fill: C.dim });
+
+    // карточка GitHub
+    const fy = vy + 64 + 12;
+    r += `&lt;rect x='${P}' y='${fy}' width='${bw}' height='54' rx='10' fill='${C.surf2}' stroke='${C.border}'/&gt;` +
+         `&lt;rect x='${P + 12}' y='${fy + 12}' width='30' height='30' rx='7' fill='${C.bg}' stroke='#fff' stroke-opacity='.06'/&gt;` +
+         `&lt;svg x='${P + 19}' y='${fy + 19}' width='16' height='16' viewBox='0 0 24 24'&gt;&lt;path d='${GH}' fill='#C9CFCB'/&gt;&lt;/svg&gt;` +
+         t(P + 54, fy + 24, 'Clod Helper на GitHub', { size: 13, wt: 500 }) +
+         t(P + 54, fy + 40, 'iimperium-dev/ClodHelper · открытый код', { size: 11, fill: C.faint }) +
+         ico(w - P - 28, fy + 19, 16, ['m9 18 6-6-6-6'], C.em, 2.2);
+    const H = fy + 54 + P;
+
+    const defs = `&lt;defs&gt;${glow}&lt;filter id='gl' x='-5%' y='-300%' width='110%' height='700%'&gt;&lt;feGaussianBlur stdDeviation='3'/&gt;&lt;/filter&gt;&lt;/defs&gt;`;
+    const bg = `&lt;rect x='.5' y='.5' width='${w - 1}' height='${H0 - 1}' rx='10' fill='${C.surf}' stroke='${C.border}'&gt;` +
+               `&lt;animate attributeName='height' from='${H0 - 1}' to='${H - 1}' begin='${f(T + .15)}s' dur='.5s' calcMode='spline' keyTimes='0;1' keySplines='.22 1 .36 1' fill='freeze'/&gt;&lt;/rect&gt;` +
+               `&lt;rect x='1' y='1' width='${w - 2}' height='170' rx='10' fill='url(#glo)'/&gt;` +
+               `&lt;line x1='12' x2='${w - 12}' y1='1.5' y2='1.5' stroke='#fff' stroke-opacity='.04'/&gt;`;
+    return {
+      svg: `&lt;svg xmlns='http://www.w3.org/2000/svg' width='${w}' height='${H}'&gt;${defs}${bg}${s}&lt;g opacity='0'&gt;${fadeIn(f(T + .35), .45)}${r}&lt;/g&gt;&lt;/svg&gt;`,
+      w, h: H, T, gh: { x: P, y: fy, w: bw, h: 54 }
+    };
+  };
+
+  // ===== запуск =====
+  if (!DEMO &amp;&amp; !/(^|\.)claude\.ai$/.test(location.hostname))
+    return show(fail('Откройте claude.ai', ['Закладка работает только на сайте claude.ai.', 'Войдите в аккаунт и нажмите её там.']));
+
+  let j, kycData;
+  try { ({ acc: j, kyc: kycData } = DEMO || await load()); }
+  catch (e) {
+    return show(e.status === 401 || e.status === 403
+      ? fail('Вы не вошли в аккаунт', ['Войдите в Claude на этой странице', 'и нажмите закладку ещё раз.'])
+      : fail('Не удалось получить данные', [String(e.error || e.message || e).slice(0, 56),'Обновите страницу и попробуйте ещё раз.']));
+  }
+
+  const created = new Date(j.created_at), now = new Date();
+  let y = now.getFullYear() - created.getFullYear(), m = now.getMonth() - created.getMonth(), d = now.getDate() - created.getDate();
+  if (d &lt; 0) { m--; d += new Date(now.getFullYear(), now.getMonth(), 0).getDate(); }
+  if (m &lt; 0) { y--; m += 12; }
+  const age = [y &amp;&amp; `${y} ${plural(y, ['год', 'года', 'лет'])}`, m &amp;&amp; `${m} мес.`, `${d} ${plural(d, ['день', 'дня', 'дней'])}`].filter(Boolean).join(' ');
+  const kycOk = kycData?.status === 'verified';
+  const earlyReg = created &lt; CUTOFF;
+  const state = !earlyReg ? 'deny' : kycOk ? 'ok' : 'warn';
+  const yn = (v, yes, no) =&gt; v === true ? [yes, 'ok'] : v === false ? [no, 'deny'] : ['нет данных', 'warn'];
+
+  const dur = STEPS.map(([, ms]) =&gt; Math.round(ms * (0.85 + Math.random() * 0.3)));
+  const card = build(dur, {
+    state,
+    big:   { ok: 'Разрешено', warn: 'Внимание', deny: 'Запрещено' }[state],
+    title: { ok: 'Активации по Org ID доступны', warn: 'Активация возможна, может понадобиться KYC', deny: 'Активации по Org ID недоступны' }[state],
+    rows: [
+      ['Возраст', age],
+      ['Создан', fmt(j.created_at)],
+      ['Верификация', ...yn(j.is_verified, 'пройдена', 'не пройдена')],
+      ['Возраст 18+', ...yn(j.age_is_verified, 'подтверждён', 'не подтверждён')],
+      ['KYC', ...(kycOk ? ['verified', 'ok'] : [kycData?.status || 'нет данных', state === 'deny' ? 'deny' : 'warn'])],
+      ['Регистрация до ' + CUTOFF.toLocaleDateString('ru-RU'), ...(earlyReg ? ['да', 'ok'] : ['нет', 'deny'])]
+    ]
+  });
+  await sleep(120);
+  show(card, [{ ...card.gh, href: REPO, label: 'Clod Helper на GitHub', at: card.T + .5 }]);
+})();
+</pre></div>
+      </div>
+    </div>
+
+    <section id="helper">
+      <div class="promo">
+        <div class="head"><svg class="mark"><use href="#mark"/></svg><div>Clod Helper<small>от авторов этой закладки</small></div></div>
+        <h2>Замена VPN: прокси только для нужных программ</h2>
+        <p class="sub">VPN гонит через себя весь компьютер. Clod Helper — только то, что вы выберете: Claude Desktop, браузер, любую другую программу или сайт. Остальное работает напрямую, как обычно.</p>
+        <div class="grid">
+          <div class="it"><svg class="i" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg><div><b>Прокси для отдельных программ</b><span>Добавили программу — она ходит через прокси. Другие не трогаются.</span></div></div>
+          <div class="it"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg><div><b>Сайты через прокси</b><span>Во всех браузерах сразу или только в выбранных.</span></div></div>
+          <div class="it"><svg class="i" viewBox="0 0 24 24"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg><div><b>Постоянный IP</b><span>Закрепите программу за прокси — адрес не будет прыгать.</span></div></div>
+          <div class="it"><svg class="i" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg><div><b>Без утечек</b><span>Упал прокси — программа не уйдёт в сеть с вашего настоящего IP.</span></div></div>
+        </div>
+
+        <div class="player" data-src="media/explainer.mp4" data-poster="media/explainer.jpg" data-title="Clod Helper — объяснение для чайника" data-note="Как это работает и с чего начать" data-dur="1:14"></div>
+        <a class="rec" href="https://proxy6.net/?r=692907" target="_blank" rel="noopener sponsored">
+          <span class="ic"><svg class="i" viewBox="0 0 24 24"><rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><path d="M6 6h.01"/><path d="M6 18h.01"/></svg></span>
+          <span><b>Рекомендация из видео: proxy6.net</b><span>Прокси с логином и паролем в нужной стране. Реферальная ссылка — так вы поддерживаете проект.</span></span>
+          <svg class="i go" viewBox="0 0 24 24"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>
+        </a>
+
+        <div class="dl">
+          <a class="btn2 pri" href="https://github.com/iimperium-dev/ClodHelper/releases/latest"><svg class="i" viewBox="0 0 24 24"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg>Скачать для Windows и macOS</a>
+          <a class="btn2 sec" href="https://github.com/iimperium-dev/ClodHelper"><svg class="gh"><use href="#gh"/></svg>Открытый код на GitHub</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span>Неофициальный инструмент, не связан с Anthropic.</span>
+    <a href="https://github.com/iimperium-dev/ClodHelper">Clod Helper · MIT</a>
+  </footer>
+</div>
+
+<div class="tip" id="tip" role="status"></div>
+
+<script>
+(() => {
+  const $ = (s, r = document) => r.querySelector(s);
+  const ua = navigator.userAgent;
+  const phone = /iPhone|iPod|iPad|Android|Windows Phone/i.test(ua) ||
+    (navigator.maxTouchPoints > 1 && /Macintosh/.test(ua) && !matchMedia('(hover:hover)').matches);
+  if (phone) document.body.classList.add('is-phone');
+
+  const mac = /Mac/i.test(navigator.userAgentData?.platform || navigator.platform || ua);
+  if (mac) $('#keys').innerHTML = '<kbd>⌘ Cmd+Shift+B</kbd> · на Windows <kbd>Ctrl+Shift+B</kbd>';
+
+  // кнопка-закладка: нажатие вместо перетаскивания
+  const bm = $('#bm'), tip = $('#tip');
+  let tt;
+  const say = text => { tip.textContent = text; tip.classList.add('on'); clearTimeout(tt); tt = setTimeout(() => tip.classList.remove('on'), 3200); };
+  bm.addEventListener('click', e => {
+    e.preventDefault();
+    bm.classList.remove('nudge'); void bm.offsetWidth; bm.classList.add('nudge');
+    say('Не нажимайте — перетащите кнопку на панель закладок.');
+  });
+
+  // пример результата на этой странице
+  $('#demo').addEventListener('click', () => {
+    window.__CLOD_SCAN_DEMO__ = {
+      acc: { created_at: '2025-03-14T12:20:00Z', is_verified: true, age_is_verified: true },
+      kyc: { status: 'verified' }
+    };
+    new Function(decodeURIComponent(bm.getAttribute('href').slice(11)))();
+  });
+
+  // вкладки
+  const tabs = [...document.querySelectorAll('.tab')];
+  const pick = t => tabs.forEach(x => {
+    const on = x === t;
+    x.setAttribute('aria-selected', on); x.tabIndex = on ? 0 : -1;
+    document.getElementById(x.getAttribute('aria-controls')).hidden = !on;
+  });
+  tabs.forEach((t, i) => {
+    t.addEventListener('click', () => pick(t));
+    t.addEventListener('keydown', e => {
+      const d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+      if (d) { const n = tabs[(i + d + tabs.length) % tabs.length]; pick(n); n.focus(); }
+    });
+  });
+
+  // код закладки: затухание внизу, пока есть что листать; копирование
+  const code = $('#code'), box = code.parentElement;
+  const edge = () => box.classList.toggle('end', code.scrollTop + code.clientHeight >= code.scrollHeight - 4);
+  code.addEventListener('scroll', edge, { passive: true });
+  $('#t-code').addEventListener('click', () => requestAnimationFrame(edge));
+  const copy = $('#copy');
+  copy.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(code.textContent); } catch { getSelection().selectAllChildren(code); document.execCommand('copy'); }
+    copy.classList.add('ok'); $('span', copy).textContent = 'Скопировано';
+    setTimeout(() => { copy.classList.remove('ok'); $('span', copy).textContent = 'Скопировать'; }, 1800);
+  });
+
+  // видеоплеер
+  const fmt = s => { s = Math.max(0, Math.floor(s || 0)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+  const ico = (id, cls = 'f') => `<svg class="${cls}"><use href="#${id}"/></svg>`;
+  const I = {
+    vol: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4.7a.7.7 0 0 0-1.2-.5L6.4 7.6A1.4 1.4 0 0 1 5.4 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.4a1.4 1.4 0 0 1 1 .4l3.4 3.4a.7.7 0 0 0 1.2-.5z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M19.4 18.4a9 9 0 0 0 0-12.8"/></svg>',
+    mute: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4.7a.7.7 0 0 0-1.2-.5L6.4 7.6A1.4 1.4 0 0 1 5.4 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.4a1.4 1.4 0 0 1 1 .4l3.4 3.4a.7.7 0 0 0 1.2-.5z"/><path d="m22 9-6 6"/><path d="m16 9 6 6"/></svg>',
+    full: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>',
+    exit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/></svg>'
+  };
+  const players = [];
+
+  document.querySelectorAll('.player').forEach(p => {
+    const d = p.dataset;
+    p.tabIndex = 0;
+    p.setAttribute('role', 'region');
+    p.setAttribute('aria-label', 'Видео: ' + d.title);
+    p.innerHTML =
+      `<video preload="metadata" playsinline webkit-playsinline poster="${d.poster}" src="${d.src}"></video>` +
+      `<div class="flash"></div>` +
+      `<div class="cover" style="background-image:url('${d.poster}')"><span class="big">${ico('play')}</span>` +
+        `<div class="meta"><div><b>${d.title}</b><span>${d.note}</span></div><span class="dur">${d.dur}</span></div></div>` +
+      `<div class="bar">` +
+        `<button class="btn pp" aria-label="Пауза">${ico('pause')}</button>` +
+        `<span class="time">0:00 / ${d.dur}</span>` +
+        `<div class="track" role="slider" aria-label="Перемотка" tabindex="-1"><div class="rail"><div class="buf"></div><div class="fill"></div><div class="knob"></div></div><span class="pv">0:00</span></div>` +
+        `<button class="btn vol" aria-label="Выключить звук">${I.vol}</button>` +
+        `<button class="btn fs" aria-label="На весь экран">${I.full}</button>` +
+      `</div>`;
+    const v = $('video', p), pp = $('.pp', p), time = $('.time', p), track = $('.track', p), fill = $('.fill', p), buf = $('.buf', p),
+          knob = $('.knob', p), pv = $('.pv', p), vol = $('.vol', p), fs = $('.fs', p), flash = $('.flash', p);
+    players.push(v);
+
+    let idle;
+    const wake = () => { p.classList.add('ui'); clearTimeout(idle); idle = setTimeout(() => { if (!v.paused && !track.classList.contains('drag')) p.classList.remove('ui'); }, 2200); };
+    const flashIcon = id => { flash.innerHTML = ico(id); flash.classList.remove('go'); void flash.offsetWidth; flash.classList.add('go'); };
+    const toggle = () => { if (v.paused || v.ended) { players.forEach(o => o !== v && o.pause()); v.play(); flashIcon('play'); } else { v.pause(); flashIcon('pause'); } };
+    const paint = () => {
+      const k = v.duration ? v.currentTime / v.duration : 0;
+      fill.style.width = knob.style.left = k * 100 + '%';
+      time.textContent = fmt(v.currentTime) + ' / ' + (v.duration ? fmt(v.duration) : d.dur);
+      track.setAttribute('aria-valuenow', Math.round(v.currentTime));
+    };
+
+    $('.cover', p).addEventListener('click', () => { p.classList.remove('ended'); p.classList.add('started'); players.forEach(o => o !== v && o.pause()); v.currentTime = v.ended ? 0 : v.currentTime; v.play(); wake(); });
+    v.addEventListener('click', () => { if (matchMedia('(hover:none)').matches && !p.classList.contains('ui')) return wake(); toggle(); wake(); });
+    v.addEventListener('dblclick', () => fs.click());
+    v.addEventListener('play', () => { p.classList.remove('paused', 'ended'); pp.innerHTML = ico('pause'); pp.setAttribute('aria-label', 'Пауза'); wake(); });
+    v.addEventListener('pause', () => { p.classList.add('paused'); pp.innerHTML = ico('play'); pp.setAttribute('aria-label', 'Смотреть'); });
+    v.addEventListener('ended', () => { p.classList.add('ended'); $('.meta b', p).textContent = 'Посмотреть ещё раз'; });
+    v.addEventListener('timeupdate', paint);
+    v.addEventListener('loadedmetadata', () => { track.setAttribute('aria-valuemax', Math.round(v.duration)); paint(); });
+    v.addEventListener('progress', () => { if (v.duration && v.buffered.length) buf.style.width = v.buffered.end(v.buffered.length - 1) / v.duration * 100 + '%'; });
+    pp.addEventListener('click', toggle);
+    p.addEventListener('pointermove', e => { if (e.pointerType === 'mouse') wake(); });
+    p.addEventListener('touchstart', wake, { passive: true });
+
+    // перемотка мышью и пальцем
+    const at = e => { const r = track.getBoundingClientRect(); return Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)); };
+    const preview = e => { const k = at(e); pv.style.left = k * 100 + '%'; pv.textContent = fmt(k * (v.duration || 0)); };
+    track.addEventListener('pointermove', e => { preview(e); if (track.classList.contains('drag') && v.duration) { v.currentTime = at(e) * v.duration; paint(); } });
+    track.addEventListener('pointerdown', e => { track.setPointerCapture(e.pointerId); track.classList.add('drag'); preview(e); if (v.duration) { v.currentTime = at(e) * v.duration; paint(); } });
+    const up = () => { track.classList.remove('drag'); wake(); };
+    track.addEventListener('pointerup', up); track.addEventListener('pointercancel', up);
+
+    // звук
+    vol.addEventListener('click', () => { v.muted = !v.muted; vol.innerHTML = v.muted ? I.mute : I.vol; vol.setAttribute('aria-label', v.muted ? 'Включить звук' : 'Выключить звук'); });
+
+    // весь экран (iPhone умеет только своим плеером)
+    const isFs = () => (document.fullscreenElement || document.webkitFullscreenElement) === p;
+    fs.addEventListener('click', () => {
+      if (isFs()) (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+      else if (p.requestFullscreen) p.requestFullscreen();
+      else if (p.webkitRequestFullscreen) p.webkitRequestFullscreen();
+      else if (v.webkitEnterFullscreen) v.webkitEnterFullscreen();
+    });
+    const fsc = () => { fs.innerHTML = isFs() ? I.exit : I.full; fs.setAttribute('aria-label', isFs() ? 'Выйти из полноэкранного режима' : 'На весь экран'); };
+    document.addEventListener('fullscreenchange', fsc); document.addEventListener('webkitfullscreenchange', fsc);
+
+    // клавиатура
+    p.addEventListener('keydown', e => {
+      if (e.target.closest('button') && (e.key === ' ' || e.key === 'Enter')) return;
+      const k = e.key.toLowerCase();
+      if (k === ' ' || k === 'k') { e.preventDefault(); if (!p.classList.contains('started')) $('.cover', p).click(); else toggle(); }
+      else if (k === 'arrowright' || k === 'arrowleft') { e.preventDefault(); v.currentTime += k === 'arrowright' ? 5 : -5; wake(); }
+      else if (k === 'm') vol.click();
+      else if (k === 'f') fs.click();
+    });
+  });
+})();
+</script>
+</body>
+</html>
