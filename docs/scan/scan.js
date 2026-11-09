@@ -426,10 +426,10 @@
   const age = [y && `${y} ${plural(y, ['год', 'года', 'лет'])}`, m && `${m} мес.`, `${d} ${plural(d, ['день', 'дня', 'дней'])}`].filter(Boolean).join(' ');
   // статус KYC от Claude → русская подпись и цвет; «Разрешено» — только если KYC пройден
   const KYC = {
-    verified: ['пройден', 'ok'], not_required: ['не пройден', 'warn'],
+    verified: ['верифицирован', 'ok'], not_required: ['не пройдена', 'warn'],
     pending: ['на проверке', 'warn'], in_progress: ['на проверке', 'warn'], in_review: ['на проверке', 'warn'], submitted: ['на проверке', 'warn'],
     required: ['требуется', 'warn'], not_started: ['требуется', 'warn'],
-    failed: ['не пройден', 'deny'], rejected: ['отклонён', 'deny'], declined: ['отклонён', 'deny'], expired: ['истёк', 'deny']
+    failed: ['не пройдена', 'deny'], rejected: ['отклонена', 'deny'], declined: ['отклонена', 'deny'], expired: ['истекла', 'deny']
   };
   const ks = String(kycData?.status || '').toLowerCase();
   const kyc = KYC[ks] || [ks ? ks.replace(/_/g, ' ') : 'нет данных', 'warn'];
@@ -450,9 +450,9 @@
     rows: [
       ['Возраст', age],
       ['Создан', fmt(j.created_at)],
-      ['Верификация', ...yn(j.is_verified, 'пройдена', 'не пройдена')],
+      ['Номер телефона', ...yn(j.is_verified, 'подтверждён', 'не подтверждён')],
       ['Возраст 18+', ...yn(j.age_is_verified, 'подтверждён', 'не подтверждён')],
-      ['KYC', ...kyc],
+      ['Верификация KYC', ...kyc],
       ['Регистрация до ' + CUTOFF.toLocaleDateString('ru-RU'), ...(earlyReg ? ['да', 'ok'] : ['нет', 'deny'])]
     ]
   });
