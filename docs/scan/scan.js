@@ -226,9 +226,9 @@
   if (d < 0) { m--; d += new Date(now.getFullYear(), now.getMonth(), 0).getDate(); }
   if (m < 0) { y--; m += 12; }
   const age = [y && `${y} ${plural(y, ['год', 'года', 'лет'])}`, m && `${m} мес.`, `${d} ${plural(d, ['день', 'дня', 'дней'])}`].filter(Boolean).join(' ');
-  // статус KYC от Claude → русская подпись и цвет; ok — проверка не мешает активации
+  // статус KYC от Claude → русская подпись и цвет; «Разрешено» — только если KYC пройден
   const KYC = {
-    verified: ['пройден', 'ok'], not_required: ['не требуется', 'ok'],
+    verified: ['пройден', 'ok'], not_required: ['не пройден', 'warn'],
     pending: ['на проверке', 'warn'], in_progress: ['на проверке', 'warn'], in_review: ['на проверке', 'warn'], submitted: ['на проверке', 'warn'],
     required: ['требуется', 'warn'], not_started: ['требуется', 'warn'],
     failed: ['не пройден', 'deny'], rejected: ['отклонён', 'deny'], declined: ['отклонён', 'deny'], expired: ['истёк', 'deny']
