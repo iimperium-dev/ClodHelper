@@ -102,6 +102,13 @@ body.is-phone .mobile{display:flex}
 .player .track:hover .knob,.player .track.drag .knob{transform:scale(1)}
 .player .pv{position:absolute;bottom:34px;transform:translateX(-50%);font:500 11.5px var(--mono);background:var(--surf2);border:1px solid var(--border2);border-radius:6px;padding:2px 6px;opacity:0;pointer-events:none;transition:opacity .15s}
 .player .track:hover .pv,.player .track.drag .pv{opacity:1}
+.player .volwrap{display:flex;align-items:center;flex:none;border-radius:9px;transition:background .15s}
+.player .volwrap:hover,.player .volwrap:focus-within,.player .volwrap.drag{background:rgba(255,255,255,.05)}
+.player .vs{position:relative;width:0;height:36px;overflow:hidden;cursor:pointer;touch-action:none;display:flex;align-items:center;outline:none;transition:width .25s cubic-bezier(.22,1,.36,1),margin .25s}
+.player .volwrap:hover .vs,.player .volwrap:focus-within .vs,.player .volwrap.drag .vs{width:84px;margin-right:12px}
+.player .vs .rail{height:4px;margin-left:4px;width:calc(100% - 8px)}
+.player .vs .knob{transform:scale(1);width:12px;height:12px;margin:-6px 0 0 -6px;box-shadow:none}
+.player .vs:focus-visible .rail{box-shadow:0 0 0 2px var(--em)}
 .player .flash{position:absolute;left:50%;top:50%;width:64px;height:64px;margin:-32px;border-radius:50%;background:rgba(11,14,13,.6);display:grid;place-items:center;color:var(--fg);opacity:0;pointer-events:none;backdrop-filter:blur(6px)}
 .player .flash svg{width:26px;height:26px;fill:currentColor}
 .player .flash.go{animation:flash .55s ease-out}
@@ -602,11 +609,17 @@ footer a:hover{color:var(--fg)}
   const ico = (id, cls = 'f') => `<svg class="${cls}"><use href="#${id}"/></svg>`;
   const I = {
     vol: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4.7a.7.7 0 0 0-1.2-.5L6.4 7.6A1.4 1.4 0 0 1 5.4 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.4a1.4 1.4 0 0 1 1 .4l3.4 3.4a.7.7 0 0 0 1.2-.5z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M19.4 18.4a9 9 0 0 0 0-12.8"/></svg>',
+    low: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4.7a.7.7 0 0 0-1.2-.5L6.4 7.6A1.4 1.4 0 0 1 5.4 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.4a1.4 1.4 0 0 1 1 .4l3.4 3.4a.7.7 0 0 0 1.2-.5z"/><path d="M16 9a5 5 0 0 1 0 6"/></svg>',
     mute: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4.7a.7.7 0 0 0-1.2-.5L6.4 7.6A1.4 1.4 0 0 1 5.4 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.4a1.4 1.4 0 0 1 1 .4l3.4 3.4a.7.7 0 0 0 1.2-.5z"/><path d="m22 9-6 6"/><path d="m16 9 6 6"/></svg>',
     full: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>',
     exit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/></svg>'
   };
   const players = [];
+  // громкость общая для обоих роликов и запоминается; по умолчанию 70%
+  const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
+  let volume = parseFloat(store.get('clodscan.volume'));
+  if (!(volume >= 0 && volume <= 1)) volume = 0.7;
+  const volSync = [];
 
   document.querySelectorAll('.player').forEach(p => {
     const d = p.dataset;
@@ -622,12 +635,15 @@ footer a:hover{color:var(--fg)}
         `<button class="btn pp" aria-label="Пауза">${ico('pause')}</button>` +
         `<span class="time">0:00 / ${d.dur}</span>` +
         `<div class="track" role="slider" aria-label="Перемотка" tabindex="-1"><div class="rail"><div class="buf"></div><div class="fill"></div><div class="knob"></div></div><span class="pv">0:00</span></div>` +
-        `<button class="btn vol" aria-label="Выключить звук">${I.vol}</button>` +
+        `<div class="volwrap vol"><button class="btn vb" aria-label="Выключить звук">${I.vol}</button>` +
+          `<div class="vs" role="slider" tabindex="0" aria-label="Громкость" aria-valuemin="0" aria-valuemax="100"><div class="rail"><div class="fill"></div><div class="knob"></div></div></div></div>` +
         `<button class="btn fs" aria-label="На весь экран">${I.full}</button>` +
       `</div>`;
     const v = $('video', p), pp = $('.pp', p), time = $('.time', p), track = $('.track', p), fill = $('.fill', p), buf = $('.buf', p),
-          knob = $('.knob', p), pv = $('.pv', p), vol = $('.vol', p), fs = $('.fs', p), flash = $('.flash', p);
+          knob = $('.track .knob', p), pv = $('.pv', p), vol = $('.vb', p), fs = $('.fs', p), flash = $('.flash', p),
+          vw = $('.volwrap', p), vs = $('.vs', p), vfill = $('.vs .fill', p), vknob = $('.vs .knob', p);
     players.push(v);
+    v.volume = volume;
 
     let idle;
     const wake = () => { p.classList.add('ui'); clearTimeout(idle); idle = setTimeout(() => { if (!v.paused && !track.classList.contains('drag')) p.classList.remove('ui'); }, 2200); };
@@ -661,8 +677,37 @@ footer a:hover{color:var(--fg)}
     const up = () => { track.classList.remove('drag'); wake(); };
     track.addEventListener('pointerup', up); track.addEventListener('pointercancel', up);
 
-    // звук
-    vol.addEventListener('click', () => { v.muted = !v.muted; vol.innerHTML = v.muted ? I.mute : I.vol; vol.setAttribute('aria-label', v.muted ? 'Включить звук' : 'Выключить звук'); });
+    // звук: кнопка — выключить/включить, ползунок — громкость
+    const vpaint = () => {
+      const k = v.muted ? 0 : v.volume;
+      vfill.style.width = vknob.style.left = k * 100 + '%';
+      vol.innerHTML = k === 0 ? I.mute : k < 0.5 ? I.low : I.vol;
+      vol.setAttribute('aria-label', k === 0 ? 'Включить звук' : 'Выключить звук');
+      vs.setAttribute('aria-valuenow', Math.round(k * 100));
+    };
+    volSync.push(() => { v.volume = volume; vpaint(); });
+    const setVol = k => {
+      volume = Math.min(1, Math.max(0, k));
+      v.muted = volume === 0;
+      store.set('clodscan.volume', volume);
+      volSync.forEach(f => f());
+    };
+    vol.addEventListener('click', () => {
+      if (v.muted || v.volume === 0) { v.muted = false; if (v.volume === 0) setVol(0.5); }
+      else v.muted = true;
+      vpaint();
+    });
+    const vat = e => { const r = $('.rail', vs).getBoundingClientRect(); return (e.clientX - r.left) / r.width; };
+    vs.addEventListener('pointerdown', e => { vs.setPointerCapture(e.pointerId); vw.classList.add('drag'); setVol(vat(e)); wake(); });
+    vs.addEventListener('pointermove', e => { if (vw.classList.contains('drag')) { setVol(vat(e)); wake(); } });
+    const vup = () => vw.classList.remove('drag');
+    vs.addEventListener('pointerup', vup); vs.addEventListener('pointercancel', vup);
+    vs.addEventListener('keydown', e => {
+      const d = { ArrowRight: .1, ArrowUp: .1, ArrowLeft: -.1, ArrowDown: -.1 }[e.key];
+      if (d) { e.preventDefault(); e.stopPropagation(); setVol((v.muted ? 0 : volume) + d); wake(); }
+    });
+    vs.addEventListener('wheel', e => { e.preventDefault(); setVol((v.muted ? 0 : volume) - Math.sign(e.deltaY) * .05); wake(); }, { passive: false });
+    vpaint();
 
     // весь экран (iPhone умеет только своим плеером)
     const isFs = () => (document.fullscreenElement || document.webkitFullscreenElement) === p;
@@ -681,6 +726,7 @@ footer a:hover{color:var(--fg)}
       const k = e.key.toLowerCase();
       if (k === ' ' || k === 'k') { e.preventDefault(); if (!p.classList.contains('started')) $('.cover', p).click(); else toggle(); }
       else if (k === 'arrowright' || k === 'arrowleft') { e.preventDefault(); v.currentTime += k === 'arrowright' ? 5 : -5; wake(); }
+      else if (k === 'arrowup' || k === 'arrowdown') { e.preventDefault(); setVol((v.muted ? 0 : volume) + (k === 'arrowup' ? .1 : -.1)); wake(); }
       else if (k === 'm') vol.click();
       else if (k === 'f') fs.click();
     });
