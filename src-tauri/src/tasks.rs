@@ -150,7 +150,10 @@ pub const SERVICE_GROUPS: &[(&str, &[&str])] = &[
         "openai",
         &["openai.com", "chatgpt.com", "oaistatic.com", "oaiusercontent.com"],
     ),
-    ("google", &["generativelanguage.googleapis.com", "ai.google.dev"]),
+    (
+        "google",
+        &["generativelanguage.googleapis.com", "ai.google.dev", "gemini.google.com", "gemini.google"],
+    ),
     (
         "other_ai",
         &[
