@@ -42,12 +42,23 @@ const CODE_MODES: { id: CodeMode; title: string; sub: string }[] = [
 const GUARD_OF: Record<string, { id: string; sub: string }> = {
   "claude-desktop": {
     id: "claude",
-    sub: "Брандмауэр закрывает прямой выход к Claude — IP не уйдёт, даже если программа обойдёт мост",
+    sub: isMac
+      ? "Брандмауэр закрывает прямой выход к Claude — IP не уйдёт, даже если программа обойдёт мост"
+      : "Брандмауэр закрывает прямой выход к Claude и WebRTC — IP не уйдёт, даже если программа обойдёт мост",
   },
   telegram: {
     id: "telegram",
     sub: "Если прокси упадёт, Telegram не переключится на прямое соединение — будет ждать прокси",
   },
+  // Только Windows: на Mac брандмауэр не различает программы.
+  ...(isMac
+    ? {}
+    : {
+        codex: {
+          id: "codex",
+          sub: "Брандмауэр закрывает WebRTC (голос, звонки) — он ходит мимо прокси и выдаёт настоящий IP",
+        },
+      }),
 };
 
 /** Встроенные, чей прокси — назначение сервиса (мост роутит по доменам). */
@@ -307,6 +318,16 @@ export function AppSettingsModal({
     }, guardOn ? "Защита снята" : "Защита включена");
   };
 
+  // Те же сервисы заново: скрипт ставит правила на нынешние exe.
+  const refreshGuard = () => {
+    if (!guard?.enabled) return;
+    const list = guard.services.split(",").filter(Boolean);
+    void run(async () => {
+      setGuard(await leakGuardSet(list));
+      return null;
+    }, "Защита обновлена");
+  };
+
   const toggleTelemetry = () => {
     if (telemetryOff === null) return;
     const next = !telemetryOff;
@@ -470,6 +491,22 @@ export function AppSettingsModal({
                         <span className="block text-[11px] leading-snug text-vb-silver-faint">{guardOf.sub}</span>
                       </span>
                       <Toggle checked={guardOn} disabled={busy} onChange={toggleGuard} label="Не пускать мимо прокси" />
+                    </div>
+                  )}
+                  {/* Приложение обновилось из Store — правило WebRTC стоит на прежнюю версию */}
+                  {guardOf && guardOn && (guard?.stale ?? "").split(",").includes(guardOf.id) && (
+                    <div className="flex items-center justify-between gap-3 px-3.5 py-2.5">
+                      <span className="min-w-0 text-[11px] leading-snug text-vb-warn">
+                        Приложение обновилось — защита WebRTC стоит на прежнюю версию
+                      </span>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={refreshGuard}
+                        className="shrink-0 rounded-md px-2.5 py-1 text-[12px] text-vb-fg ring-1 ring-vb-line hover:bg-vb-hover disabled:opacity-50"
+                      >
+                        Обновить
+                      </button>
                     </div>
                   )}
                   {/* Claude Desktop: отчёты об ошибках (имя компьютера, железо) — не выпускать */}

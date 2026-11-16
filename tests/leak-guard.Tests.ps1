@@ -26,10 +26,11 @@ $script:Rules = @{}
 function Get-NetFirewallRule([string]$Name, $ErrorAction) {
     if ($script:Rules.ContainsKey($Name)) { return $script:Rules[$Name] }
 }
-function New-NetFirewallRule($Name, $DisplayName, $Description, $Group, $Direction, $Action, $RemoteAddress, $Profile, $Enabled) {
+function New-NetFirewallRule($Name, $DisplayName, $Description, $Group, $Direction, $Action, $RemoteAddress, $Profile, $Enabled, $Protocol, $Program) {
     $script:Rules[$Name] = [pscustomobject]@{
         Name = $Name; DisplayName = $DisplayName; Group = $Group; Direction = $Direction
         Action = $Action; RemoteAddress = @($RemoteAddress); Profile = $Profile; Enabled = $Enabled
+        Protocol = $Protocol; Program = $Program
     }
     return $script:Rules[$Name]
 }
@@ -40,6 +41,11 @@ function Remove-NetFirewallRule($Group, $Name, $ErrorAction) {
 }
 
 Assert-Equal ($script:LeakGuardGroup -cne 'ClodHelper') $true 'Leak guard never shares the killswitch rule group'
+
+# Пути exe — во временной папке теста; без programs.json UDP-правил нет.
+$script:Tmp = Join-Path ([IO.Path]::GetTempPath()) ('leak-guard-test-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $script:Tmp | Out-Null
+$script:LeakGuardProgramsFile = Join-Path $script:Tmp 'programs.json'
 
 Enable-LeakGuard 'telegram,claude'
 $status = Get-LeakGuardStatus
@@ -77,5 +83,39 @@ $script:Rules['Other-App-Rule'] = [pscustomobject]@{ Group = 'Other'; Enabled = 
 Enable-LeakGuard 'claude'
 Disable-LeakGuard
 Assert-Equal $script:Rules.ContainsKey('Other-App-Rule') $true 'Rules of other programs are never touched'
+
+# WebRTC: запрет UDP для exe Claude Desktop и Codex.
+$claudeExe = Join-Path $script:Tmp 'Claude.exe'
+$codexExe = Join-Path $script:Tmp 'ChatGPT.exe'
+foreach ($f in @($claudeExe, $codexExe)) { [IO.File]::WriteAllText($f, '') }
+$programs = @{ claude = @($claudeExe, $claudeExe, 'relative\x.exe', (Join-Path $script:Tmp 'missing.exe'), (Join-Path $script:Tmp 'notes.txt')); codex = @($codexExe) }
+[IO.File]::WriteAllText($script:LeakGuardProgramsFile, ($programs | ConvertTo-Json))
+Assert-Throws { Enable-LeakGuard 'claude,calc' } '*Не выбраны*' 'Unknown services are still refused with programs'
+
+Enable-LeakGuard 'claude,codex'
+Assert-Equal (Get-LeakGuardServices) 'claude,codex' 'Codex is guarded by its UDP rule alone'
+$udp = $script:Rules['ClodHelper-LeakGuard-claude-udp-0']
+Assert-Equal $udp.Protocol 'UDP' 'Claude Desktop gets a UDP-only rule'
+Assert-Equal $udp.Program $claudeExe 'UDP rule targets the Claude Desktop exe'
+Assert-Equal $udp.Action 'Block' 'UDP rule blocks'
+Assert-Equal ($null -eq $udp.RemoteAddress -or @($udp.RemoteAddress | Where-Object { $_ }).Count -eq 0) $true 'UDP rule blocks every remote address'
+Assert-Equal $script:Rules.ContainsKey('ClodHelper-LeakGuard-claude-udp-1') $false 'Duplicate, relative, missing and non-exe paths are skipped'
+Assert-Equal $script:Rules['ClodHelper-LeakGuard-codex-udp-0'].Program $codexExe 'UDP rule targets the Codex exe'
+Assert-Equal $script:Rules.ContainsKey('ClodHelper-LeakGuard-codex') $false 'Codex has no network rule: OpenAI has no own networks'
+Assert-Equal ($script:Rules['ClodHelper-LeakGuard-claude'].RemoteAddress -join ' ') '160.79.104.0/21 2607:6bc0::/48' 'Claude keeps its network rule next to the UDP rule'
+
+$script:Rules['ClodHelper-LeakGuard-codex-udp-0'].Enabled = 'False'
+Assert-Equal (Get-LeakGuardServices) 'claude' 'A disabled UDP rule does not count as Codex protection'
+
+[IO.File]::WriteAllText($script:LeakGuardProgramsFile, '{ "claude": [] }')
+Assert-Throws { Enable-LeakGuard 'claude,codex' } '*Codex не найден*' 'Codex without an installed exe is refused'
+Assert-Equal (Get-LeakGuardServices) 'claude' 'A refused change keeps the rules that were already there'
+Enable-LeakGuard 'claude'
+Assert-Equal (Get-LeakGuardServices) 'claude' 'Claude is guarded by networks even without its exe'
+[IO.File]::WriteAllText($script:LeakGuardProgramsFile, 'not json')
+Enable-LeakGuard 'telegram'
+Assert-Equal (Get-LeakGuardServices) 'telegram' 'A broken programs file does not break the network rules'
+Disable-LeakGuard
+Remove-Item -LiteralPath $script:Tmp -Recurse -Force
 
 Write-Output "PASS: $script:Passed leak guard assertions; no real firewall or UAC operations."

@@ -216,6 +216,40 @@ test("windows: защита от утечек — в окне Claude и Telegram
   expect(errors).toEqual([]);
 });
 
+test("windows: Codex — защита WebRTC; устаревшее правило обновляется кнопкой", async ({ page }) => {
+  const errors = await open(page, "still&platform=win");
+  await go(page, "Приложения");
+  await gear(page, "ChatGPT Codex");
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByText("Брандмауэр закрывает WebRTC", { exact: false })).toBeVisible();
+  const guard = dialog.getByRole("switch", { name: "Не пускать мимо прокси" });
+  await expect(guard).not.toBeChecked();
+  await guard.click();
+  await expect(guard).toBeChecked();
+  await page.keyboard.press("Escape");
+  // Codex обновился из Store: правило стоит на прежний exe.
+  await page.evaluate(() => {
+    (window as unknown as { __R: Record<string, unknown> }).__R.leak_stale = "codex";
+  });
+  await gear(page, "ChatGPT Codex");
+  await expect(dialog.getByText("Приложение обновилось", { exact: false })).toBeVisible();
+  await page.screenshot({ path: "test-results/windows-codex-guard-stale.png" });
+  await page.keyboard.press("Escape");
+  // У Claude правило свежее — предупреждения нет.
+  await gear(page, "Claude Desktop");
+  await expect(dialog.getByText("Брандмауэр закрывает прямой выход к Claude и WebRTC", { exact: false })).toBeVisible();
+  await expect(dialog.getByText("Приложение обновилось", { exact: false })).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test("mac: у Codex нет защиты брандмауэра — pf не различает программы", async ({ page }) => {
+  const errors = await open(page);
+  await go(page, "Приложения");
+  await gear(page, "ChatGPT Codex");
+  await expect(page.getByRole("dialog").getByRole("switch", { name: "Не пускать мимо прокси" })).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
 test("windows: Claude — обычная строка с «Подключить», без отдельной панели", async ({ page }) => {
   await page.addInitScript(() => {
     (window as unknown as { __mockOverrides: unknown }).__mockOverrides = {

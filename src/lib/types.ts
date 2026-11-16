@@ -435,11 +435,13 @@ export interface UpdateProgress {
 /** «Защита от утечек» (pf на macOS, брандмауэр Windows). */
 export interface LeakGuardStatus {
   enabled: boolean;
-  /** "claude", "telegram" или "claude,telegram". */
+  /** Через запятую: "claude", "telegram", "codex" (codex — только Windows). */
   services: string;
   auto_restore: boolean;
   /** Живая проверка: прямое соединение с Anthropic отклонено. null — не понять. */
   verified: boolean | null;
+  /** Windows: у каких сервисов ("claude", "codex") запрет UDP стоит на прежнюю версию (обновились из Store). */
+  stale?: string;
 }
 
 // ─── Инструменты → очистка аккаунта Claude (mirror claude_wipe.rs) ──

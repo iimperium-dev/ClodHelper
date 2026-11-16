@@ -13,8 +13,17 @@ pub(crate) const SCRIPT: &str = include_str!("../resources/leak-guard.sh");
 #[cfg(target_os = "windows")]
 pub(crate) const SCRIPT: &str = include_str!("../resources/leak-guard.ps1");
 
-/// Сервисы, которые умеет закрывать защита.
-pub const SERVICES: [&str; 2] = ["claude", "telegram"];
+/// Сервисы, которые умеет закрывать защита. Codex — только на Windows: у
+/// OpenAI нет своих сетей, его защита — запрет UDP для exe (WebRTC), а pf на
+/// macOS не различает программы.
+#[cfg(target_os = "windows")]
+pub const SERVICES: &[&str] = &["claude", "telegram", "codex"];
+#[cfg(not(target_os = "windows"))]
+pub const SERVICES: &[&str] = &["claude", "telegram"];
+
+/// Сервисы, у которых есть свои сети (одинаковы в pf и брандмауэре Windows).
+#[cfg(test)]
+const NET_SERVICES: [&str; 2] = ["claude", "telegram"];
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct LeakGuardStatus {
@@ -27,6 +36,10 @@ pub struct LeakGuardStatus {
     /// Живая проверка: прямое соединение с Anthropic действительно отклонено.
     #[serde(default)]
     pub verified: Option<bool>,
+    /// Windows: у каких сервисов ("claude", "codex" через запятую) запрет UDP
+    /// (WebRTC) стоит на прежний exe — приложение обновилось из Store.
+    #[serde(default)]
+    pub stale: String,
 }
 
 #[derive(Deserialize)]
@@ -48,7 +61,7 @@ fn parse(payload: &str) -> Result<LeakGuardStatus, String> {
 /// Список сервисов в каноничном виде ("claude,telegram"); пустой — снять защиту.
 pub fn normalize(services: &[String]) -> Result<String, String> {
     let mut out = Vec::new();
-    for s in SERVICES {
+    for &s in SERVICES {
         if services.iter().any(|x| x == s) {
             out.push(s);
         }
@@ -140,9 +153,20 @@ fn confirm(services: &str, real: LeakGuardStatus) -> Result<LeakGuardStatus, Str
     Ok(real)
 }
 
-/// Состояние защиты с живой проверкой для Claude.
+/// Состояние защиты с живой проверкой для Claude (и, на Windows, с
+/// проверкой, что запрет UDP стоит на нынешние exe).
 pub fn status() -> Result<LeakGuardStatus, String> {
-    status_raw().map(probed)
+    let st = status_raw()?;
+    #[cfg(target_os = "windows")]
+    let st = with_stale(st);
+    Ok(probed(st))
+}
+
+/// programs.json для операций, которые зовут leak-guard.ps1 сами (политика
+/// Claude «Подключить»): пути exe кладутся рядом со скриптом.
+#[cfg(target_os = "windows")]
+pub fn programs_file() -> String {
+    programs_json(&programs())
 }
 
 /// Закрыт ли прямой выход для сервиса — по правилам, без живой проверки
@@ -235,19 +259,96 @@ fn rule_blocks(rule: &str) -> bool {
 
 /// Windows: правила брандмауэра читаются без прав администратора — прямо из
 /// его хранилища в реестре (Get-NetFirewallRule через PowerShell — секунды).
+/// Сколько exe одного сервиса закрывает скрипт ($LeakGuardMaxPrograms).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+const MAX_PROGRAMS: usize = 4;
+
+/// Имя правила «без UDP» для exe сервиса — как Get-LeakGuardUdpRuleName.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn udp_rule_name(service: &str, index: usize) -> String {
+    format!("ClodHelper-LeakGuard-{service}-udp-{index}")
+}
+
+/// Путь программы из записи правила («…|App=C:\…\Claude.exe|…»).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn rule_app(rule: &str) -> Option<&str> {
+    rule.split('|').find_map(|f| f.strip_prefix("App="))
+}
+
+/// Текущие exe Claude Desktop и Codex, которым нужен запрет UDP.
+#[cfg(target_os = "windows")]
+fn programs() -> Vec<(&'static str, String)> {
+    let mut out = Vec::new();
+    if let Some(i) = crate::claude_desktop::detect() {
+        out.push(("claude", i.exe_path));
+    }
+    if let Some(exe) = crate::apps::codex_main_exe() {
+        out.push(("codex", exe.to_string_lossy().to_string()));
+    }
+    out
+}
+
+/// programs.json для скрипта: { "claude": [путь], "codex": [путь] }.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn programs_json(list: &[(&str, String)]) -> String {
+    let mut map = serde_json::Map::new();
+    for (service, path) in list {
+        map.entry(service.to_string())
+            .or_insert_with(|| serde_json::Value::Array(Vec::new()))
+            .as_array_mut()
+            .map(|a| a.push(serde_json::Value::String(path.clone())));
+    }
+    serde_json::Value::Object(map).to_string()
+}
+
+/// Устарел ли запрет UDP: сервис защищён, его exe известен, но ни одно
+/// действующее правило «без UDP» не стоит на этот exe (обновился из Store
+/// или защиту включили, когда приложения ещё не было).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn udp_stale(on: &[&str], programs: &[(&str, String)], rules: &dyn Fn(&str) -> Option<String>) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    for (service, exe) in programs {
+        let covered = (0..MAX_PROGRAMS).any(|i| {
+            rules(&udp_rule_name(service, i)).is_some_and(|r| {
+                rule_blocks(&r) && rule_app(&r).is_some_and(|app| app.eq_ignore_ascii_case(exe))
+            })
+        });
+        if on.contains(service) && !covered && !out.contains(service) {
+            out.push(service);
+        }
+    }
+    out.join(",")
+}
+
 #[cfg(target_os = "windows")]
 fn status_raw() -> Result<LeakGuardStatus, String> {
+    let read = |name: &str| crate::win::firewall_rule(name);
     let mut on = Vec::new();
-    for service in SERVICES {
-        match crate::win::firewall_rule(&rule_name(service)) {
-            Ok(Some(rule)) if rule_blocks(&rule) => on.push(service),
-            Ok(_) => {}
-            // Хранилище закрыто для чтения — спросим сам брандмауэр.
-            Err(_) => {
-                let payload = crate::elevate::read_status(SCRIPT, "-Action Status")
-                    .map_err(|e| format!("Защита от утечек: {e}"))?;
-                return parse(&payload);
+    for &service in SERVICES {
+        // Сервис с сетями — по правилу сетей; Codex — по правилу «без UDP».
+        let names: Vec<String> = if service == "codex" {
+            (0..MAX_PROGRAMS).map(|i| udp_rule_name(service, i)).collect()
+        } else {
+            vec![rule_name(service)]
+        };
+        let mut active = false;
+        for name in &names {
+            match read(name) {
+                Ok(Some(rule)) if rule_blocks(&rule) => {
+                    active = true;
+                    break;
+                }
+                Ok(_) => {}
+                // Хранилище закрыто для чтения — спросим сам брандмауэр.
+                Err(_) => {
+                    let payload = crate::elevate::read_status(SCRIPT, "-Action Status")
+                        .map_err(|e| format!("Защита от утечек: {e}"))?;
+                    return parse(&payload);
+                }
             }
+        }
+        if active {
+            on.push(service);
         }
     }
     let services = on.join(",");
@@ -256,20 +357,56 @@ fn status_raw() -> Result<LeakGuardStatus, String> {
         auto_restore: !services.is_empty(),
         services,
         verified: None,
+        stale: String::new(),
     })
 }
 
-/// Windows: включить для `services` ("claude,telegram") или снять (пустая
-/// строка) — одно окно UAC. Правила постоянные: служба не нужна.
+/// Состояние с проверкой, стоит ли запрет UDP на нынешние exe (дороже
+/// status_raw: ищет установленные приложения).
+#[cfg(target_os = "windows")]
+fn with_stale(mut st: LeakGuardStatus) -> LeakGuardStatus {
+    let on: Vec<&str> = st.services.split(',').filter(|s| !s.is_empty()).collect();
+    st.stale = udp_stale(&on, &programs(), &|name| crate::win::firewall_rule(name).ok().flatten());
+    st
+}
+
+/// Приложение обновилось из Store, а запрет UDP стоит на прежний exe —
+/// переставить правила (одно окно UAC). Перед запуском Claude Desktop и
+/// Codex; сбой или отказ в UAC запуск не останавливает.
+#[cfg(target_os = "windows")]
+pub fn refresh_if_stale(service: &str) {
+    let Ok(st) = status_raw() else { return };
+    if !covers(&st, service) {
+        return;
+    }
+    let st = with_stale(st);
+    if st.stale.split(',').any(|s| s == service) {
+        match set(&st.services) {
+            Ok(_) => tracing::info!("Защита от утечек: запрет UDP переставлен на новую версию {service}"),
+            Err(e) => tracing::warn!("Защита от утечек: не удалось обновить запрет UDP: {e}"),
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn refresh_if_stale(_service: &str) {}
+
+/// Windows: включить для `services` ("claude,telegram,codex") или снять
+/// (пустая строка) — одно окно UAC. Правила постоянные: служба не нужна.
 #[cfg(target_os = "windows")]
 pub fn set(services: &str) -> Result<LeakGuardStatus, String> {
-    // services уже проверен normalize(): только claude/telegram и запятая.
+    // services уже проверен normalize(): только известные имена и запятая.
     let arguments = if services.is_empty() {
         "-Action Disable".to_string()
     } else {
         format!("-Action Enable -Services {services}")
     };
-    let outcome = crate::elevate::run("leak-guard", &[("leak-guard.ps1", SCRIPT)], &arguments)?;
+    let programs = programs_json(&programs());
+    let outcome = crate::elevate::run(
+        "leak-guard",
+        &[("leak-guard.ps1", SCRIPT), ("programs.json", &programs)],
+        &arguments,
+    )?;
     if outcome.cancelled {
         return Err("Запрос прав администратора отменён".into());
     }
@@ -317,6 +454,7 @@ mod tests {
             services: services.into(),
             auto_restore: enabled,
             verified,
+            stale: String::new(),
         };
         assert!(confirm("claude", st(true, "claude", Some(true))).is_ok());
         assert!(confirm("telegram", st(true, "telegram", None)).is_ok());
@@ -339,12 +477,49 @@ mod tests {
         assert_eq!(rule_name("claude"), "ClodHelper-LeakGuard-claude");
     }
 
+    /// Запрет UDP (WebRTC): имена правил как в скрипте, путь exe из записи
+    /// брандмауэра, «устарело» — когда ни одно правило не стоит на нынешний exe.
+    #[test]
+    fn udp_rules_follow_the_current_exe() {
+        let ps = include_str!("../resources/leak-guard.ps1");
+        assert!(ps.contains("\"ClodHelper-LeakGuard-$Service-udp-$Index\""));
+        assert!(ps.contains("$script:LeakGuardMaxPrograms = 4"), "MAX_PROGRAMS = скрипт");
+        assert_eq!(udp_rule_name("codex", 0), "ClodHelper-LeakGuard-codex-udp-0");
+
+        let new = r"C:\Program Files\WindowsApps\AnthropicPBC.Claude_2.0_x64__x\app\Claude.exe";
+        let old = r"C:\Program Files\WindowsApps\AnthropicPBC.Claude_1.0_x64__x\app\Claude.exe";
+        let rule = |app: &str, active: &str| {
+            format!("v2.33|Action=Block|Active={active}|Dir=Out|Protocol=17|App={app}|Name=x|")
+        };
+        assert_eq!(rule_app(&rule(new, "TRUE")), Some(new));
+        let programs = vec![("claude", new.to_string())];
+        let only = |name: &'static str, r: String| move |n: &str| (n == name).then(|| r.clone());
+
+        let fresh = only("ClodHelper-LeakGuard-claude-udp-0", rule(&new.to_uppercase(), "TRUE"));
+        assert_eq!(udp_stale(&["claude"], &programs, &fresh), "", "регистр пути не важен");
+        let moved = only("ClodHelper-LeakGuard-claude-udp-1", rule(new, "TRUE"));
+        assert_eq!(udp_stale(&["claude"], &programs, &moved), "", "любое из правил сервиса");
+        let updated = only("ClodHelper-LeakGuard-claude-udp-0", rule(old, "TRUE"));
+        assert_eq!(udp_stale(&["claude"], &programs, &updated), "claude", "приложение обновилось из Store");
+        let off = only("ClodHelper-LeakGuard-claude-udp-0", rule(new, "FALSE"));
+        assert_eq!(udp_stale(&["claude"], &programs, &off), "claude", "выключенное правило не защищает");
+        let none = |_: &str| None;
+        assert_eq!(udp_stale(&["claude"], &programs, &none), "claude", "защиту включили до установки приложения");
+        assert_eq!(udp_stale(&["telegram"], &programs, &none), "", "без защиты сервиса нечего обновлять");
+        assert_eq!(udp_stale(&["claude"], &[], &none), "", "приложение не найдено");
+
+        let json: serde_json::Value =
+            serde_json::from_str(&programs_json(&[("claude", new.into()), ("codex", "C:\\c.exe".into())])).unwrap();
+        assert_eq!(json["claude"][0], new);
+        assert_eq!(json["codex"][0], "C:\\c.exe");
+    }
+
     /// Сети одинаковы в pf-скрипте macOS и в правилах брандмауэра Windows.
     #[test]
     fn mac_and_windows_block_the_same_networks() {
         let sh = include_str!("../resources/leak-guard.sh");
         let ps = include_str!("../resources/leak-guard.ps1");
-        for service in SERVICES {
+        for service in NET_SERVICES {
             let sh_line = sh
                 .lines()
                 .find(|l| l.contains(&format!("*,{service},*)")))

@@ -504,10 +504,27 @@ pub fn statuses(profiles: &[AppProfile]) -> Vec<AppProfileStatus> {
 
 // ─── Запуск ──────────────────────────────────────────────────────
 
-/// Весь трафик приложения через прокси? Своё приложение (браузер) — по
-/// умолчанию целиком; встроенные — только AI-сайты (умный общий вход).
+/// Весь трафик приложения через прокси? Своё приложение (браузер) и AI-
+/// клиенты (Codex) — по умолчанию целиком: иначе вход через Google, проверка
+/// «я не робот», сбор ошибок и статистики уходили напрямую, с настоящим IP и
+/// DNS провайдера. Редакторы (VS Code) — только AI-сайты (умный общий вход).
 pub fn full_proxy_of(p: &AppProfile) -> bool {
-    p.full_proxy.unwrap_or(p.kind == LaunchKind::Custom)
+    p.full_proxy
+        .unwrap_or(p.kind == LaunchKind::Custom || service_group_of(p).is_some())
+}
+
+/// Группа сервиса, чей прокси — прокси приложения целиком (назначение в
+/// «Прокси»). Claude Desktop сюда не входит: у него свой строгий вход 8890.
+fn service_group_of(p: &AppProfile) -> Option<&'static str> {
+    (p.id == "codex").then_some("openai")
+}
+
+/// Закреплённый вход прокси, назначенного группе сервиса (нет назначения —
+/// основной №0). Так «весь трафик» Codex идёт с IP OpenAI, а не с IP Claude,
+/// как было бы на строгом входе 8890.
+fn group_pin_port(group: &str, s: &crate::settings::Settings, pool: usize) -> Option<u16> {
+    let i = s.proxy_assignments.get(group).copied().unwrap_or(0);
+    (i < pool).then(|| crate::tasks::PIN_PORT_BASE + i as u16)
 }
 
 /// Через какой вход моста запускать приложение:
@@ -517,13 +534,23 @@ pub fn full_proxy_of(p: &AppProfile) -> bool {
 ///   что бы ни стояло в глобальном режиме);
 /// - иначе общий умный вход 8889.
 pub fn launch_proxy_url(p: &AppProfile) -> String {
-    let pool = crate::settings::effective_proxies(&crate::settings::load()).len();
+    let settings = crate::settings::load();
+    let pool = crate::settings::effective_proxies(&settings).len();
     match p.proxy {
         // Закреплённые входы есть у моста ≥1.7 (macOS и Windows).
         Some(i) if i < pool && pinned_listeners_available() => {
             format!("http://127.0.0.1:{}", crate::tasks::PIN_PORT_BASE + i as u16)
         }
-        _ if full_proxy_of(p) => crate::claude_policy::PROXY_URL.to_string(),
+        _ if full_proxy_of(p) => match service_group_of(p) {
+            // Строгий вход 8890 ходит с IP Claude — AI-клиенту другого
+            // сервиса туда нельзя. Нет закреплённых входов (старый мост) —
+            // общий вход: домены сервиса там всё равно идут через его прокси.
+            Some(group) => match group_pin_port(group, &settings, pool).filter(|_| pinned_listeners_available()) {
+                Some(port) => format!("http://127.0.0.1:{port}"),
+                None => local_proxy_url(),
+            },
+            None => crate::claude_policy::PROXY_URL.to_string(),
+        },
         // VS Code и прочие — на общий вход: терминальный режим «всё через
         // прокси» должен действовать и в их терминалах.
         _ if is_chromium_browser(p) && sites_listener_available() => {
@@ -573,9 +600,18 @@ pub fn sites_listener_available() -> bool {
 
 /// WebRTC (звонки, видео в браузере) ходит по UDP к STUN-серверам мимо
 /// любого HTTP-прокси — сайты так видят настоящий IP (ipleak: «WebRTC
-/// detection»). Флаг Chromium запрещает WebRTC ходить мимо прокси; на
-/// не-Chromium приложения не влияет.
-const WEBRTC_GUARD: &str = "--webrtc-ip-handling-policy=disable_non_proxied_udp";
+/// detection»). Флаги запрещают WebRTC ходить мимо прокси. Проверено вживую
+/// (STUN-кандидаты): Chrome и Edge слушают только первый флаг, движок
+/// Chromium без браузерной части — только второй (`force-`), поэтому оба.
+/// Electron (Claude Desktop, Codex) не передаёт ни один в процессы страниц —
+/// их закрывает запрет UDP в защите от утечек (leak-guard.ps1).
+const WEBRTC_FLAGS: [&str; 2] = [
+    "--webrtc-ip-handling-policy=disable_non_proxied_udp",
+    "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+];
+/// Те же флаги одной строкой — для ярлыков и команд оболочки.
+const WEBRTC_GUARD: &str =
+    "--webrtc-ip-handling-policy=disable_non_proxied_udp --force-webrtc-ip-handling-policy=disable_non_proxied_udp";
 
 /// Мост поднимает закреплённые входы (≥1.7)? Проба версии exe кэшируется.
 fn pinned_listeners_available() -> bool {
@@ -742,6 +778,13 @@ pub(crate) fn kill_pids(pids: &[u32]) {
 }
 
 pub fn launch(p: &AppProfile) -> Result<(), String> {
+    // Claude Desktop или Codex обновились из Store — запрет UDP (WebRTC)
+    // переезжает на новый exe до запуска, иначе новая версия ходит мимо него.
+    if p.id == crate::claude_desktop::PROFILE_ID {
+        crate::leak_guard::refresh_if_stale("claude");
+    } else if p.id == "codex" {
+        crate::leak_guard::refresh_if_stale("codex");
+    }
     // Уже запущенная программа на «Открыть» выводит своё окно вперёд.
     #[cfg(target_os = "windows")]
     crate::win::allow_foreground();
@@ -799,7 +842,7 @@ fn launch_exe(p: &AppProfile, extra: &[&str]) -> Result<(), String> {
     }
     let mut cmd = Command::new(&exe);
     cmd.arg(format!("--proxy-server={proxy}"));
-    cmd.arg(WEBRTC_GUARD);
+    cmd.args(WEBRTC_FLAGS);
     cmd.args(extra);
     // env для дочерних процессов (терминал → Claude Code → bash/node/git).
     cmd.env("HTTP_PROXY", &proxy);
@@ -826,7 +869,7 @@ pub fn open_in_browser(p: &AppProfile, url: &str) -> Result<(), String> {
     crate::win::allow_foreground();
     let mut cmd = Command::new(&exe);
     cmd.arg(format!("--proxy-server={}", launch_proxy_url(p)));
-    cmd.arg(WEBRTC_GUARD);
+    cmd.args(WEBRTC_FLAGS);
     cmd.arg(url);
     apply_no_window(&mut cmd);
     cmd.spawn()
@@ -854,7 +897,7 @@ fn open_app_with(app: &str, proxy: &str, name: &str, extra: &[&str]) -> Result<(
         .arg(app)
         .arg("--args")
         .arg(format!("--proxy-server={proxy}"))
-        .arg(WEBRTC_GUARD)
+        .args(WEBRTC_FLAGS)
         .args(extra)
         .output()
         .map_err(|e| format!("Не удалось запустить {name}: {e}"))?;
@@ -878,12 +921,13 @@ fn launch_msix(p: &AppProfile) -> Result<(), String> {
     // установленного пакета WindowsApps с флагом `--proxy-server`. Путь
     // версионированный — резолвим на лету через Get-AppxPackage, поэтому
     // апдейт Store не ломает. Тест: 4 соединения к мосту, 0 прямых.
-    let proxy = local_proxy_url();
+    // Вход — как у остальных: выбранный прокси, «весь трафик» или умный.
+    let proxy = launch_proxy_url(p);
 
     if let Some(exe) = msix_main_exe(p) {
         let mut cmd = Command::new(&exe);
         cmd.arg(format!("--proxy-server={proxy}"));
-        cmd.arg(WEBRTC_GUARD);
+        cmd.args(WEBRTC_FLAGS);
         // env — на случай если рантайм внутри (node/codex) читает их.
         cmd.env("HTTP_PROXY", &proxy);
         cmd.env("HTTPS_PROXY", &proxy);
@@ -1256,6 +1300,14 @@ fn codex_install_root() -> Option<PathBuf> {
 #[cfg(not(target_os = "windows"))]
 fn codex_install_root() -> Option<PathBuf> {
     None
+}
+
+/// Главный exe Codex (Electron) в пакете Store: его закрывает правило
+/// «без UDP» защиты от утечек. Путь меняется с каждой версией пакета.
+#[cfg(target_os = "windows")]
+pub fn codex_main_exe() -> Option<PathBuf> {
+    let exe = codex_install_root()?.join("app").join("ChatGPT.exe");
+    exe.exists().then_some(exe)
 }
 
 /// Найти все файлы с именем `name` рекурсивно в `dir` (для MSIX-рантаймов).
@@ -1706,6 +1758,38 @@ fn squirrel_app(update: &std::path::Path, args: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod search_tests {
     use super::*;
+
+    /// Оба флага WebRTC и в аргументах, и в строке для ярлыков.
+    #[test]
+    fn webrtc_flags_for_browsers_and_bare_chromium() {
+        assert_eq!(WEBRTC_GUARD, WEBRTC_FLAGS.join(" "));
+        assert!(WEBRTC_FLAGS.iter().any(|f| f.starts_with("--webrtc-ip-handling-policy=")));
+        assert!(WEBRTC_FLAGS.iter().any(|f| f.starts_with("--force-webrtc-ip-handling-policy=")));
+        assert!(WEBRTC_FLAGS.iter().all(|f| f.ends_with("=disable_non_proxied_udp")));
+    }
+
+    /// Codex по умолчанию целиком через прокси — и через прокси OpenAI, а не
+    /// через строгий вход Claude.
+    #[test]
+    fn codex_goes_fully_through_the_openai_proxy() {
+        let presets = builtin_presets();
+        let codex = presets.iter().find(|p| p.id == "codex").unwrap();
+        let vscode = presets.iter().find(|p| p.id == "vscode").unwrap();
+        assert!(full_proxy_of(codex), "Codex — весь трафик через прокси");
+        assert!(!full_proxy_of(vscode), "редактор — только AI-сайты");
+        let mut off = codex.clone();
+        off.full_proxy = Some(false);
+        assert!(!full_proxy_of(&off), "выбор пользователя главнее");
+        assert_eq!(service_group_of(codex), Some("openai"));
+        assert_eq!(service_group_of(vscode), None);
+
+        let mut s = crate::settings::Settings::default();
+        assert_eq!(group_pin_port("openai", &s, 3), Some(crate::tasks::PIN_PORT_BASE), "без назначения — основной");
+        s.proxy_assignments.insert("openai".into(), 2);
+        assert_eq!(group_pin_port("openai", &s, 3), Some(crate::tasks::PIN_PORT_BASE + 2));
+        assert_eq!(group_pin_port("openai", &s, 2), None, "назначение вне пула");
+        assert_eq!(group_pin_port("openai", &crate::settings::Settings::default(), 0), None, "пул пуст");
+    }
 
     #[test]
     fn same_path_as_the_os_sees_it() {
