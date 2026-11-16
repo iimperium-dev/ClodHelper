@@ -2,10 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   AlertTriangle,
+  Archive,
   Check,
   ChevronDown,
   Eraser,
   Fingerprint,
+  FolderOpen,
   Globe2,
   HardDrive,
   KeyRound,
@@ -13,18 +15,89 @@ import {
   MessagesSquare,
   Monitor,
   ScrollText,
-  ShieldCheck,
   SquareTerminal,
   UserRound,
 } from "lucide-react";
 import { Button } from "../components/Button";
 import { Toggle } from "../components/Toggle";
-import { appsLaunch, claudeWipeRun, claudeWipeScan } from "../lib/api";
+import {
+  appsLaunch,
+  claudeChatsExport,
+  claudeChatsExportProgress,
+  claudeWipeRun,
+  claudeWipeRunning,
+  claudeWipeScan,
+  revealInFolder,
+} from "../lib/api";
 import { fadeInUp, staggerContainer } from "../lib/motion";
 import { playWipeSound, unlockWipeSound } from "../lib/wipeSound";
 import { isMac } from "../lib/platform";
 import { cn } from "../lib/cn";
-import type { WipeGroup, WipeResult, WipeScan } from "../lib/types";
+import type { ChatsArchive, WipeGroup, WipeResult, WipeScan } from "../lib/types";
+
+/** Имя файла из полного пути (Windows и macOS). */
+const baseName = (p: string) => p.split(/[\\/]/).pop() ?? p;
+
+/** Опрос прогресса архива, пока идёт `work`: процент или null, пока архив не начат. */
+function useExportProgress(active: boolean): number | null {
+  const [pct, setPct] = useState<number | null>(null);
+  useEffect(() => {
+    if (!active) {
+      setPct(null);
+      return;
+    }
+    let stop = false;
+    const tick = async () => {
+      try {
+        const p = await claudeChatsExportProgress();
+        if (!stop) setPct(p.active && p.total > 0 ? Math.min(100, (p.done / p.total) * 100) : null);
+      } catch {
+        /* нет ответа — оставим прежнее значение */
+      }
+    };
+    void tick();
+    const t = window.setInterval(() => void tick(), 400);
+    return () => {
+      stop = true;
+      window.clearInterval(t);
+    };
+  }, [active]);
+  return pct;
+}
+
+/** Готовый архив: имя, размер и кнопка «Показать в папке». */
+function ArchiveSaved({ archive }: { archive: ChatsArchive }) {
+  const [err, setErr] = useState<string | null>(null);
+  return (
+    <div className="mt-2.5 rounded-lg border border-vb-border bg-vb-surface-2/60 p-2.5">
+      <div className="flex items-center gap-2.5">
+        <Archive className="h-4 w-4 shrink-0 text-vb-emerald" strokeWidth={1.9} />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[12px] font-medium text-vb-fg" title={archive.path}>
+            {baseName(archive.path)}
+          </div>
+          <div className="text-[11px] text-vb-silver-faint">
+            «Загрузки» · {formatSize(archive.bytes)} · {archive.files}{" "}
+            {plural(archive.files, "файл", "файла", "файлов")}
+            {archive.skipped > 0 ? ` · не вошло ${archive.skipped}` : ""}
+          </div>
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            setErr(null);
+            revealInFolder(archive.path).catch((e) => setErr(String(e)));
+          }}
+        >
+          <FolderOpen className="h-3.5 w-3.5" />
+          Показать
+        </Button>
+      </div>
+      {err && <p className="mt-1.5 text-[11.5px] text-vb-loss">{err}</p>}
+    </div>
+  );
+}
 
 /** Размер по-человечески: 236 МБ, 4,2 МБ, 85 КБ. */
 function formatSize(bytes: number): string {
@@ -189,10 +262,19 @@ function Disclosure({
   );
 }
 
+const EXPORT_STEP = "Сохраняю архив чатов";
+
 /** Шаги для полосы прогресса: по тому, что реально будет удаляться. */
-function stepsFor(scan: WipeScan | null, desktop: boolean, code: boolean, chats: boolean): string[] {
+function stepsFor(
+  scan: WipeScan | null,
+  desktop: boolean,
+  code: boolean,
+  chats: boolean,
+  exportChats: boolean,
+): string[] {
   const steps: string[] = [];
-  if ((desktop || chats) && scan?.desktop_running) steps.push("Закрываю Claude");
+  if (scan?.desktop_running || ((code || chats) && (scan?.cli_running ?? 0) > 0)) steps.push("Закрываю Claude");
+  if (chats && exportChats) steps.push(EXPORT_STEP);
   if (desktop) for (const id of ORDER) if (scan?.groups.some((g) => !g.code && g.id === id)) steps.push(GROUPS[id].step);
   if (code && scan?.groups.some((g) => g.code)) steps.push("Очищаю Claude Code");
   if (chats) steps.push(GROUPS.chats.step);
@@ -201,26 +283,55 @@ function stepsFor(scan: WipeScan | null, desktop: boolean, code: boolean, chats:
 }
 
 /** Анимированная полоса: идёт по шагам, пока работает очистка; в конце — 100%. */
-function WipeProgress({ steps, finished }: { steps: string[]; finished: boolean }) {
+function WipeProgress({
+  steps,
+  finished,
+  exportPct,
+}: {
+  steps: string[];
+  finished: boolean;
+  /** Идёт архив чатов: его настоящий процент (полоса стоит на этом шаге). */
+  exportPct?: number | null;
+}) {
   const reduce = useReducedMotion();
   const [p, setP] = useState(0);
+  const pRef = useRef(0);
+  pRef.current = p;
+  const exportIdx = steps.indexOf(EXPORT_STEP);
+  const exporting = exportPct != null && exportIdx >= 0 && !finished;
+  // Архив уже шёл: дальше полоса может идти за его шаг.
+  const [exportSeen, setExportSeen] = useState(false);
+  useEffect(() => {
+    if (exporting) setExportSeen(true);
+  }, [exporting]);
   useEffect(() => {
     if (finished) {
       setP(100);
       return;
     }
-    // Доходим до ~92% за время, пропорциональное числу шагов, дальше — ждём ответ.
+    if (exporting) {
+      // Архив — самая долгая часть: полоса идёт по его настоящему проценту
+      // внутри своего шага.
+      const from = (92 * exportIdx) / steps.length;
+      const span = 92 / steps.length;
+      setP(Math.max(pRef.current, from + (span * (exportPct ?? 0)) / 100));
+      return;
+    }
+    // Доходим до ~92% за время, пропорциональное числу шагов, дальше — ждём
+    // ответ. Пока архив не начался, полоса не уходит дальше его шага.
+    const cap = exportIdx >= 0 && !exportSeen ? (92 * exportIdx) / steps.length : 92;
+    const from = Math.min(pRef.current, cap);
     const start = performance.now();
-    const total = 650 * steps.length;
+    const total = 650 * steps.length * Math.max(0.2, (cap - from) / 92);
     let raf = 0;
     const tick = (t: number) => {
       const k = Math.min(1, (t - start) / total);
-      setP(92 * (1 - Math.pow(1 - k, 2.2)));
+      setP(from + (cap - from) * (1 - Math.pow(1 - k, 2.2)));
       if (k < 1) raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [finished, steps.length]);
+  }, [finished, steps.length, exporting, exportPct, exportIdx, exportSeen]);
   const idx = finished ? steps.length - 1 : Math.min(steps.length - 1, Math.floor((p / 92) * steps.length));
   return (
     <div>
@@ -276,6 +387,8 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
   const [codeOn, setCodeOn] = useState(true);
   // Локальные чаты по умолчанию остаются: удаление — только осознанным выбором.
   const [chatsOn, setChatsOn] = useState(false);
+  // Перед удалением чатов — архив в «Загрузки» (по умолчанию включено).
+  const [exportOn, setExportOn] = useState(true);
   const [phase, setPhase] = useState<Phase>("idle");
   const [steps, setSteps] = useState<string[]>([]);
   const [finished, setFinished] = useState(false);
@@ -297,9 +410,13 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
   useEffect(() => {
     alive.current = true;
     void load();
-    // Запущен ли Claude — меняется, пока человек читает.
+    // Запущен ли Claude — меняется, пока человек читает. Опрашиваем только
+    // процессы: полный скан папок занимает секунды.
     const t = window.setInterval(() => {
-      if (document.visibilityState === "visible") void load();
+      if (document.visibilityState !== "visible") return;
+      claudeWipeRunning()
+        .then((r) => setScan((s) => (s ? { ...s, ...r } : s)))
+        .catch(() => {});
     }, 5000);
     return () => {
       alive.current = false;
@@ -326,6 +443,9 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
     !useChats;
   const canWipe = !!scan && (useDesktop || useCode || useChats) && !nothing;
   const busy = phase === "working";
+  const useExport = useChats && exportOn;
+  const exportPct = useExportProgress(busy && useExport);
+  const closesCli = (useCode || useChats) && (scan?.cli_running ?? 0) > 0;
 
   const onEraser = () => {
     if (busy) return;
@@ -345,7 +465,7 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
   const run = async () => {
     // Звук «готово» сыграет позже — аудио разблокируем сейчас, на нажатии.
     unlockWipeSound();
-    const plan = stepsFor(scan, useDesktop, useCode, useChats);
+    const plan = stepsFor(scan, useDesktop, useCode, useChats, useExport);
     setSteps(plan);
     setFinished(false);
     setResult(null);
@@ -353,7 +473,7 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
     setPhase("working");
     const started = Date.now();
     try {
-      const r = await claudeWipeRun(useDesktop, useCode, useChats);
+      const r = await claudeWipeRun(useDesktop, useCode, useChats, useExport);
       // Полоса не должна проскочить за долю секунды — даём ей пройти шаги.
       const minMs = 650 * plan.length * 0.8;
       const wait = Math.max(0, minMs - (Date.now() - started));
@@ -388,11 +508,15 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
   const confirmText = (() => {
     const what =
       useDesktop && useCode ? "в Claude Desktop и Claude Code" : useDesktop ? "в Claude Desktop" : "в Claude Code";
-    const close = (useDesktop || useChats) && scan?.desktop_running ? "Claude закроется, и вы выйдете" : "Вы выйдете";
-    const chats = useChats ? " Локальные чаты и проекты удалятся безвозвратно." : "";
+    const close = scan?.desktop_running ? "Claude закроется, и вы выйдете" : "Вы выйдете";
+    const chats = !useChats
+      ? ""
+      : useExport
+        ? " Локальные чаты сохранятся архивом в «Загрузки» и удалятся с компьютера."
+        : " Локальные чаты и проекты удалятся безвозвратно.";
     if (!useDesktop && !useCode) {
       const shut = scan?.desktop_running ? "Claude закроется. " : "";
-      return `${shut}Локальные чаты и проекты удалятся безвозвратно. Отменить это нельзя.`;
+      return `${shut}${chats.trim()} Отменить это нельзя.`;
     }
     return `${close} из аккаунта ${what}.${chats} Отменить это нельзя.`;
   })();
@@ -469,11 +593,11 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
                   Отмена
                 </Button>
               </div>
-              {useCode && scan && scan.cli_running > 0 && (
+              {closesCli && (
                 <p className="mt-2.5 flex gap-1.5 pl-[26px] text-[11.5px] leading-snug text-vb-warn">
                   <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
-                  Claude Code запущен отдельно ({isMac ? "в Терминале" : "в терминале"} или редакторе) — закройте
-                  его, иначе он запишет данные аккаунта обратно.
+                  Claude Code {isMac ? "в Терминале" : "в терминале"} или редакторе тоже закроется — иначе он
+                  запишет данные аккаунта обратно. Несохранённый ответ в нём прервётся.
                 </p>
               )}
             </div>
@@ -483,7 +607,7 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
         {phase === "working" && (
           <motion.div key="working" {...reveal} className="overflow-hidden">
             <div className="mx-3.5 mb-3.5 rounded-xl border border-vb-border bg-vb-surface-2/50 p-3">
-              <WipeProgress steps={steps} finished={finished} />
+              <WipeProgress steps={steps} finished={finished} exportPct={exportPct} />
             </div>
           </motion.div>
         )}
@@ -510,13 +634,23 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
                 </div>
               </div>
 
+              {result.archive && <ArchiveSaved archive={result.archive} />}
+
               {result.failed.length > 0 && (
                 <div className="mt-2.5 rounded-lg border border-vb-warn/30 bg-vb-warn/[0.06] p-2.5 text-[11.5px] leading-snug text-vb-silver">
                   <span className="font-medium text-vb-warn">
-                    Не удалось удалить {result.failed.length}{" "}
+                    Не удалось очистить {result.failed.length}{" "}
                     {plural(result.failed.length, "элемент", "элемента", "элементов")}
                   </span>{" "}
-                  — их держит запущенная программа. Закройте Claude и Claude Code и очистите ещё раз.
+                  — файл занят другой программой или повреждён. Закройте Claude и очистите ещё раз.
+                  <ul className="mt-1.5 space-y-0.5 text-[11px] text-vb-silver-faint">
+                    {result.failed.slice(0, 4).map((f) => (
+                      <li key={f} className="truncate" title={f}>
+                        {f}
+                      </li>
+                    ))}
+                    {result.failed.length > 4 && <li>…и ещё {result.failed.length - 4}</li>}
+                  </ul>
                 </div>
               )}
 
@@ -616,13 +750,36 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
                       sub={
                         !chatsGroup
                           ? "Нет на этом компьютере"
-                          : `Переписка Code и Cowork — безвозвратно${chatsBytes ? ` · ${formatSize(chatsBytes)}` : ""}`
+                          : `Переписка Code и Cowork${chatsBytes ? ` · ${formatSize(chatsBytes)}` : ""}`
                       }
                       checked={chatsOn}
                       disabled={!chatsGroup || busy}
                       danger
                       onChange={setChatsOn}
                     />
+                    <AnimatePresence initial={false}>
+                      {useChats && (
+                        <motion.div {...reveal} className="overflow-hidden">
+                          <div className="flex items-center gap-3 py-2.5 pl-[58px] pr-3.5">
+                            <span className="min-w-0 flex-1">
+                              <span className="block text-[12.5px] leading-tight text-vb-silver">
+                                Сначала сохранить архив
+                              </span>
+                              <span className="mt-0.5 block truncate text-[11px] leading-tight text-vb-silver-faint">
+                                {exportOn ? "ZIP в «Загрузки», потом удаление" : "Чаты удалятся без копии"}
+                              </span>
+                            </span>
+                            <Toggle
+                              checked={exportOn}
+                              onChange={setExportOn}
+                              disabled={busy}
+                              tone="emerald"
+                              label="Сохранить архив чатов перед удалением"
+                            />
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                   </div>
 
                   {/* Подробности */}
@@ -681,7 +838,9 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
                               <div className="min-w-0 flex-1">
                                 <div className="text-[12px] leading-tight text-vb-loss">Локальные чаты и проекты</div>
                                 <div className="truncate text-[11px] leading-tight text-vb-silver-faint">
-                                  Переписка Claude Code и задачи Cowork — безвозвратно
+                                  {useExport
+                                    ? "Переписка Claude Code и задачи Cowork — сначала в архив"
+                                    : "Переписка Claude Code и задачи Cowork — безвозвратно"}
                                 </div>
                               </div>
                               {chatsBytes > 0 && (
@@ -697,7 +856,7 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
 
                     <Disclosure
                       title="Что останется"
-                      hint="чаты, проекты, настройки"
+                      hint={useChats ? (useExport ? "архив, настройки" : "настройки") : "чаты, проекты, настройки"}
                       open={panel === "keep"}
                       onToggle={() => setPanel((p) => (p === "keep" ? null : "keep"))}
                     >
@@ -707,9 +866,19 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
                             <SquareTerminal className="mt-px h-3.5 w-3.5 shrink-0 text-vb-emerald" strokeWidth={1.9} />
                             <span>
                               <span className="text-vb-silver">
-                                Локальные чаты и проекты{scan.kept_sessions > 0 ? ` (${scan.kept_sessions})` : ""}
+                                Локальные чаты и задачи Cowork
+                                {scan.kept_sessions > 0 ? ` (${scan.kept_sessions})` : ""}
                               </span>{" "}
-                              — они хранятся на этом компьютере и не удаляются
+                              — остаются на компьютере и вернутся при входе в прошлый аккаунт
+                            </span>
+                          </li>
+                        )}
+                        {useExport && (
+                          <li className="flex gap-2">
+                            <Archive className="mt-px h-3.5 w-3.5 shrink-0 text-vb-emerald" strokeWidth={1.9} />
+                            <span>
+                              <span className="text-vb-silver">Архив локальных чатов</span> — в папке «Загрузки»;
+                              храните его отдельно от нового аккаунта
                             </span>
                           </li>
                         )}
@@ -721,16 +890,9 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
                           </span>
                         </li>
                         <li className="flex gap-2">
-                          <ShieldCheck className="mt-px h-3.5 w-3.5 shrink-0 text-vb-emerald" strokeWidth={1.9} />
-                          <span>
-                            <span className="text-vb-silver">Задачи Cowork</span> — остаются на компьютере и вернутся
-                            при входе в прошлый аккаунт
-                          </span>
-                        </li>
-                        <li className="flex gap-2">
                           <Check className="mt-px h-3.5 w-3.5 shrink-0 text-vb-emerald" strokeWidth={2.2} />
                           <span>
-                            <span className="text-vb-silver">Настройки MCP, расширения, история Claude Code</span> и
+                            <span className="text-vb-silver">Настройки MCP, расширения, настройки Claude Code</span> и
                             сама программа
                           </span>
                         </li>
@@ -753,6 +915,10 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
                           отсекает «Не отправлять телеметрию» в настройках Claude Desktop.
                         </li>
                         <li>
+                          <span className="text-vb-silver">Браузеры.</span> Если вы входили на claude.ai в Chrome или
+                          другом браузере, удалите там данные сайта claude.ai.
+                        </li>
+                        <li>
                           <span className="text-vb-silver">Почта, телефон и карта.</span> Если они те же, Anthropic
                           свяжет аккаунты на своей стороне.
                         </li>
@@ -770,8 +936,101 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
 }
 
 /*
+  Архив локальных чатов: вся переписка Claude Code и Cowork с этого
+  компьютера — одним ZIP в «Загрузки», с README для агента. Ничего не
+  удаляет: удалить чаты можно в очистке (там архив сохраняется сам).
+*/
+function ChatsArchiveCard() {
+  const [phase, setPhase] = useState<"idle" | "working" | "done" | "error">("idle");
+  const [archive, setArchive] = useState<ChatsArchive | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const pct = useExportProgress(phase === "working");
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+
+  const save = async () => {
+    setPhase("working");
+    setError(null);
+    try {
+      const a = await claudeChatsExport();
+      if (!alive.current) return;
+      setArchive(a);
+      setPhase("done");
+    } catch (e) {
+      if (!alive.current) return;
+      setError(String(e));
+      setPhase("error");
+    }
+  };
+
+  return (
+    <motion.section variants={fadeInUp} className="surface-card mt-3 overflow-hidden">
+      <div className="flex items-center gap-3 p-3.5">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-vb-border bg-vb-surface-2 text-vb-silver">
+          <Archive className="h-[18px] w-[18px]" strokeWidth={1.8} />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-[14px] font-semibold leading-tight text-vb-fg">Архив локальных чатов</span>
+          <span className="mt-0.5 block truncate text-[12px] leading-snug text-vb-silver-faint">
+            Переписка Code и Cowork — ZIP в «Загрузки»
+          </span>
+        </span>
+        <Button variant="secondary" size="sm" onClick={() => void save()} disabled={phase === "working"}>
+          {phase === "working" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Archive className="h-3.5 w-3.5" />}
+          Сохранить
+        </Button>
+      </div>
+      <AnimatePresence initial={false} mode="wait">
+        {phase === "working" && (
+          <motion.div key="working" {...reveal} className="overflow-hidden">
+            <div className="mx-3.5 mb-3.5 rounded-xl border border-vb-border bg-vb-surface-2/50 p-3">
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="text-[12.5px] text-vb-silver">
+                  {pct == null ? "Собираю чаты…" : "Сохраняю архив…"}
+                </span>
+                <span className="tnum text-[11px] text-vb-silver-faint">{pct == null ? "" : `${Math.round(pct)}%`}</span>
+              </div>
+              <div className="relative mt-2 h-1.5 overflow-hidden rounded-full bg-white/[0.06]">
+                <motion.div
+                  className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-vb-emerald-dim to-vb-emerald"
+                  animate={{ width: `${pct ?? 3}%` }}
+                  transition={{ duration: 0.35, ease: "easeOut" }}
+                />
+              </div>
+            </div>
+          </motion.div>
+        )}
+        {phase === "done" && archive && (
+          <motion.div key="done" {...reveal} className="overflow-hidden">
+            <div className="mx-3.5 mb-3.5">
+              <ArchiveSaved archive={archive} />
+              <p className="mt-2 text-[11.5px] leading-snug text-vb-silver-dim">
+                Внутри — README с описанием, где что лежит. Распакуйте архив и попросите агента найти нужный чат.
+              </p>
+            </div>
+          </motion.div>
+        )}
+        {phase === "error" && error && (
+          <motion.div key="error" {...reveal} className="overflow-hidden">
+            <div className="mx-3.5 mb-3.5 rounded-xl border border-vb-loss/30 bg-vb-loss/[0.06] p-3 text-[12px] leading-snug text-vb-silver">
+              <div className="font-medium text-vb-loss">Не получилось</div>
+              <p className="mt-0.5">{error}</p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.section>
+  );
+}
+
+/*
   Инструменты: разовые действия, которые не относятся к мосту напрямую.
-  Первый — очистка данных аккаунта Claude для смены аккаунта.
+  Очистка данных аккаунта Claude для смены аккаунта и архив локальных чатов.
 */
 export function Tools({ onOpenApps }: { onOpenApps: () => void }) {
   return (
@@ -787,6 +1046,7 @@ export function Tools({ onOpenApps }: { onOpenApps: () => void }) {
       </motion.header>
       <div className="mt-5">
         <ClaudeWipeCard onOpenApps={onOpenApps} />
+        <ChatsArchiveCard />
       </div>
     </motion.div>
   );

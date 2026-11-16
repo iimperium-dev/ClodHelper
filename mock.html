@@ -200,6 +200,46 @@
         else apps.push(app(`custom-${apps.length + 1}`, args.name, "custom", false, args.exePath));
         return structuredClone(apps);
       }
+      // Инструменты → очистка Claude и архив чатов.
+      if (cmd === "claude_wipe_scan") {
+        await new Promise((r) => setTimeout(r, 400));
+        return {
+          desktop_dirs: ["C:\\Users\\user\\AppData\\Local\\Claude-Data\\anthropicpbc.claude_x"],
+          code_found: true,
+          groups: [
+            { id: "login", code: false, bytes: 97378, items: 22 },
+            { id: "device", code: false, bytes: 943758, items: 10 },
+            { id: "web", code: false, bytes: 3866189, items: 6 },
+            { id: "account", code: false, bytes: 138102, items: 61 },
+            { id: "logs", code: false, bytes: 77618364, items: 4 },
+            { id: "cache", code: false, bytes: 647946647, items: 12 },
+            { id: "chats", code: false, bytes: 3443631238, items: 11 },
+            { id: "login", code: true, bytes: 122, items: 100 },
+            { id: "logs", code: true, bytes: 1345479741, items: 12 },
+          ],
+          desktop_running: true,
+          cli_running: 1,
+          kept_sessions: 125,
+        };
+      }
+      if (cmd === "claude_wipe_running") return { desktop_running: true, cli_running: 1 };
+      const mockExport = async () => {
+        window.__exp = { active: true, done: 0, total: 3443631238 };
+        for (let i = 1; i <= 20; i++) {
+          await new Promise((r) => setTimeout(r, 150));
+          window.__exp.done = (window.__exp.total * i) / 20;
+        }
+        window.__exp.active = false;
+        return { path: "C:\\Users\\user\\Downloads\\Чаты Claude 2026-11-16.zip", bytes: 412000000, files: 4821, skipped: 0 };
+      };
+      if (cmd === "claude_chats_export_progress") return window.__exp || { active: false, done: 0, total: 0 };
+      if (cmd === "claude_chats_export") return mockExport();
+      if (cmd === "claude_wipe_run") {
+        const archive = args.includeChats && args.exportChats ? await mockExport() : null;
+        await new Promise((r) => setTimeout(r, 800));
+        return { removed_bytes: 2100000000, removed_items: 240, failed: [], closed_desktop: true, archive };
+      }
+      if (cmd === "reveal_in_folder") return null;
       if (cmd.startsWith("plugin:event|")) return 1;
       if (cmd in R) return structuredClone(R[cmd]);
       if (cmd in SITES) return structuredClone(SITES[cmd]);

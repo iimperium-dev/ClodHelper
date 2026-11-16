@@ -4,7 +4,10 @@ import type {
   AppProfileStatus,
   AppSettings,
   BridgeFileIssue,
+  ChatsArchive,
+  ChatsExportProgress,
   WipeResult,
+  WipeRunning,
   WipeScan,
   BridgeHealth,
   BridgeVersions,
@@ -550,11 +553,31 @@ export async function claudeWipeScan(): Promise<WipeScan> {
   return invoke<WipeScan>("claude_wipe_scan");
 }
 
-/** Закрыть Claude Desktop и удалить данные аккаунта. */
+/** Запущены ли Claude Desktop и отдельный Claude Code (дёшево, для опроса). */
+export async function claudeWipeRunning(): Promise<WipeRunning> {
+  return invoke<WipeRunning>("claude_wipe_running");
+}
+
+/** Закрыть Claude и удалить данные аккаунта. exportChats — сначала архив чатов. */
 export async function claudeWipeRun(
   includeDesktop: boolean,
   includeCode: boolean,
   includeChats: boolean,
+  exportChats: boolean,
 ): Promise<WipeResult> {
-  return invoke<WipeResult>("claude_wipe_run", { includeDesktop, includeCode, includeChats });
+  return invoke<WipeResult>("claude_wipe_run", { includeDesktop, includeCode, includeChats, exportChats });
+}
+
+/** Сохранить все локальные чаты Claude в ZIP в «Загрузки». */
+export async function claudeChatsExport(): Promise<ChatsArchive> {
+  return invoke<ChatsArchive>("claude_chats_export");
+}
+
+export async function claudeChatsExportProgress(): Promise<ChatsExportProgress> {
+  return invoke<ChatsExportProgress>("claude_chats_export_progress");
+}
+
+/** Показать файл в Проводнике / Finder. */
+export async function revealInFolder(path: string): Promise<void> {
+  return invoke<void>("reveal_in_folder", { path });
 }

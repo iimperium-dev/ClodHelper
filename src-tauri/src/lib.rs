@@ -4,6 +4,7 @@ mod bridge_file;
 mod claude_desktop;
 mod claude_policy;
 mod claude_proxy;
+mod claude_chats_export;
 mod claude_wipe;
 mod commands;
 mod diagnostics;
@@ -204,6 +205,10 @@ pub fn run() {
             commands::open_windows_security,
             commands::claude_wipe_scan,
             commands::claude_wipe_run,
+            commands::claude_wipe_running,
+            commands::claude_chats_export,
+            commands::claude_chats_export_progress,
+            commands::reveal_in_folder,
             commands::proxy_backups_set,
             commands::proxy_assignments_set,
             commands::sites_get,
