@@ -176,6 +176,8 @@ fn elevate(action: &str) -> Result<ClaudePolicyStatus, String> {
                 ("operation.ps1", &enable_with_guard(&list)),
                 ("policy.ps1", POLICY_SCRIPT),
                 ("leak-guard.ps1", crate::leak_guard::SCRIPT),
+                // Пути exe для запрета UDP (WebRTC) у Claude Desktop.
+                ("programs.json", &crate::leak_guard::programs_file()),
             ],
             &arguments,
         )?,

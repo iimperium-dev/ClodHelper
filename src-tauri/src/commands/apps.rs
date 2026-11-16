@@ -236,6 +236,8 @@ fn guard_service_of(id: &str) -> Option<&'static str> {
     match id {
         crate::apps::TELEGRAM_ID => Some("telegram"),
         crate::claude_desktop::PROFILE_ID => Some("claude"),
+        // Только Windows ставит Codex защиту; на Mac снимать нечего.
+        "codex" => Some("codex"),
         _ => None,
     }
 }

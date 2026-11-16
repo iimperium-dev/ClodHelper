@@ -152,7 +152,8 @@
         leak = { enabled: on, services: args.services.join(","), auto_restore: on, verified: on && args.services.includes("claude") ? true : null };
         return leak;
       }
-      if (cmd === "leak_guard_status") return leak;
+      // R.leak_stale: "claude"/"codex" — приложение обновилось, правило WebRTC устарело.
+      if (cmd === "leak_guard_status") return { ...leak, stale: R.leak_stale || "" };
       // Как бэкенд: статус Telegram знает, закрыт ли ему прямой выход.
       const tgGuarded = () => leak.enabled && leak.services.split(",").includes("telegram");
       if (cmd === "telegram_status") return { ...structuredClone(R.telegram_status), guarded: tgGuarded() };
