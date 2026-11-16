@@ -143,6 +143,33 @@ figcaption{color:var(--faint);font-size:13px;margin-top:10px;text-align:center}
 .why li svg.i{color:var(--em);margin-top:1px;width:16px;height:16px}
 .why li b{color:var(--fg);font-weight:600;display:block}
 
+/* другие страны */
+details.geo{margin-top:18px;border-radius:16px}
+details.geo summary{padding:16px 18px;justify-content:flex-start;gap:14px}
+details.geo .gi{width:38px;height:38px;border-radius:10px;background:var(--bg);border:1px solid var(--border);display:grid;place-items:center;color:var(--em);flex:none}
+details.geo .gt{flex:1;min-width:0}
+details.geo .gt b{display:block;font-size:15px}
+details.geo .gt span{display:block;color:var(--dim);font-size:13px;font-weight:400}
+details.geo .chev{margin-left:auto}
+.geo-b{padding:0 18px 18px}
+.geo-b>p{color:var(--silver);font-size:14.5px;margin:0 0 14px}
+.gtab{border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.gr{display:grid;grid-template-columns:1.2fr .8fr .6fr 2fr;gap:12px;align-items:center;padding:11px 14px;border-top:1px solid var(--border);font-size:14px}
+.gr:first-child{border-top:0}
+.gr.gh{background:var(--surf2);color:var(--faint);font-size:12px;padding:9px 14px}
+.gr b{font-weight:600}
+.gr small{display:block;color:var(--faint);font-size:12px}
+.gr .t{font-family:var(--mono);font-size:13.5px;color:var(--fg)}
+.gr .p{font-weight:600}
+.gr .s{color:var(--dim);font-size:13px}
+.gr.best{background:rgba(34,192,132,.05)}
+.gr.best .t{color:var(--em)}
+.geo-n{margin:14px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px}
+.geo-n li{display:flex;gap:10px;color:var(--silver);font-size:13.5px;line-height:1.5}
+.geo-n li svg.i{width:16px;height:16px;color:var(--faint);margin-top:2px}
+.geo-n b{color:var(--fg)}
+.geo-b>p.geo-f{color:var(--faint);font-size:12.5px;margin:12px 0 0}
+
 /* генератор */
 .gen{margin-top:22px;border:1px solid var(--border);border-radius:18px;background:var(--surf);overflow:hidden}
 .gen-h{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px 12px;padding:16px 20px;border-bottom:1px solid var(--border)}
@@ -267,6 +294,13 @@ footer a:hover{color:var(--fg)}
   .copy{border-left:0;border-top:1px solid var(--border2);justify-content:center;height:44px}
   .cbox.big .copy{border-top-color:var(--em)}
   .gen-b{padding:16px}
+  .gr.gh{display:none}
+  .gr{grid-template-columns:1fr auto;gap:2px 12px;padding:12px 14px}
+  .gr .t{grid-column:1;grid-row:2}
+  .gr .p{grid-column:2;grid-row:1}
+  .gr .s{grid-column:1 / -1}
+  .gr:nth-child(2){border-top:0}
+  .geo-b{padding:0 14px 16px}
   .plan h3{font-size:26px}
   .end{padding:28px 18px}
 }
@@ -366,7 +400,7 @@ footer a:hover{color:var(--fg)}
           </figure>
           <ol class="do">
             <li class="pinref"><span><b>Метод оплаты</b> — оставьте «МИР/СБП».</span></li>
-            <li class="pinref"><span><b>Сумма</b> — впишите <code>269</code> (или больше, если хотите оплатить сразу несколько месяцев).</span></li>
+            <li class="pinref"><span><b>Сумма</b> — впишите <code>269</code> (или больше, если хотите оплатить сразу несколько месяцев). Берёте сервер не в Финляндии или Нидерландах — впишите цену тарифа <a href="#geo" class="geolink" style="color:var(--fg)">для своей страны</a>.</span></li>
             <li class="pinref"><span><b>Продолжить</b> и оплатите картой или через СБП на странице банка. Деньги приходят на баланс за минуту.</span></li>
           </ol>
         </div>
@@ -387,7 +421,7 @@ footer a:hover{color:var(--fg)}
               <div class="price"><b>269 ₽</b><span>в месяц</span></div>
               <div class="act">
                 <a class="btn pri sm" href="https://62yun.ru/?refid=271573" target="_blank" rel="noopener">Заказать на 62yun<svg class="i" viewBox="0 0 24 24"><use href="#ext"/></svg></a>
-                <small>Тариф на сайте называется точно так же</small>
+                <a class="link" href="#geo" id="geolink">Нужна другая страна?</a>
               </div>
             </div>
             <ul class="specs">
@@ -403,6 +437,30 @@ footer a:hover{color:var(--fg)}
             <li><svg class="i" viewBox="0 0 24 24"><use href="#ok"/></svg><span><b>Быстрый диск NVMe</b>Надёжнее тарифов с обычными HDD-дисками.</span></li>
             <li><svg class="i" viewBox="0 0 24 24"><use href="#ok"/></svg><span><b>Европа рядом</b>Финляндия и Нидерланды дают низкую задержку из России.</span></li>
           </ul>
+
+          <details class="geo" id="geo">
+            <summary><span class="gi"><svg class="i" viewBox="0 0 24 24"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/></svg></span><span class="gt"><b>Нужна другая страна?</b><span>США, Германия, Канада, Испания, Гонконг — какой тариф брать там</span></span><svg class="i chev" viewBox="0 0 24 24"><use href="#plus"/></svg></summary>
+            <div class="geo-b">
+              <p>ultra-S есть только в Финляндии и Нидерландах. В других странах берите самый дешёвый тариф из таблицы — прокси на любом из них работает одинаково. Всё остальное в инструкции не меняется.</p>
+              <div class="gtab" role="table" aria-label="Тарифы по странам">
+                <div class="gr gh" role="row"><span role="columnheader">Страна</span><span role="columnheader">Тариф</span><span role="columnheader">Цена</span><span role="columnheader">Что внутри</span></div>
+                <div class="gr best" role="row"><span role="cell"><b>Финляндия</b><small>Хельсинки</small></span><span role="cell" class="t">ultra-S</span><span role="cell" class="p">269 ₽</span><span role="cell" class="s">1 ядро · 1 ГБ · 10 ГБ NVMe · 500 Мбит/с</span></div>
+                <div class="gr best" role="row"><span role="cell"><b>Нидерланды</b><small>Дронтен</small></span><span role="cell" class="t">ultra-S</span><span role="cell" class="p">269 ₽</span><span role="cell" class="s">1 ядро · 1 ГБ · 10 ГБ NVMe · 500 Мбит/с</span></div>
+                <div class="gr" role="row"><span role="cell"><b>США</b><small>Кремниевая долина</small></span><span role="cell" class="t">promo-S</span><span role="cell" class="p">269 ₽</span><span role="cell" class="s">1 ядро · 1 ГБ · 10 ГБ NVMe · 1 Гбит/с</span></div>
+                <div class="gr" role="row"><span role="cell"><b>Канада</b><small>Ванкувер</small></span><span role="cell" class="t">promo-S</span><span role="cell" class="p">269 ₽</span><span role="cell" class="s">1 ядро · 1 ГБ · 10 ГБ NVMe · 1 Гбит/с</span></div>
+                <div class="gr" role="row"><span role="cell"><b>Германия</b><small>Франкфурт</small></span><span role="cell" class="t">promo-M</span><span role="cell" class="p">399 ₽</span><span role="cell" class="s">2 ядра · 2 ГБ · 30 ГБ NVMe</span></div>
+                <div class="gr" role="row"><span role="cell"><b>Испания</b><small>Мадрид</small></span><span role="cell" class="t">ultra-M</span><span role="cell" class="p">539 ₽</span><span role="cell" class="s">2 ядра · 2 ГБ · 50 ГБ NVMe</span></div>
+                <div class="gr" role="row"><span role="cell"><b>Гонконг</b><small>Китай</small></span><span role="cell" class="t">promo-B</span><span role="cell" class="p">1199 ₽</span><span role="cell" class="s">4 ядра · 8 ГБ · 150 ГБ NVMe — дорого, только если нужен именно Гонконг</span></div>
+              </div>
+              <ul class="geo-n">
+                <li><svg class="i" viewBox="0 0 24 24"><use href="#info"/></svg><span>В форме заказа <b>сначала выберите город</b>, потом тариф: список тарифов меняется от города. Проверьте цену внизу формы.</span></li>
+                <li><svg class="i" viewBox="0 0 24 24"><use href="#info"/></svg><span>Не берите тарифы с <b>HDD+</b> в названии — у них медленный диск, а прокси он не нужен.</span></li>
+                <li><svg class="i" viewBox="0 0 24 24"><use href="#info"/></svg><span>Пополняйте баланс в шаге 2 на цену своего тарифа. Ubuntu 24.04 выбирается так же, как в инструкции.</span></li>
+                <li><svg class="i" viewBox="0 0 24 24"><use href="#info"/></svg><span>США и Канада далеко от России: задержка выше, чем у Европы. Сайты и программы работают нормально, но открываются чуть медленнее.</span></li>
+              </ul>
+              <p class="geo-f">Цены и тарифы — с сайта 62yun на ноябрь 2026 года, хостинг может их менять.</p>
+            </div>
+          </details>
 
           <figure class="shot">
             <div class="frame"><div class="fbar"><i></i><i></i><i></i><span class="url"><svg viewBox="0 0 24 24" fill="none" stroke-width="2.4"><use href="#lock"/></svg>62yun.ru</span><span class="sp"></span></div>
@@ -594,6 +652,10 @@ Password:
         <div class="a"><p>В шаге 5 нажмите «Придумать другие», затем выполните новую команду в консоли (шаг 6). Старый пароль сразу перестанет работать — не забудьте заменить строку в Clod Helper.</p></div>
       </details>
       <details>
+        <summary>Хочу сервер в США, Германии или другой стране<svg class="i" viewBox="0 0 24 24"><use href="#plus"/></svg></summary>
+        <div class="a"><p>Можно. В США и Канаде есть тариф promo-S за те же 269 ₽, в Германии самый дешёвый — promo-M за 399 ₽. Полная таблица по всем странам — <a href="#geo">в шаге 3</a>. Остальные шаги не меняются.</p></div>
+      </details>
+      <details>
         <summary>Сколько стоит и как продлевать<svg class="i" viewBox="0 0 24 24"><use href="#plus"/></svg></summary>
         <div class="a"><p>269 ₽ в месяц. На странице сервера включено «Продлевать сервер автоматически» — просто держите на балансе 62yun нужную сумму к дате продления. Если сервер не продлить, он выключится, и прокси перестанет работать.</p></div>
       </details>
@@ -732,6 +794,12 @@ Password:
     toast(ok ? "Скопировано — теперь вставьте" : "Выделите текст и скопируйте вручную");
     setTimeout(() => { b.classList.remove("ok"); lbl.textContent = old; b.querySelector("use").setAttribute("href", "#copy"); }, 1800);
   });
+
+  // ссылки «другая страна» раскрывают таблицу
+  const geo = $("geo");
+  const openGeo = () => { geo.open = true; };
+  document.querySelectorAll('a[href="#geo"]').forEach((a) => a.addEventListener("click", openGeo));
+  if (location.hash === "#geo") openGeo();
 
   // увеличение снимков
   const zoom = $("zoom"), zimg = zoom.querySelector("img");
