@@ -1,0 +1,749 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Свой прокси · Clod Helper</title>
+<meta name="description" content="Пошаговая инструкция: арендовать сервер за 269 ₽ в месяц, поставить на него прокси одной командой и подключить к Clod Helper. Около 15 минут, без знаний Linux.">
+<meta property="og:title" content="Свой прокси за 15 минут">
+<meta property="og:description" content="Свой сервер, свой IP, прокси одной командой — и сразу в Clod Helper.">
+<meta property="og:image" content="media/03-order.webp">
+<meta name="theme-color" content="#0b0e0d">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7.5' fill='%23161c19'/%3E%3Cpath d='M 23.09 21.54 A 9 9 0 1 1 23.09 10.46' fill='none' stroke='%2322c084' stroke-width='3.1' stroke-linecap='round'/%3E%3Ccircle cx='25.2' cy='16' r='2.3' fill='%233ad897'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0b0e0d;--surf:#121614;--surf2:#1a1e1c;--border:#252a28;--border2:#303633;
+  --fg:#f1f4f2;--silver:#ccd1ce;--dim:#8b918e;--faint:#646a67;
+  --em:#22c084;--emB:#3ad897;--emT:rgba(34,192,132,.1);--warn:#e0a33d;--warnT:rgba(224,163,61,.1);
+  --sans:Inter,"Segoe UI Variable","Segoe UI",-apple-system,system-ui,sans-serif;
+  --mono:"JetBrains Mono","Cascadia Mono",Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%;scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 var(--sans);-webkit-font-smoothing:antialiased}
+a{color:inherit}
+button{font:inherit;color:inherit}
+.page{max-width:1000px;margin:0 auto;padding:0 24px}
+svg.i{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+code,.mono{font-family:var(--mono);font-variant-ligatures:none}
+p code,li code,span code{font-size:.88em;background:var(--surf2);border:1px solid var(--border);border-radius:6px;padding:1px 6px;color:var(--fg);white-space:nowrap}
+kbd{font:500 12.5px var(--mono);color:var(--fg);background:var(--surf2);border:1px solid var(--border2);border-bottom-width:2px;border-radius:6px;padding:2px 7px;white-space:nowrap}
+
+/* шапка */
+.top{display:flex;align-items:center;justify-content:space-between;gap:12px;height:68px;border-bottom:1px solid var(--border)}
+.brand{display:flex;align-items:center;gap:10px;text-decoration:none;font-weight:600;font-size:14px;white-space:nowrap}
+.brand small{color:var(--faint);font-weight:400;font-size:13px;margin-left:2px}
+.mark{width:28px;height:28px;display:block;flex:none}
+.nav{display:flex;align-items:center;gap:6px}
+.navlink{display:flex;align-items:center;gap:8px;color:var(--dim);text-decoration:none;font-size:13.5px;padding:7px 12px;border-radius:9px;white-space:nowrap;transition:color .15s,background .15s}
+.navlink:hover{color:var(--fg);background:var(--surf2)}
+.navlink svg.gh{width:16px;height:16px;fill:currentColor}
+.navlink.hl{color:var(--fg);border:1px solid var(--border2);background:var(--surf)}
+.navlink.hl .dot{width:7px;height:7px;border-radius:50%;background:var(--em);box-shadow:0 0 0 3px rgba(34,192,132,.16)}
+
+/* первый экран */
+.hero{padding:72px 0 40px;display:flex;flex-direction:column;align-items:center;text-align:center;gap:22px}
+.eyebrow{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--silver);padding:6px 12px;border-radius:99px;border:1px solid var(--border2);background:var(--surf)}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--em);box-shadow:0 0 0 3px rgba(34,192,132,.16)}
+h1{font-size:clamp(34px,5.6vw,58px);line-height:1.05;letter-spacing:-.028em;font-weight:700;margin:0;text-wrap:balance}
+h1 em{font-style:normal;color:var(--em)}
+.lead{font-size:clamp(16px,2vw,19px);color:var(--silver);margin:-4px 0 0;max-width:60ch;text-wrap:balance}
+.cta{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:12px;margin-top:4px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;height:52px;padding:0 22px;border-radius:12px;text-decoration:none;font-weight:600;font-size:15.5px;cursor:pointer;border:0;transition:background .15s,color .15s,transform .15s}
+.btn:active{transform:scale(.98)}
+.btn.pri{background:var(--em);color:#04120b;box-shadow:0 0 0 1px rgba(255,255,255,.08) inset,0 10px 30px -12px rgba(34,192,132,.6)}
+.btn.pri:hover{background:var(--emB)}
+.btn.sec{border:1px solid var(--border2);background:transparent;color:var(--silver);font-weight:500}
+.btn.sec:hover{background:var(--surf2);color:var(--fg)}
+.btn.sm{height:42px;padding:0 16px;font-size:14.5px;border-radius:10px}
+.btn svg.i{width:18px;height:18px}
+.facts{display:flex;flex-wrap:wrap;justify-content:center;gap:8px 22px;color:var(--dim);font-size:14px;margin:0;padding:0;list-style:none}
+.facts li{display:flex;align-items:center;gap:7px}
+.facts svg.i{width:16px;height:16px;color:var(--em)}
+
+/* оглавление шагов */
+.toc{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:8px 0 0;padding:0;list-style:none}
+.toc a{display:flex;align-items:center;gap:12px;padding:14px 16px;border-radius:12px;border:1px solid var(--border);background:var(--surf);text-decoration:none;transition:border-color .15s,background .15s;height:100%}
+.toc a:hover{border-color:var(--border2);background:var(--surf2)}
+.toc .n{font:500 12px var(--mono);color:var(--em);width:24px;height:24px;border-radius:7px;background:var(--emT);display:grid;place-items:center;flex:none}
+.toc b{display:block;font-weight:600;font-size:14px;line-height:1.3}
+.toc span{display:block;color:var(--dim);font-size:12.5px;line-height:1.35}
+
+/* блок «что понадобится» */
+.need{margin-top:22px;display:grid;grid-template-columns:repeat(3,1fr);gap:22px;padding:22px;border:1px solid var(--border);border-radius:16px;background:var(--surf)}
+.it{display:flex;gap:12px}
+.it svg.i{color:var(--em);margin-top:2px}
+.it b{display:block;font-weight:600;font-size:14.5px;margin-bottom:2px}
+.it span{color:var(--dim);font-size:13.5px;line-height:1.5}
+.it span a{color:var(--silver)}
+
+/* шаги */
+.steps{margin-top:72px;position:relative}
+.step{position:relative;display:grid;grid-template-columns:52px 1fr;gap:0 22px;padding-bottom:64px;scroll-margin-top:20px}
+.step::before{content:"";position:absolute;left:25px;top:52px;bottom:6px;width:2px;background:linear-gradient(var(--border2),var(--border) 80%,transparent)}
+.step:last-child::before{display:none}
+.snum{width:52px;height:52px;border-radius:15px;background:var(--surf);border:1px solid var(--border2);display:grid;place-items:center;font:600 19px var(--mono);color:var(--em);position:relative;z-index:1}
+.step.done-step .snum{background:var(--em);color:#04120b;border-color:var(--em)}
+.sbody{min-width:0;padding-top:4px}
+.step h2{font-size:clamp(23px,3vw,30px);line-height:1.15;letter-spacing:-.02em;font-weight:650;margin:6px 0 8px;text-wrap:balance}
+.stime{display:inline-flex;align-items:center;gap:6px;color:var(--faint);font-size:13px;margin-bottom:6px}
+.stime svg.i{width:14px;height:14px}
+.sbody>p{color:var(--silver);margin:0 0 14px;max-width:66ch}
+.do{margin:18px 0 0;padding:0;list-style:none;counter-reset:d;display:flex;flex-direction:column;gap:12px}
+.do>li{counter-increment:d;display:flex;gap:12px;color:var(--silver);line-height:1.55}
+.do>li::before{content:counter(d);font:600 12px var(--mono);color:var(--fg);width:24px;height:24px;border-radius:50%;background:var(--surf2);border:1px solid var(--border2);display:grid;place-items:center;flex:none;margin-top:0}
+.do>li b{color:var(--fg);font-weight:600}
+.do>li.pinref::before{background:var(--em);border-color:var(--em);color:#04120b}
+
+.note{display:flex;gap:12px;align-items:flex-start;margin:18px 0 0;padding:14px 16px;border-radius:12px;border:1px solid var(--border);background:var(--surf);color:var(--silver);font-size:14px;line-height:1.55}
+.note svg.i{margin-top:2px;color:var(--em)}
+.note b{color:var(--fg)}
+.note.warn{border-color:rgba(224,163,61,.35);background:var(--warnT)}
+.note.warn svg.i{color:var(--warn)}
+
+/* скриншоты */
+.shot{margin:22px 0 0}
+.frame{border-radius:14px;overflow:hidden;border:1px solid var(--border2);background:#151718;box-shadow:0 24px 60px -30px rgba(0,0,0,.9)}
+.fbar{display:flex;align-items:center;gap:10px;height:36px;padding:0 12px;background:#1c1f1e;border-bottom:1px solid var(--border)}
+.fbar i{width:10px;height:10px;border-radius:50%;background:#3a3f3d;display:block}
+.fbar .url{flex:1;max-width:340px;margin:0 auto;height:22px;border-radius:7px;background:var(--bg);color:var(--dim);font:500 11.5px var(--mono);display:flex;align-items:center;justify-content:center;gap:6px}
+.fbar .url svg{width:11px;height:11px;stroke:var(--em)}
+.fbar .sp{width:46px}
+.pic{position:relative;line-height:0;cursor:zoom-in}
+.pic img{display:block;width:100%;height:auto}
+.pin{position:absolute;left:var(--x);top:var(--y);transform:translate(-50%,-50%);width:30px;height:30px;border-radius:50%;background:var(--em);color:#04120b;font:700 14px var(--mono);display:grid;place-items:center;line-height:1;box-shadow:0 0 0 4px rgba(11,14,13,.85),0 6px 16px rgba(0,0,0,.6);pointer-events:none}
+.pin::after{content:"";position:absolute;inset:-4px;border-radius:50%;border:2px solid var(--em);animation:ping 2.4s cubic-bezier(.2,.7,.3,1) infinite;opacity:0}
+@keyframes ping{0%{transform:scale(.9);opacity:.8}70%,100%{transform:scale(1.9);opacity:0}}
+.pin.warn{background:var(--warn)}
+.pin.warn::after{border-color:var(--warn)}
+figcaption{color:var(--faint);font-size:13px;margin-top:10px;text-align:center}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.two .shot{margin-top:22px}
+
+/* карточка тарифа (реферальная) */
+.plan{margin:24px 0 0;border:1px solid rgba(34,192,132,.35);border-radius:20px;background:radial-gradient(120% 140% at 100% 0%,rgba(34,192,132,.13),transparent 55%),var(--surf);padding:28px;display:grid;grid-template-columns:1.25fr 1fr;gap:28px;align-items:center;position:relative;overflow:hidden}
+.plan .tag{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;color:var(--em);background:var(--emT);border-radius:99px;padding:5px 11px;margin-bottom:12px}
+.plan h3{margin:0;font-size:30px;letter-spacing:-.02em;line-height:1.1}
+.plan h3 small{display:block;font-size:14px;font-weight:500;color:var(--dim);letter-spacing:0;margin-top:6px}
+.plan .price{margin-top:18px;display:flex;align-items:baseline;gap:8px}
+.plan .price b{font-size:42px;letter-spacing:-.03em;line-height:1}
+.plan .price span{color:var(--dim)}
+.plan .act{margin-top:20px;display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.plan .act small{color:var(--faint);font-size:12.5px}
+.specs{margin:0;padding:0;list-style:none;display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.specs li{padding:12px 14px;border-radius:12px;background:var(--bg);border:1px solid var(--border)}
+.specs li span{display:block;color:var(--faint);font-size:12px}
+.specs li b{font-weight:600;font-size:15px}
+.why{margin:18px 0 0;padding:0;list-style:none;display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.why li{display:flex;gap:10px;color:var(--dim);font-size:13.5px;line-height:1.5}
+.why li svg.i{color:var(--em);margin-top:1px;width:16px;height:16px}
+.why li b{color:var(--fg);font-weight:600;display:block}
+
+/* генератор */
+.gen{margin-top:22px;border:1px solid var(--border);border-radius:18px;background:var(--surf);overflow:hidden}
+.gen-h{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px 12px;padding:16px 20px;border-bottom:1px solid var(--border)}
+.gen-h b{font-weight:600}
+.gen-h span{color:var(--dim);font-size:13px}
+.gen-b{padding:20px}
+.field label{display:block;font-size:13.5px;font-weight:600;margin-bottom:8px}
+.field label span{color:var(--dim);font-weight:400}
+.ipin{position:relative}
+.ipin input{width:100%;height:52px;border-radius:12px;border:1px solid var(--border2);background:var(--bg);color:var(--fg);font:500 18px var(--mono);padding:0 48px 0 16px;outline:none;transition:border-color .15s,box-shadow .15s}
+.ipin input::placeholder{color:var(--faint)}
+.ipin input:focus{border-color:var(--em);box-shadow:0 0 0 3px rgba(34,192,132,.18)}
+.ipin .st{position:absolute;right:16px;top:50%;transform:translateY(-50%);width:20px;height:20px;color:var(--faint)}
+.ipin.ok .st{color:var(--em)}
+.ipin.bad input{border-color:var(--warn)}
+.ipin.bad .st{color:var(--warn)}
+.fhint{color:var(--dim);font-size:13px;margin-top:8px}
+.fhint.bad{color:var(--warn)}
+.creds{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:18px}
+.cred{padding:12px 14px;border-radius:12px;background:var(--bg);border:1px solid var(--border);min-width:0}
+.cred span{display:block;color:var(--faint);font-size:12px}
+.cred b{display:block;font:500 15px var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.regen{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;color:var(--faint);font-size:12.5px}
+.link{all:unset;cursor:pointer;color:var(--silver);font-size:13px;display:inline-flex;align-items:center;gap:6px;border-radius:6px}
+.link:hover{color:var(--fg)}
+.link:focus-visible{box-shadow:0 0 0 2px var(--em)}
+.link svg.i{width:14px;height:14px}
+
+/* строка с кнопкой «Скопировать» */
+.cbox{margin-top:12px;border-radius:12px;border:1px solid var(--border2);background:var(--bg);display:flex;align-items:stretch;overflow:hidden}
+.cbox.big{border-color:rgba(34,192,132,.4)}
+.cbox code{flex:1;min-width:0;padding:14px 16px;font-size:13.5px;line-height:1.6;color:var(--fg);word-break:break-all;white-space:pre-wrap;align-self:center}
+.cbox code .k{color:var(--em)}
+.cbox code .v{color:var(--warn)}
+.cbox.off code{color:var(--faint)}
+.copy{all:unset;box-sizing:border-box;flex:none;display:inline-flex;align-items:center;gap:7px;padding:0 16px;border-left:1px solid var(--border2);color:var(--silver);font-size:13.5px;font-weight:500;cursor:pointer;transition:background .15s,color .15s;white-space:nowrap}
+.copy:hover{background:var(--surf2);color:var(--fg)}
+.copy:focus-visible{box-shadow:inset 0 0 0 2px var(--em)}
+.copy svg.i{width:15px;height:15px}
+.copy.ok{color:var(--em)}
+.cbox.big .copy{background:var(--em);color:#04120b;border-left-color:var(--em);font-weight:600}
+.cbox.big .copy:hover{background:var(--emB)}
+.cbox.off .copy{pointer-events:none;opacity:.4}
+.clabel{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:20px;font-size:13.5px;font-weight:600}
+.clabel span{color:var(--dim);font-weight:400;font-size:12.5px}
+.clabel:first-child{margin-top:0}
+
+/* консоль-макет */
+.term{margin-top:18px;border-radius:14px;border:1px solid var(--border2);background:#000;overflow:hidden}
+.term .tbar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 12px;background:#141615;border-bottom:1px solid var(--border);color:var(--dim);font-size:12px}
+.term .tbar b{color:var(--silver);font-weight:600;display:flex;align-items:center;gap:7px}
+.term .tbar b i{width:7px;height:7px;border-radius:50%;background:var(--em);display:block}
+.term pre{margin:0;padding:16px 18px;font:12.5px/1.65 var(--mono);color:#cfd3d1;overflow-x:auto;white-space:pre}
+.term .c{color:#8b918e}
+.term .y{color:#f1f4f2}
+.term .g{color:var(--emB)}
+.term .hl{color:#04120b;background:var(--emB);padding:0 2px}
+.term .cur{display:inline-block;width:8px;height:14px;background:#cfd3d1;vertical-align:-2px;animation:blink 1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+
+/* подшаги консоли */
+.sub{margin-top:26px;padding-top:22px;border-top:1px dashed var(--border2)}
+.sub h3{margin:0 0 6px;font-size:17px;font-weight:650;display:flex;align-items:center;gap:10px}
+.sub h3 .l{font:600 12px var(--mono);color:var(--em);background:var(--emT);border-radius:6px;padding:3px 7px}
+.sub p{color:var(--silver);margin:0;max-width:66ch}
+
+/* итог */
+.final{margin-top:22px;border:1px solid rgba(34,192,132,.35);border-radius:18px;background:linear-gradient(180deg,rgba(34,192,132,.07),transparent 200px),var(--surf);padding:22px}
+
+/* вопросы */
+section.faq{padding:24px 0 8px;scroll-margin-top:16px}
+section.faq h2{font-size:clamp(24px,3.4vw,34px);line-height:1.15;letter-spacing:-.022em;font-weight:650;margin:0 0 18px}
+details{border:1px solid var(--border);border-radius:14px;background:var(--surf);margin-bottom:10px;overflow:hidden}
+summary{list-style:none;cursor:pointer;padding:16px 18px;font-weight:600;font-size:15px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+summary::-webkit-details-marker{display:none}
+summary svg.i{color:var(--faint);transition:transform .2s;width:16px;height:16px}
+details[open] summary svg.i{transform:rotate(45deg);color:var(--em)}
+summary:focus-visible{box-shadow:inset 0 0 0 2px var(--em);border-radius:14px}
+details .a{padding:0 18px 18px;color:var(--silver);font-size:14.5px;line-height:1.6}
+details .a p{margin:0 0 10px}
+details .a p:last-child{margin:0}
+details .a a{color:var(--fg)}
+
+/* нижний баннер */
+.end{margin-top:56px;border:1px solid var(--border);border-radius:20px;background:linear-gradient(180deg,rgba(34,192,132,.06),transparent 220px),var(--surf);padding:40px 32px;text-align:center}
+.end h2{font-size:clamp(24px,3.4vw,32px);letter-spacing:-.02em;margin:0 0 8px}
+.end p{color:var(--dim);margin:0 auto 22px;max-width:52ch}
+.end .cta{margin:0}
+
+footer{border-top:1px solid var(--border);margin-top:64px;padding:26px 0 40px;display:flex;flex-wrap:wrap;gap:8px 24px;justify-content:space-between;color:var(--faint);font-size:13px}
+footer a{color:var(--dim);text-decoration:none}
+footer a:hover{color:var(--fg)}
+
+/* увеличение скриншота */
+.zoom{position:fixed;inset:0;z-index:20;background:rgba(5,7,6,.92);display:none;align-items:center;justify-content:center;padding:24px;cursor:zoom-out;backdrop-filter:blur(4px)}
+.zoom.on{display:flex}
+.zoom img{max-width:100%;max-height:100%;border-radius:10px;box-shadow:0 30px 80px rgba(0,0,0,.8)}
+.tip{position:fixed;left:50%;bottom:28px;transform:translate(-50%,12px);opacity:0;pointer-events:none;background:var(--surf2);border:1px solid var(--border2);color:var(--fg);padding:11px 16px;border-radius:10px;font-size:14px;transition:opacity .2s,transform .3s;z-index:30;max-width:calc(100vw - 32px)}
+.tip.on{opacity:1;transform:translate(-50%,0)}
+
+@media (max-width:860px){
+  .toc{grid-template-columns:1fr 1fr}
+  .need{grid-template-columns:1fr;gap:16px}
+  .plan{grid-template-columns:1fr;padding:22px}
+  .why{grid-template-columns:1fr}
+  .creds{grid-template-columns:1fr 1fr}
+  .two{grid-template-columns:1fr;gap:0}
+}
+@media (max-width:600px){
+  .page{padding:0 16px}
+  .hero{padding:44px 0 28px}
+  .brand small,.navlink.gh-l span{display:none}
+  .toc{grid-template-columns:1fr}
+  .step{grid-template-columns:1fr;gap:0}
+  .step::before{display:none}
+  .snum{width:40px;height:40px;border-radius:12px;font-size:16px}
+  .steps{margin-top:52px}
+  .step{padding-bottom:52px}
+  .pin{width:22px;height:22px;font-size:11px;box-shadow:0 0 0 3px rgba(11,14,13,.85)}
+  .fbar .url{max-width:none}
+  .cbox{flex-direction:column}
+  .copy{border-left:0;border-top:1px solid var(--border2);justify-content:center;height:44px}
+  .cbox.big .copy{border-top-color:var(--em)}
+  .gen-b{padding:16px}
+  .plan h3{font-size:26px}
+  .end{padding:28px 18px}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}html{scroll-behavior:auto}}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="mark" viewBox="0 0 32 32"><rect width="32" height="32" rx="7.5" fill="#161c19"/><rect x=".5" y=".5" width="31" height="31" rx="7" fill="none" stroke="#fff" stroke-opacity=".06"/><path d="M 23.09 21.54 A 9 9 0 1 1 23.09 10.46" fill="none" stroke="#22c084" stroke-width="3.1" stroke-linecap="round"/><circle cx="25.2" cy="16" r="2.3" fill="#3ad897"/></symbol>
+  <symbol id="gh" viewBox="0 0 24 24"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></symbol>
+  <symbol id="copy" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></symbol>
+  <symbol id="check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="ext" viewBox="0 0 24 24"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></symbol>
+  <symbol id="lock" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+  <symbol id="info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></symbol>
+  <symbol id="alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
+  <symbol id="clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
+  <symbol id="plus" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></symbol>
+  <symbol id="ok" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></symbol>
+</svg>
+
+<div class="page">
+  <header class="top">
+    <a class="brand" href="./"><svg class="mark"><use href="#mark"/></svg>Clod Helper <small>· Свой прокси</small></a>
+    <nav class="nav">
+      <a class="navlink hl" href="https://62yun.ru/?refid=271573" target="_blank" rel="noopener"><span class="dot"></span><span>Арендовать сервер</span></a>
+      <a class="navlink gh-l" href="https://github.com/iimperium-dev/ClodHelper" aria-label="GitHub"><svg class="gh"><use href="#gh"/></svg><span>GitHub</span></a>
+    </nav>
+  </header>
+
+  <main>
+    <div class="hero">
+      <span class="eyebrow"><span class="dot"></span>Пошаговая инструкция · около 15 минут</span>
+      <h1>Свой прокси<br>на <em>своём</em> сервере</h1>
+      <p class="lead">Арендуем сервер за 269 ₽ в месяц, ставим на него прокси одной командой и добавляем в Clod Helper. Знать Linux не нужно: всё, что надо ввести, страница подготовит сама.</p>
+      <div class="cta">
+        <a class="btn pri" href="https://62yun.ru/?refid=271573" target="_blank" rel="noopener">Арендовать сервер<svg class="i" viewBox="0 0 24 24"><use href="#ext"/></svg></a>
+        <a class="btn sec" href="#s1">Начать по шагам</a>
+      </div>
+      <ul class="facts">
+        <li><svg class="i" viewBox="0 0 24 24"><use href="#ok"/></svg>IP только ваш</li>
+        <li><svg class="i" viewBox="0 0 24 24"><use href="#ok"/></svg>Трафик без ограничений</li>
+        <li><svg class="i" viewBox="0 0 24 24"><use href="#ok"/></svg>HTTP и SOCKS5 с паролем</li>
+      </ul>
+    </div>
+
+    <ol class="toc">
+      <li><a href="#s1"><span class="n">1</span><div><b>Регистрация</b><span>и пополнение баланса</span></div></a></li>
+      <li><a href="#s3"><span class="n">3</span><div><b>Заказ сервера</b><span>какой тариф выбрать</span></div></a></li>
+      <li><a href="#s5"><span class="n">5</span><div><b>Установка прокси</b><span>одна команда в консоли</span></div></a></li>
+      <li><a href="#s7"><span class="n">7</span><div><b>Clod Helper</b><span>добавить и проверить</span></div></a></li>
+    </ol>
+
+    <div class="need">
+      <div class="it"><svg class="i" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="5" rx="2"/><path d="M2 10h20"/></svg><div><b>Карта или СБП</b><span>МИР или Visa российского банка. Нужно 269 ₽ на первый месяц.</span></div></div>
+      <div class="it"><svg class="i" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg><div><b>Компьютер с браузером</b><span>Всё делается на сайтах, ничего лишнего ставить не нужно.</span></div></div>
+      <div class="it"><svg class="i" viewBox="0 0 24 24"><svg viewBox="0 0 32 32" x="0" y="0" width="24" height="24"><path d="M 23.09 21.54 A 9 9 0 1 1 23.09 10.46" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/><circle cx="25.2" cy="16" r="2.3" fill="currentColor" stroke="none"/></svg></svg><div><b>Clod Helper</b><span>Если ещё не стоит — <a href="https://github.com/iimperium-dev/ClodHelper/releases/latest">скачайте здесь</a>.</span></div></div>
+    </div>
+
+    <div class="steps">
+
+      <!-- 1 -->
+      <article class="step" id="s1">
+        <div class="snum">1</div>
+        <div class="sbody">
+          <span class="stime"><svg class="i" viewBox="0 0 24 24"><use href="#clock"/></svg>1 минута</span>
+          <h2>Зарегистрируйтесь на 62yun</h2>
+          <p>62yun — хостинг, где мы арендуем сервер. Откройте сайт по кнопке ниже и создайте аккаунт по почте.</p>
+          <a class="btn pri sm" href="https://62yun.ru/?refid=271573" target="_blank" rel="noopener">Открыть 62yun.ru<svg class="i" viewBox="0 0 24 24"><use href="#ext"/></svg></a>
+          <div class="two">
+            <figure class="shot">
+              <div class="frame"><div class="fbar"><i></i><i></i><i></i><span class="url"><svg viewBox="0 0 24 24" fill="none" stroke-width="2.4"><use href="#lock"/></svg>62yun.ru</span><span class="sp"></span></div>
+                <div class="pic"><img src="media/00-login.webp" width="680" height="500" alt="Окно входа 62yun со ссылкой «Регистрация» внизу" loading="lazy"><span class="pin" style="--x:71.5%;--y:90.4%">1</span></div></div>
+              <figcaption>Нажмите «Войти» вверху справа, затем «Регистрация»</figcaption>
+            </figure>
+            <figure class="shot">
+              <div class="frame"><div class="fbar"><i></i><i></i><i></i><span class="url"><svg viewBox="0 0 24 24" fill="none" stroke-width="2.4"><use href="#lock"/></svg>62yun.ru</span><span class="sp"></span></div>
+                <div class="pic"><img src="media/01-register.webp" width="680" height="500" alt="Форма регистрации 62yun: почта, пароль, повтор пароля" loading="lazy"><span class="pin" style="--x:67.6%;--y:38%">2</span><span class="pin" style="--x:65%;--y:76.2%">3</span></div></div>
+              <figcaption>Почта и пароль два раза → «Зарегистрироваться»</figcaption>
+            </figure>
+          </div>
+          <div class="note"><svg class="i" viewBox="0 0 24 24"><use href="#info"/></svg><span>Пароль от 62yun запишите — он понадобится, чтобы заходить в панель и продлевать сервер. Если придёт письмо с подтверждением — откройте его и подтвердите почту.</span></div>
+        </div>
+      </article>
+
+      <!-- 2 -->
+      <article class="step" id="s2">
+        <div class="snum">2</div>
+        <div class="sbody">
+          <span class="stime"><svg class="i" viewBox="0 0 24 24"><use href="#clock"/></svg>2 минуты</span>
+          <h2>Пополните баланс на 269 ₽</h2>
+          <p>Сервер оплачивается с баланса аккаунта. Нажмите на сумму баланса в шапке сайта (рядом с вашей почтой) — откроется пополнение.</p>
+          <figure class="shot">
+            <div class="frame"><div class="fbar"><i></i><i></i><i></i><span class="url"><svg viewBox="0 0 24 24" fill="none" stroke-width="2.4"><use href="#lock"/></svg>62yun.ru/account/pay</span><span class="sp"></span></div>
+              <div class="pic"><img src="media/05-topup.webp" width="950" height="340" alt="Пополнение баланса: способ оплаты МИР/СБП, сумма, кнопка Продолжить" loading="lazy"><span class="pin" style="--x:34.2%;--y:27%">1</span><span class="pin" style="--x:34.2%;--y:46%">2</span><span class="pin" style="--x:50.9%;--y:70%">3</span></div></div>
+          </figure>
+          <ol class="do">
+            <li class="pinref"><span><b>Метод оплаты</b> — оставьте «МИР/СБП».</span></li>
+            <li class="pinref"><span><b>Сумма</b> — впишите <code>269</code> (или больше, если хотите оплатить сразу несколько месяцев).</span></li>
+            <li class="pinref"><span><b>Продолжить</b> и оплатите картой или через СБП на странице банка. Деньги приходят на баланс за минуту.</span></li>
+          </ol>
+        </div>
+      </article>
+
+      <!-- 3 -->
+      <article class="step" id="s3">
+        <div class="snum">3</div>
+        <div class="sbody">
+          <span class="stime"><svg class="i" viewBox="0 0 24 24"><use href="#clock"/></svg>2 минуты</span>
+          <h2>Закажите сервер ultra-S</h2>
+          <p>Для прокси не нужен мощный сервер: он почти не нагружает процессор. Переплачивать за большие тарифы смысла нет — берите самый простой с быстрым диском.</p>
+
+          <div class="plan">
+            <div>
+              <span class="tag"><svg class="i" viewBox="0 0 24 24" style="width:14px;height:14px"><use href="#ok"/></svg>Рекомендуем для прокси</span>
+              <h3>ultra-S<small>Финляндия (Хельсинки) или Нидерланды</small></h3>
+              <div class="price"><b>269 ₽</b><span>в месяц</span></div>
+              <div class="act">
+                <a class="btn pri sm" href="https://62yun.ru/?refid=271573" target="_blank" rel="noopener">Заказать на 62yun<svg class="i" viewBox="0 0 24 24"><use href="#ext"/></svg></a>
+                <small>Тариф на сайте называется точно так же</small>
+              </div>
+            </div>
+            <ul class="specs">
+              <li><span>Скорость порта</span><b>500 Мбит/с</b></li>
+              <li><span>Трафик</span><b>Без ограничений</b></li>
+              <li><span>Диск</span><b>10 ГБ NVMe</b></li>
+              <li><span>Процессор · память</span><b>1 ядро · 1 ГБ</b></li>
+            </ul>
+          </div>
+
+          <ul class="why">
+            <li><svg class="i" viewBox="0 0 24 24"><use href="#ok"/></svg><span><b>Хватает с запасом</b>Одного ядра достаточно для десятков устройств одновременно.</span></li>
+            <li><svg class="i" viewBox="0 0 24 24"><use href="#ok"/></svg><span><b>Быстрый диск NVMe</b>Надёжнее тарифов с обычными HDD-дисками.</span></li>
+            <li><svg class="i" viewBox="0 0 24 24"><use href="#ok"/></svg><span><b>Европа рядом</b>Финляндия и Нидерланды дают низкую задержку из России.</span></li>
+          </ul>
+
+          <figure class="shot">
+            <div class="frame"><div class="fbar"><i></i><i></i><i></i><span class="url"><svg viewBox="0 0 24 24" fill="none" stroke-width="2.4"><use href="#lock"/></svg>62yun.ru</span><span class="sp"></span></div>
+              <div class="pic"><img src="media/02-tariffs.webp" width="1160" height="585" alt="Тарифы ultra: ultra-S за 269 рублей, ultra-M, ultra-B" loading="lazy"><span class="pin" style="--x:3.8%;--y:90.3%">1</span></div></div>
+            <figcaption>На главной: «Тарифы на VDS» → вкладка «ultra» → «Заказать за 269₽» у ultra-S</figcaption>
+          </figure>
+
+          <figure class="shot">
+            <div class="frame"><div class="fbar"><i></i><i></i><i></i><span class="url"><svg viewBox="0 0 24 24" fill="none" stroke-width="2.4"><use href="#lock"/></svg>62yun.ru/servers/order</span><span class="sp"></span></div>
+              <div class="pic"><img src="media/03-order.webp" width="1190" height="1160" alt="Форма заказа: Хельсинки, ultra-S, Ubuntu 24.04, стоимость 269 рублей, кнопка Заказать" loading="lazy"><span class="pin" style="--x:65.8%;--y:11.1%">2</span><span class="pin" style="--x:2.9%;--y:26.1%">3</span><span class="pin warn" style="--x:40.7%;--y:82.8%">4</span><span class="pin" style="--x:74.4%;--y:65.3%">5</span></div></div>
+            <figcaption>Форма заказа — проверьте каждую цифру</figcaption>
+          </figure>
+          <ol class="do" start="2" style="counter-reset:d 1">
+            <li class="pinref"><span><b>Локация</b> — «Хельсинки (Финляндия)» или «Дронтен (Нидерланды)». Для ultra-S доступны только они.</span></li>
+            <li class="pinref"><span><b>Тариф</b> — «ultra-S». Внизу должна быть стоимость <b>269 ₽</b>.</span></li>
+            <li class="pinref"><span><b>Система — Ubuntu 24.04 LTS.</b> Это самый важный пункт, смотрите ниже.</span></li>
+            <li class="pinref"><span><b>Заказать.</b> Деньги спишутся с баланса, сервер начнёт создаваться.</span></li>
+          </ol>
+
+          <div class="note warn"><svg class="i" viewBox="0 0 24 24"><use href="#alert"/></svg><span><b>По умолчанию там выбрана CentOS — с ней ничего не заработает.</b> Нажмите на плитку Ubuntu, откройте список версий и выберите <b>24.04 LTS</b>. Плитка Ubuntu должна подсветиться жёлтым.</span></div>
+          <figure class="shot">
+            <div class="frame"><div class="pic"><img src="media/04-os.webp" width="1224" height="380" alt="Выбор ОС: у плитки Ubuntu открыт список версий, нужна 24.04 LTS" loading="lazy"><span class="pin warn" style="--x:41.5%;--y:89.5%">4</span></div></div>
+            <figcaption>Ubuntu → 24.04 LTS</figcaption>
+          </figure>
+        </div>
+      </article>
+
+      <!-- 4 -->
+      <article class="step" id="s4">
+        <div class="snum">4</div>
+        <div class="sbody">
+          <span class="stime"><svg class="i" viewBox="0 0 24 24"><use href="#clock"/></svg>3–5 минут ожидания</span>
+          <h2>Найдите IP сервера</h2>
+          <p>Сервер создаётся несколько минут. Откройте <b>«Мои серверы»</b> в шапке сайта и нажмите <b>«Подробнее…»</b> у нового сервера. Подождите, пока вверху справа появится зелёная надпись <b>«Включен»</b>.</p>
+          <figure class="shot" style="max-width:560px">
+            <div class="frame"><div class="pic"><img src="media/06-servers.webp" width="750" height="300" alt="Мои сервера: карточка сервера с кнопкой Подробнее" loading="lazy"><span class="pin" style="--x:3.7%;--y:84.3%">1</span></div></div>
+            <figcaption>«Мои серверы» → «Подробнее…»</figcaption>
+          </figure>
+          <figure class="shot">
+            <div class="frame"><div class="fbar"><i></i><i></i><i></i><span class="url"><svg viewBox="0 0 24 24" fill="none" stroke-width="2.4"><use href="#lock"/></svg>62yun.ru/servers/control</span><span class="sp"></span></div>
+              <div class="pic"><img src="media/07-server.webp" width="970" height="795" alt="Страница сервера: основной адрес IPv4, кнопка Консоль, учётные данные root" loading="lazy"><span class="pin" style="--x:89%;--y:30.1%">2</span><span class="pin" style="--x:72.6%;--y:16.2%">3</span></div></div>
+            <figcaption>Пример страницы сервера: IP скрыт, тариф на снимке другой — у вас будет ultra-S</figcaption>
+          </figure>
+          <ol class="do">
+            <li class="pinref"><span><b>Подробнее…</b> — откроется страница сервера.</span></li>
+            <li class="pinref"><span><b>Основной адрес</b> — это IP вашего сервера, четыре числа через точку, например <code>185.12.34.56</code>. Ниже, в разделе «Сеть», рядом с ним есть кнопка <b>«Копировать»</b>. Скопируйте IP и вставьте в шаге 5.</span></li>
+            <li class="pinref"><span>Кнопка <b>«Консоль»</b> понадобится в шаге 6. Пароль от сервера (пользователь <code>root</code>) указан в «Учётных данных» — запоминать его не нужно, консоль вставит его сама.</span></li>
+          </ol>
+        </div>
+      </article>
+
+      <!-- 5 -->
+      <article class="step" id="s5">
+        <div class="snum">5</div>
+        <div class="sbody">
+          <span class="stime"><svg class="i" viewBox="0 0 24 24"><use href="#clock"/></svg>30 секунд</span>
+          <h2>Получите свою команду</h2>
+          <p>Вставьте IP сервера — страница сама придумает логин, пароль и порты для прокси и соберёт команду установки. Всё создаётся прямо в вашем браузере и никуда не отправляется.</p>
+
+          <div class="gen" id="gen">
+            <div class="gen-h"><b>Ваш прокси</b><span id="saved">Данные сохраняются в этом браузере</span></div>
+            <div class="gen-b">
+              <div class="field">
+                <label for="ip">IP сервера <span>— из шага 4</span></label>
+                <div class="ipin" id="ipbox">
+                  <input id="ip" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="например, 185.12.34.56">
+                  <svg class="i st" viewBox="0 0 24 24"><use href="#ok"/></svg>
+                </div>
+                <div class="fhint" id="iphint">Скопируйте в панели 62yun кнопкой «Копировать» и вставьте сюда.</div>
+              </div>
+
+              <div class="creds">
+                <div class="cred"><span>Логин</span><b id="vL">—</b></div>
+                <div class="cred"><span>Пароль</span><b id="vP">—</b></div>
+                <div class="cred"><span>Порт HTTP</span><b id="vH">—</b></div>
+                <div class="cred"><span>Порт SOCKS5</span><b id="vS">—</b></div>
+              </div>
+              <div class="regen"><span>Порты необычные специально — так прокси сложнее найти чужим сканерам.</span><button class="link" id="regen" type="button"><svg class="i" viewBox="0 0 24 24"><use href="#refresh"/></svg>Придумать другие</button></div>
+
+              <div class="clabel" style="margin-top:22px">Команда для консоли <span>понадобится в шаге 6</span></div>
+              <div class="cbox big"><code id="cmd"></code><button class="copy" type="button" data-copy="cmd"><svg class="i" viewBox="0 0 24 24"><use href="#copy"/></svg><span>Скопировать</span></button></div>
+            </div>
+          </div>
+          <div class="note"><svg class="i" viewBox="0 0 24 24"><use href="#lock"/></svg><span>Команда скачивает открытый скрипт установки — его можно <a href="install.sh" target="_blank" rel="noopener">прочитать целиком</a>. Он ставит программу-прокси 3proxy, включает пароль, открывает только нужные порты и ускоряет сеть сервера.</span></div>
+        </div>
+      </article>
+
+      <!-- 6 -->
+      <article class="step" id="s6">
+        <div class="snum">6</div>
+        <div class="sbody">
+          <span class="stime"><svg class="i" viewBox="0 0 24 24"><use href="#clock"/></svg>5 минут, из них 4 — ждать</span>
+          <h2>Вставьте команду в консоль сервера</h2>
+          <p>Консоль — это экран сервера прямо в браузере. Вверху у неё есть строка «Ввод текста»: туда вставляется текст, а кнопка «Отправить» печатает его на сервере.</p>
+
+          <figure class="shot">
+            <div class="frame"><div class="pic"><img src="media/08-console-bar.webp" width="1476" height="170" alt="Панель консоли: Ctrl+Alt+Del, Вставить пароль, строка Ввод текста, Из буфера, Отправить" loading="lazy"><span class="pin" style="--x:68%;--y:76.5%">А</span><span class="pin" style="--x:94.6%;--y:52%">Б</span><span class="pin" style="--x:88.6%;--y:52%">В</span></div></div>
+            <figcaption>А — строка «Ввод текста», Б — «Отправить», В — «Вставить пароль»</figcaption>
+          </figure>
+          <div class="note warn"><svg class="i" viewBox="0 0 24 24"><use href="#alert"/></svg><span><b>Главное правило консоли:</b> «Отправить» только печатает текст, но не нажимает Enter. После каждой отправки <b>кликните мышкой по чёрному экрану и нажмите <kbd>Enter</kbd></b> на клавиатуре.</span></div>
+
+          <div class="sub">
+            <h3><span class="l">6.1</span>Откройте консоль</h3>
+            <p>На странице сервера нажмите <b>«Консоль»</b>. Появится чёрный экран. Если он пустой — кликните по нему и нажмите <kbd>Enter</kbd>, появится строка <code>login:</code>.</p>
+          </div>
+
+          <div class="sub">
+            <h3><span class="l">6.2</span>Войдите как root</h3>
+            <p>В «Ввод текста» напишите <code>root</code> → <b>«Отправить»</b> → клик по экрану → <kbd>Enter</kbd>.<br>Появится <code>Password:</code> — нажмите <b>«Вставить пароль»</b> → клик по экрану → <kbd>Enter</kbd>. Пароль на экране не печатается — так и должно быть.</p>
+            <div class="term"><div class="tbar"><b><i></i>Консоль сервера</b><span>так выглядит вход</span></div><pre><span class="c">Ubuntu 24.04 LTS svr tty1</span>
+
+svr login: <span class="y">root</span>
+Password:
+<span class="c">Welcome to Ubuntu 24.04 LTS (GNU/Linux x86_64)</span>
+
+<span class="g">root@svr:~#</span> <span class="cur"></span></pre></div>
+            <p style="margin-top:12px;color:var(--dim);font-size:14px">Видите <code>root@…:~#</code> — вы внутри сервера. Написало <code>Login incorrect</code>? Повторите 6.2 ещё раз, не спеша.</p>
+          </div>
+
+          <div class="sub">
+            <h3><span class="l">6.3</span>Запустите установку</h3>
+            <p>Скопируйте <a href="#gen">команду из шага 5</a> → вставьте в «Ввод текста» (<kbd>Ctrl</kbd>+<kbd>V</kbd> или кнопка «Из буфера») → <b>«Отправить»</b> → клик по экрану → <kbd>Enter</kbd>.</p>
+            <div class="cbox" id="cmd2box"><code id="cmd2"></code><button class="copy" type="button" data-copy="cmd2"><svg class="i" viewBox="0 0 24 24"><use href="#copy"/></svg><span>Скопировать</span></button></div>
+          </div>
+
+          <div class="sub">
+            <h3><span class="l">6.4</span>Подождите 3–7 минут</h3>
+            <p>Побегут строки <code>[1/6]</code> … <code>[6/6]</code>. Ничего не нажимайте, пока не появится рамка с надписью <b>DONE!</b> и двумя <b>OK</b>:</p>
+            <div class="term"><div class="tbar"><b><i></i>Консоль сервера</b><span>успешная установка</span></div><pre id="termout"></pre></div>
+            <p style="margin-top:12px;color:var(--dim);font-size:14px">Переписывать ничего не нужно — все данные уже есть на этой странице. Если вместо DONE написано <b style="color:var(--warn)">FAILED</b> — загляните в <a href="#faq" style="color:var(--fg)">вопросы ниже</a>.</p>
+          </div>
+        </div>
+      </article>
+
+      <!-- 7 -->
+      <article class="step" id="s7">
+        <div class="snum">7</div>
+        <div class="sbody">
+          <span class="stime"><svg class="i" viewBox="0 0 24 24"><use href="#clock"/></svg>1 минута</span>
+          <h2>Добавьте прокси в Clod Helper</h2>
+          <p>Скопируйте строку и добавьте её в программу. Clod Helper сам поймёт формат и разложит её на адрес, порт, логин и пароль.</p>
+
+          <div class="final">
+            <div class="clabel">Строка для Clod Helper <span>HTTP · рекомендуем</span></div>
+            <div class="cbox big" id="sHttpBox"><code id="sHttp"></code><button class="copy" type="button" data-copy="sHttp"><svg class="i" viewBox="0 0 24 24"><use href="#copy"/></svg><span>Скопировать</span></button></div>
+            <div class="clabel">SOCKS5 <span>для других программ и телефона</span></div>
+            <div class="cbox" id="sSocksBox"><code id="sSocks"></code><button class="copy" type="button" data-copy="sSocks"><svg class="i" viewBox="0 0 24 24"><use href="#copy"/></svg><span>Скопировать</span></button></div>
+          </div>
+
+          <figure class="shot">
+            <div class="frame"><div class="pic"><img src="media/10-ch-add.webp" width="1520" height="1200" alt="Clod Helper, раздел Прокси: кнопка Добавить, поле со вставленной строкой, кнопка Добавить в пул" loading="lazy"><span class="pin" style="--x:7.9%;--y:25.6%">1</span><span class="pin" style="--x:70.5%;--y:17.4%">2</span><span class="pin" style="--x:77.6%;--y:28.8%">3</span><span class="pin" style="--x:23.4%;--y:45.6%">4</span></div></div>
+            <figcaption>Clod Helper. На снимке — пример строки, у вас будет своя</figcaption>
+          </figure>
+          <ol class="do">
+            <li class="pinref"><span>Откройте Clod Helper и перейдите в раздел <b>«Прокси»</b> (значок глобуса слева).</span></li>
+            <li class="pinref"><span>Нажмите <b>«Добавить»</b>.</span></li>
+            <li class="pinref"><span>Вставьте строку (<kbd>Ctrl</kbd>+<kbd>V</kbd>). Ниже появятся хост, порт, логин и пароль — проверьте, что хост совпадает с IP сервера.</span></li>
+            <li class="pinref"><span>Нажмите <b>«Добавить в пул»</b>. Если других прокси нет, этот станет основным.</span></li>
+          </ol>
+
+          <div class="sub">
+            <h3><span class="l">✓</span>Проверьте, что всё работает</h3>
+            <p>Перейдите в «Обзор» (значок домика) и нажмите <b>«Проверить»</b>. Под «Выход через мост» должен стоять <b>IP вашего сервера</b> — тот же, что в панели 62yun.</p>
+          </div>
+          <figure class="shot">
+            <div class="frame"><div class="pic"><img src="media/11-ch-overview.webp" width="1520" height="1200" alt="Clod Helper, Обзор: Мост активен, выход через мост, кнопка Проверить" loading="lazy"><span class="pin" style="--x:66.2%;--y:26.4%">1</span><span class="pin" style="--x:55%;--y:27.8%">2</span></div></div>
+            <figcaption>«Проверить» → тут должен быть IP вашего сервера</figcaption>
+          </figure>
+        </div>
+      </article>
+    </div>
+
+    <section class="faq" id="faq">
+      <h2>Если что-то пошло не так</h2>
+      <details>
+        <summary>В конце написано FAILED<svg class="i" viewBox="0 0 24 24"><use href="#plus"/></svg></summary>
+        <div class="a"><p>Чаще всего сервер просто ещё не до конца запустился. В панели 62yun нажмите «Перезагрузить», подождите 2 минуты, снова войдите в консоль (шаг 6.2) и выполните ту же команду ещё раз — повторный запуск безопасен.</p><p>Не помогло — сфотографируйте экран консоли и пришлите тому, кто дал вам эту инструкцию.</p></div>
+      </details>
+      <details>
+        <summary>Я потерял строку прокси<svg class="i" viewBox="0 0 24 24"><use href="#plus"/></svg></summary>
+        <div class="a"><p>Откройте эту страницу в том же браузере — данные сохранены и строка уже готова в шаге 7.</p><p>Если браузер другой: войдите в консоль сервера и выполните короткую команду — скрипт покажет логин, пароль и порты заново, ничего не меняя:</p><div class="cbox"><code id="reprint">curl -fsSL https://iimperium-dev.github.io/ClodHelper/proxy/install.sh | bash</code><button class="copy" type="button" data-copy="reprint"><svg class="i" viewBox="0 0 24 24"><use href="#copy"/></svg><span>Скопировать</span></button></div><p style="margin-top:10px">Затем впишите IP, логин, пароль и порты в Clod Helper.</p></div>
+      </details>
+      <details>
+        <summary>Консоль не реагирует на текст<svg class="i" viewBox="0 0 24 24"><use href="#plus"/></svg></summary>
+        <div class="a"><p>Кликните мышкой прямо по чёрному экрану — без этого клавиатура не попадает в консоль. Потом нажмите <kbd>Enter</kbd>. Если экран совсем завис, обновите страницу консоли (<kbd>F5</kbd>).</p></div>
+      </details>
+      <details>
+        <summary>Как сменить пароль прокси<svg class="i" viewBox="0 0 24 24"><use href="#plus"/></svg></summary>
+        <div class="a"><p>В шаге 5 нажмите «Придумать другие», затем выполните новую команду в консоли (шаг 6). Старый пароль сразу перестанет работать — не забудьте заменить строку в Clod Helper.</p></div>
+      </details>
+      <details>
+        <summary>Сколько стоит и как продлевать<svg class="i" viewBox="0 0 24 24"><use href="#plus"/></svg></summary>
+        <div class="a"><p>269 ₽ в месяц. На странице сервера включено «Продлевать сервер автоматически» — просто держите на балансе 62yun нужную сумму к дате продления. Если сервер не продлить, он выключится, и прокси перестанет работать.</p></div>
+      </details>
+      <details>
+        <summary>Это безопасно?<svg class="i" viewBox="0 0 24 24"><use href="#plus"/></svg></summary>
+        <div class="a"><p>Логин и пароль создаются в вашем браузере и не уходят на наши серверы — у этой страницы их нет. Прокси закрыт паролем, на сервере открыты только порты прокси и вход для администрирования. Код скрипта открыт: <a href="install.sh" target="_blank" rel="noopener">install.sh</a>.</p><p>Сервер и IP только ваши: никто, кроме вас, через этот прокси не ходит.</p></div>
+      </details>
+      <details>
+        <summary>Можно ли пользоваться прокси без Clod Helper<svg class="i" viewBox="0 0 24 24"><use href="#plus"/></svg></summary>
+        <div class="a"><p>Да. Строки HTTP и SOCKS5 из шага 7 подходят для любых программ, браузерных расширений и телефонов, которые умеют работать с прокси. Clod Helper просто делает это удобно: прокси только для нужных программ и сайтов, остальное — напрямую.</p></div>
+      </details>
+    </section>
+
+    <div class="end">
+      <h2>Готовы начать?</h2>
+      <p>Сервер на 62yun — 269 ₽ в месяц, без ограничений трафика. Дальше эта страница проведёт по всем шагам.</p>
+      <div class="cta">
+        <a class="btn pri" href="https://62yun.ru/?refid=271573" target="_blank" rel="noopener">Арендовать сервер<svg class="i" viewBox="0 0 24 24"><use href="#ext"/></svg></a>
+        <a class="btn sec" href="https://github.com/iimperium-dev/ClodHelper/releases/latest">Скачать Clod Helper</a>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <span>Инструкция Clod Helper. 62yun — сторонний хостинг, мы с ним не связаны.</span>
+    <a href="https://github.com/iimperium-dev/ClodHelper">Clod Helper · MIT</a>
+  </footer>
+</div>
+
+<div class="zoom" id="zoom" role="dialog" aria-label="Увеличенный снимок"><img alt=""></div>
+<div class="tip" id="tip" role="status"></div>
+
+<script>
+(() => {
+  const URL_SH = "https://iimperium-dev.github.io/ClodHelper/proxy/install.sh";
+  const KEY = "clodproxy.v1";
+  const $ = (id) => document.getElementById(id);
+  const ABC = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
+  const LOW = "abcdefghijkmnpqrstuvwxyz";
+
+  const rnd = (n) => { const a = new Uint32Array(1); crypto.getRandomValues(a); return a[0] % n; };
+  const pick = (set, len) => Array.from({ length: len }, () => set[rnd(set.length)]).join("");
+  const port = () => 20000 + rnd(40000);
+  const fresh = () => {
+    const h = port(); let s = port(); while (s === h) s = port();
+    return { login: "px" + pick(LOW, 4), pass: pick(ABC, 16), http: h, socks: s };
+  };
+
+  let st = null;
+  try { st = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) {}
+  if (!st || !st.login || !st.pass || !st.http || !st.socks) st = Object.assign(fresh(), { ip: st && st.ip || "" });
+  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(st)); } catch (e) {} };
+
+  const isIP = (v) => /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.test(v) && v.split(".").every((o) => +o <= 255 && String(+o) === o);
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  const cmdText = () => `curl -fsSL ${URL_SH} | bash -s -- ${st.login} ${st.pass} ${st.http} ${st.socks}`;
+  const cmdHtml = () => `curl -fsSL ${URL_SH} | bash -s -- <span class="k">${st.login} ${esc(st.pass)} ${st.http} ${st.socks}</span>`;
+
+  function render() {
+    const ip = st.ip, ok = isIP(ip);
+    $("vL").textContent = st.login; $("vP").textContent = st.pass;
+    $("vH").textContent = st.http; $("vS").textContent = st.socks;
+    $("cmd").innerHTML = cmdHtml(); $("cmd2").innerHTML = cmdHtml();
+    $("cmd").dataset.text = $("cmd2").dataset.text = cmdText();
+
+    const box = $("ipbox"), hint = $("iphint");
+    box.classList.toggle("ok", ok);
+    box.classList.toggle("bad", !!ip && !ok);
+    hint.classList.toggle("bad", !!ip && !ok);
+    hint.textContent = !ip ? "Скопируйте в панели 62yun кнопкой «Копировать» и вставьте сюда."
+      : ok ? "Отлично. Строки для Clod Helper готовы в шаге 7."
+      : "Это не похоже на IP. Нужно четыре числа через точку, например 185.12.34.56.";
+
+    const showIp = ok ? ip : "IP_СЕРВЕРА";
+    const http = `${showIp}:${st.http}:${st.login}:${st.pass}`;
+    const socks = `socks5://${st.login}:${st.pass}@${showIp}:${st.socks}`;
+    $("sHttp").textContent = http; $("sHttp").dataset.text = http;
+    $("sSocks").textContent = socks; $("sSocks").dataset.text = socks;
+    $("sHttpBox").classList.toggle("off", !ok);
+    $("sSocksBox").classList.toggle("off", !ok);
+    if (!ok) { $("sHttp").textContent = "Сначала вставьте IP сервера в шаге 5"; }
+
+    $("termout").innerHTML =
+`<span class="g">root@svr:~#</span> curl -fsSL …/install.sh | bash -s -- ${st.login} ****
+==================================================
+  Clod Helper proxy installer (3proxy 0.9.4)
+  System: Ubuntu 24.04 LTS
+==================================================
+[1/6] Installing packages (can take a few minutes)...
+[2/6] Building 3proxy 0.9.4...
+[3/6] Writing proxy config and service...
+[4/6] Tuning network (BBR, limits)...
+[5/6] Opening ports in firewall (ufw)...
+[6/6] Testing the proxy...
+
+==================================================
+  <span class="hl">DONE!</span> Proxy is working.  Server IP: ${esc(showIp)}
+  HTTP   : <span class="g">OK</span>     SOCKS5 : <span class="g">OK</span>
+
+  Login    : ${st.login}
+  Password : ${esc(st.pass)}
+  HTTP port: ${st.http}    SOCKS5 port: ${st.socks}
+==================================================`;
+  }
+
+  $("ip").value = st.ip || "";
+  $("ip").addEventListener("input", (e) => {
+    const m = e.target.value.match(/\d{1,3}(?:\.\d{1,3}){3}/);
+    st.ip = (m ? m[0] : e.target.value).trim(); save(); render();
+  });
+  $("ip").addEventListener("blur", (e) => { if (isIP(st.ip)) e.target.value = st.ip; });
+  $("regen").addEventListener("click", () => {
+    if (!confirm("Придумать новые логин, пароль и порты? Если вы уже запускали команду в консоли — её нужно будет выполнить заново, а строку в Clod Helper заменить.")) return;
+    Object.assign(st, fresh()); save(); render(); toast("Новые данные готовы");
+  });
+
+  const tip = $("tip"); let tt;
+  function toast(t) { tip.textContent = t; tip.classList.add("on"); clearTimeout(tt); tt = setTimeout(() => tip.classList.remove("on"), 2200); }
+
+  async function copyText(t) {
+    try { await navigator.clipboard.writeText(t); return true; }
+    catch (e) {
+      const ta = document.createElement("textarea"); ta.value = t; ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.select(); let ok = false; try { ok = document.execCommand("copy"); } catch (e2) {}
+      ta.remove(); return ok;
+    }
+  }
+  document.addEventListener("click", async (e) => {
+    const b = e.target.closest(".copy"); if (!b) return;
+    const el = $(b.dataset.copy); const t = el.dataset.text || el.textContent;
+    const ok = await copyText(t);
+    const lbl = b.querySelector("span"); const old = "Скопировать";
+    b.classList.add("ok"); lbl.textContent = ok ? "Скопировано" : "Не вышло";
+    b.querySelector("use").setAttribute("href", "#check");
+    toast(ok ? "Скопировано — теперь вставьте" : "Выделите текст и скопируйте вручную");
+    setTimeout(() => { b.classList.remove("ok"); lbl.textContent = old; b.querySelector("use").setAttribute("href", "#copy"); }, 1800);
+  });
+
+  // увеличение снимков
+  const zoom = $("zoom"), zimg = zoom.querySelector("img");
+  document.querySelectorAll(".pic img").forEach((img) => img.parentElement.addEventListener("click", () => {
+    zimg.src = img.src; zimg.alt = img.alt; zoom.classList.add("on");
+  }));
+  const close = () => zoom.classList.remove("on");
+  zoom.addEventListener("click", close);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
+
+  save(); render();
+})();
+</script>
+</body>
+</html>
