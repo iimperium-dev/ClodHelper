@@ -336,14 +336,67 @@ pub async fn claude_wipe_scan() -> Result<crate::claude_wipe::Scan, String> {
         .map_err(|e| format!("Внутренняя ошибка: {e}"))
 }
 
-/// Закрыть Claude Desktop и удалить данные аккаунта (с Claude Code — по флагу).
+/// Запущены ли Claude Desktop и отдельный Claude Code — для частого опроса.
+#[tauri::command]
+pub async fn claude_wipe_running() -> Result<crate::claude_wipe::Running, String> {
+    tokio::task::spawn_blocking(crate::claude_wipe::running)
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))
+}
+
+/// Закрыть Claude и удалить данные аккаунта (с Claude Code и чатами — по
+/// флагам). С `export_chats` локальные чаты сначала сохраняются в архив.
 #[tauri::command]
 pub async fn claude_wipe_run(
     include_desktop: bool,
     include_code: bool,
     include_chats: bool,
+    export_chats: Option<bool>,
 ) -> Result<crate::claude_wipe::WipeResult, String> {
-    tokio::task::spawn_blocking(move || crate::claude_wipe::wipe(include_desktop, include_code, include_chats))
+    let export = export_chats.unwrap_or(false);
+    tokio::task::spawn_blocking(move || crate::claude_wipe::wipe(include_desktop, include_code, include_chats, export))
         .await
         .map_err(|e| format!("Внутренняя ошибка: {e}"))?
+}
+
+/// Сохранить все локальные чаты Claude в ZIP в «Загрузки».
+#[tauri::command]
+pub async fn claude_chats_export() -> Result<crate::claude_chats_export::Archive, String> {
+    tokio::task::spawn_blocking(crate::claude_chats_export::export)
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))?
+}
+
+#[tauri::command]
+pub fn claude_chats_export_progress() -> crate::claude_chats_export::Progress {
+    crate::claude_chats_export::progress()
+}
+
+/// Показать файл в папке (Проводник / Finder) с выделением.
+#[tauri::command]
+pub fn reveal_in_folder(path: String) -> Result<(), String> {
+    if !std::path::Path::new(&path).exists() {
+        return Err("Файл не найден — возможно, его переместили".into());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        std::process::Command::new("explorer.exe")
+            .raw_arg(format!("/select,\"{path}\""))
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("Не удалось открыть папку: {e}"))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("/usr/bin/open")
+            .args(["-R", &path])
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("Не удалось открыть папку: {e}"))
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        Err("Не поддерживается".into())
+    }
 }

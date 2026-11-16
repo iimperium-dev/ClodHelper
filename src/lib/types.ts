@@ -462,9 +462,31 @@ export interface WipeScan {
   kept_sessions: number;
 }
 
+export interface WipeRunning {
+  desktop_running: boolean;
+  cli_running: number;
+}
+
+/** Архив локальных чатов в «Загрузках» (mirror claude_chats_export.rs). */
+export interface ChatsArchive {
+  path: string;
+  bytes: number;
+  files: number;
+  /** Файлы, которые держала другая программа. */
+  skipped: number;
+}
+
+export interface ChatsExportProgress {
+  active: boolean;
+  done: number;
+  total: number;
+}
+
 export interface WipeResult {
   removed_bytes: number;
   removed_items: number;
   failed: string[];
   closed_desktop: boolean;
+  /** Архив чатов, сохранённый перед их удалением. */
+  archive: ChatsArchive | null;
 }

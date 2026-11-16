@@ -1,6 +1,6 @@
 [package]
 name = "clod-helper"
-version = "0.8.15"
+version = "0.8.16"
 description = "Установщик Claude Code и Claude Desktop через прокси"
 authors = ["iimperium"]
 edition = "2021"
@@ -38,6 +38,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 sysinfo = "0.32"
 dirs = "5"
+# Архив локальных чатов Claude (Инструменты → очистка).
+zip = { version = "2", default-features = false, features = ["deflate"] }
 tauri-plugin-dialog = "2.8.3"
 
 # Windows: быстрые статусы без PowerShell — реестр (политики, правила
@@ -52,9 +54,12 @@ windows-sys = { version = "0.61", features = [
   "Win32_Graphics_Gdi",
   "Win32_Media_Audio",
   "Win32_NetworkManagement_IpHelper",
+  "Win32_Security_Credentials",
+  "Win32_Security_Cryptography",
   "Win32_Networking_WinInet",
   "Win32_Networking_WinSock",
   "Win32_Storage_FileSystem",
+  "Win32_System_SystemInformation",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
 ] }
@@ -68,6 +73,17 @@ tauri-plugin-single-instance = "2"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSError", "NSUserDefaults"] }
 objc2-service-management = { version = "0.3", default-features = false, features = ["std", "SMAppService"] }
+
+# Сжатие архива чатов: с opt-level "s" и без оптимизаций в отладке
+# deflate в разы медленнее — гигабайты переписки сжимались бы минутами.
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+[profile.dev.package.crc32fast]
+opt-level = 3
+[profile.release.package.miniz_oxide]
+opt-level = 3
+[profile.release.package.crc32fast]
+opt-level = 3
 
 [profile.release]
 panic = "abort"
