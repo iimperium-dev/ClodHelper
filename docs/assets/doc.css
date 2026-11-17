@@ -1,7 +1,7 @@
 /* Страницы-инструкции портала: гайд, вопросы, Clod Helper. Идёт после site.css. */
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%;scroll-behavior:smooth}
-body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.65 var(--sans);-webkit-font-smoothing:antialiased;overflow-x:hidden}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.65 var(--sans);-webkit-font-smoothing:antialiased}
 a{color:var(--em);text-decoration:none}
 a:hover{text-decoration:underline;text-underline-offset:3px}
 svg.i{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}

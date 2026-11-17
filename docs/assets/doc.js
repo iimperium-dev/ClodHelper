@@ -85,27 +85,41 @@
   });
 
   // ---- поиск по вопросам ----
+  // Ищем по вопросу, ответу и скрытым меткам data-tags — без текста кнопки
+  // «Скопировать ссылку на ответ». Кнопка с data-tag фильтрует по метке
+  // (нажата — подсвечена), кнопка с data-q подставляет слово в поиск.
   const q = $("#faq-q");
   if (q) {
     const items = $$(".qa");
     const groups = $$(".fgroup");
     const empty = $("#faq-empty");
+    const tagChips = $$(".chip[data-tag]");
     const norm = (s) => s.toLowerCase().replace(/ё/g, "е");
-    items.forEach((d) => (d.dataset.text = norm(d.textContent)));
+    items.forEach((d) => {
+      const parts = [$("summary", d)?.textContent || "", ...$$(".a > :not(.lnk)", d).map((e) => e.textContent), d.dataset.tags || ""];
+      d.dataset.text = norm(parts.join(" "));
+    });
+    let tag = "";
     const run = () => {
       const words = norm(q.value).split(/\s+/).filter(Boolean);
       let shown = 0;
       items.forEach((d) => {
-        const ok = words.every((w) => d.dataset.text.includes(w));
+        const okTag = !tag || (d.dataset.tags || "").split(/\s+/).includes(tag);
+        const ok = okTag && words.every((w) => d.dataset.text.includes(w));
         d.hidden = !ok;
         if (ok) shown++;
-        if (words.length && ok && shown <= 3) d.open = true;
-        if (!words.length) d.open = false;
+        if ((words.length || tag) && ok && shown <= 3) d.open = true;
+        if (!words.length && !tag) d.open = false;
       });
       groups.forEach((g) => (g.hidden = !$$(".qa", g).some((d) => !d.hidden)));
       if (empty) empty.hidden = shown > 0;
+      tagChips.forEach((c) => c.setAttribute("aria-pressed", String(c.dataset.tag === tag)));
     };
-    q.addEventListener("input", run);
-    $$(".chip[data-q]").forEach((c) => c.addEventListener("click", () => { q.value = c.dataset.q; run(); q.focus(); }));
+    q.addEventListener("input", () => { tag = ""; run(); });
+    $$(".chip").forEach((c) => c.addEventListener("click", () => {
+      if (c.dataset.tag) { tag = tag === c.dataset.tag ? "" : c.dataset.tag; q.value = ""; }
+      else { tag = ""; q.value = c.dataset.q || ""; q.focus(); }
+      run();
+    }));
   }
 })();

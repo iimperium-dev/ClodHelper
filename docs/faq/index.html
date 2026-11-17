@@ -8,7 +8,12 @@
 <meta property="og:title" content="Вопросы и ответы · Clod Helper">
 <meta property="og:description" content="VPN, телефон, браузер, Claude Desktop, Claude Code, ошибки и безопасность — коротко и по делу.">
 <meta property="og:type" content="website">
-<meta property="og:image" content="../proxy/media/video/poster.jpg">
+<meta property="og:image" content="https://iimperium-dev.github.io/ClodHelper/proxy/media/video/poster.jpg">
+<meta property="og:url" content="https://iimperium-dev.github.io/ClodHelper/faq/">
+<meta property="og:site_name" content="Clod Helper">
+<meta property="og:locale" content="ru_RU">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://iimperium-dev.github.io/ClodHelper/faq/">
 <meta name="theme-color" content="#0b0e0d">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7.5' fill='%23161c19'/%3E%3Cpath d='M 23.09 21.54 A 9 9 0 1 1 23.09 10.46' fill='none' stroke='%2322c084' stroke-width='3.1' stroke-linecap='round'/%3E%3Ccircle cx='25.2' cy='16' r='2.3' fill='%233ad897'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -25,6 +30,7 @@
 .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
 .chip{height:34px;padding:0 13px;border-radius:9px;border:1px solid var(--border2);background:transparent;color:var(--dim);font:500 14px/1 var(--sans);cursor:pointer;transition:color .15s,border-color .15s,background .15s}
 .chip:hover{color:var(--fg);border-color:#3d4440;background:var(--surf)}
+.chip[aria-pressed="true"]{color:var(--fg);border-color:var(--em);background:rgba(34,192,132,.1)}
 .fgroup{padding-top:52px}
 .fgroup h2{display:flex;align-items:center;gap:12px;margin:0 0 16px;font-size:22px;letter-spacing:-.015em;font-weight:650}
 .fgroup h2 .ic{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;background:var(--surf);border:1px solid var(--border2);color:var(--em)}
@@ -49,7 +55,7 @@
     </nav>
     <div class="sh-end">
       <a class="sh-gh" href="https://github.com/iimperium-dev/ClodHelper" aria-label="Исходный код на GitHub"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg></a>
-      <a class="sh-dl" href="https://github.com/iimperium-dev/ClodHelper/releases/latest"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg><span>Скачать</span></a>
+      <a class="sh-dl" href="https://github.com/iimperium-dev/ClodHelper/releases/latest" aria-label="Скачать Clod Helper"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg><span>Скачать</span></a>
       <button class="sh-burger" type="button" aria-label="Меню" aria-controls="sh-nav" aria-expanded="false"><svg class="m" viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/></svg><svg class="x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
     </div>
   </div>
@@ -72,7 +78,7 @@
       <button class="chip" type="button" data-q="desktop">Claude Desktop</button>
       <button class="chip" type="button" data-q="code">Claude Code</button>
       <button class="chip" type="button" data-q="страна">Страна</button>
-      <button class="chip" type="button" data-q="ошибк">Ошибки</button>
+      <button class="chip" type="button" data-tag="ошибки" aria-pressed="false">Ошибки</button>
     </div>
   </div>
 
@@ -108,11 +114,11 @@
         <p>Любой — Clod Helper понимает оба. Если вы ставили прокси по нашей <a href="../proxy/">инструкции</a>, просто вставьте строку из генератора на странице: формат программа разберёт сама.</p>
       </div></details>
 
-      <details class="qa" id="ru-proxy"><summary>Clod Helper пишет «Этот прокси в России»</summary><div class="a">
+      <details class="qa" id="ru-proxy" data-tags="ошибки"><summary>Clod Helper пишет «Этот прокси в России»</summary><div class="a">
         <p>Значит, сервер находится в России, а Claude такие адреса не принимает. Нужен сервер за рубежом — например, по нашей <a href="../proxy/">инструкции</a>.</p>
       </div></details>
 
-      <details class="qa" id="proxy-down"><summary>«Прокси не отвечает» — что делать?</summary><div class="a">
+      <details class="qa" id="proxy-down" data-tags="ошибки"><summary>«Прокси не отвечает» — что делать?</summary><div class="a">
         <ol>
           <li>Выключите VPN на компьютере, если он включён.</li>
           <li>Проверьте в панели 62yun, что сервер включён и оплачен.</li>
@@ -149,7 +155,7 @@
         <p>Если для браузера включено <span class="ui">Всегда через мост</span>, он идёт через прокси с любого ярлыка. Для Claude Desktop после кнопки <span class="ui">Подключить</span> прокси задан в его собственных настройках — но запуск из Clod Helper ещё и проверяет, что мост готов.</p>
       </div></details>
 
-      <details class="qa" id="direct"><summary>Пишет «Напрямую, мимо моста»</summary><div class="a">
+      <details class="qa" id="direct" data-tags="ошибки"><summary>Пишет «Напрямую, мимо моста»</summary><div class="a">
         <p>Программа была открыта не через Clod Helper — например, браузер уже работал. Нажмите <span class="ui">Перезапустить через мост</span> в её строке: Clod Helper закроет её и откроет заново, вкладки вернутся.</p>
       </div></details>
     </section>
@@ -161,11 +167,11 @@
         <p><span class="ui">Приложения</span> → Claude Desktop → <span class="ui">Подключить</span> → разрешить изменения. Затем полностью закройте Claude через значок в трее (<span class="ui">Quit</span>) и откройте снова из Clod Helper. Подробно — в <a href="../guide/upgrade/#desktop">гайде</a>.</p>
       </div></details>
 
-      <details class="qa" id="desktop-running"><summary>«Claude Desktop уже запущен» — а окна нет</summary><div class="a">
+      <details class="qa" id="desktop-running" data-tags="ошибки"><summary>«Claude Desktop уже запущен» — а окна нет</summary><div class="a">
         <p>Claude работает в фоне. Правой кнопкой по его значку в трее у часов → <span class="ui">Quit</span> / <span class="ui">Выход</span>. Потом откройте его из Clod Helper или ярлыком «Claude Desktop (proxy)».</p>
       </div></details>
 
-      <details class="qa" id="desktop-login"><summary>Claude Desktop открыл страницу входа в моём обычном браузере</summary><div class="a">
+      <details class="qa" id="desktop-login" data-tags="ошибки"><summary>Claude Desktop открыл страницу входа в моём обычном браузере</summary><div class="a">
         <p>Не входите там. Скопируйте адрес страницы и откройте его в чистом браузере из Clod Helper. После входа браузер предложит открыть Claude — согласитесь. Ссылки для входа из писем тоже открывайте только в чистом браузере.</p>
       </div></details>
 
@@ -199,12 +205,13 @@
         <p>Что маленькая программа-мост работает на вашем компьютере. Работает ли сам прокси — показано отдельно: адрес и пинг в <span class="ui">Обзоре</span>. Полная проверка — кнопка <span class="ui">Проверить</span>: должно быть «Всё чисто».</p>
       </div></details>
 
-      <details class="qa" id="antivirus"><summary>Антивирус удалил или заблокировал файл</summary><div class="a">
+      <details class="qa" id="antivirus" data-tags="ошибки"><summary>Антивирус удалил или заблокировал файл</summary><div class="a">
         <p>Мост — программа, через которую идёт трафик, и некоторые антивирусы ошибочно считают это угрозой. Clod Helper сам вернёт мост из своей копии, а если антивирус удаляет его снова — покажет по шагам, как добавить исключение.</p>
       </div></details>
 
-      <details class="qa" id="smartscreen"><summary>Windows пишет «Система защитила ваш компьютер»</summary><div class="a">
-        <p>Программа бесплатная и не подписана платным сертификатом Microsoft. Нажмите <span class="ui">Подробнее</span> → <span class="ui">Выполнить в любом случае</span>. На Mac: правой кнопкой по Clod Helper в «Программах» → <span class="ui">Открыть</span>.</p>
+      <details class="qa" id="smartscreen" data-tags="ошибки"><summary>Windows пишет «Система защитила ваш компьютер»</summary><div class="a">
+        <p>Программа бесплатная и не подписана платным сертификатом Microsoft. Нажмите <span class="ui">Подробнее</span> → <span class="ui">Выполнить в любом случае</span>. Если файл не запускается — правой кнопкой по нему → <span class="ui">Свойства</span> → галочка <span class="ui">Разблокировать</span> → <span class="ui">ОК</span>.</p>
+        <p>На Mac: правой кнопкой по Clod Helper в «Программах» → <span class="ui">Открыть</span>. На macOS 15 и новее: <span class="ui">Системные настройки</span> → <span class="ui">Конфиденциальность и безопасность</span> → «Всё равно открыть».</p>
       </div></details>
 
       <details class="qa" id="mac"><summary>Работает на Mac? А на Linux?</summary><div class="a">
@@ -212,7 +219,7 @@
       </div></details>
 
       <details class="qa" id="update"><summary>Обновился — нужно что-то делать?</summary><div class="a">
-        <p>Обычно нет. Один раз после перехода на 0.8.17: откройте ⚙ у Claude Desktop, выключите и снова включите <span class="ui">Не пускать мимо прокси</span> — так включится новая защита WebRTC.</p>
+        <p>Обычно нет. Только на Windows и один раз, если обновились с версии старше 0.8.17: откройте ⚙ у Claude Desktop, выключите и снова включите <span class="ui">Не пускать мимо прокси</span> — так включится новая защита WebRTC. На Mac ничего делать не нужно.</p>
       </div></details>
     </section>
 
@@ -225,7 +232,7 @@
       </div></details>
 
       <details class="qa" id="check-account"><summary>Как узнать дату регистрации и статус аккаунта?</summary><div class="a">
-        <p>Бесплатной закладкой <a href="../scan/">Clod Scan</a>: дата регистрации, верификация и подписка за 5 секунд. Работает на вашей странице claude.ai и ничего никуда не отправляет.</p>
+        <p>Бесплатной закладкой <a href="../scan/">Clod Scan</a>: дата регистрации, номер телефона и верификация за 5 секунд. Работает на вашей странице claude.ai и ничего никуда не отправляет.</p>
       </div></details>
 
       <details class="qa" id="suspended"><summary>Меня выкинуло из аккаунта или пришло письмо о блокировке</summary><div class="a">

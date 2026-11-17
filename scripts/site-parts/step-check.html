@@ -1,10 +1,15 @@
       <section class="stp" id="check">
         <div class="stp-h"><span class="stp-n">{{n}}</span><div><h2>Проверьте, что всё чисто</h2><span class="t">1 минута</span></div></div>
+{{#new}}
+        <p>Перед регистрацией убедитесь, что Claude увидит только адрес вашего сервера.</p>
+{{/new}}
         <ol class="do">
           <li><div>В Clod Helper откройте <span class="ui">Обзор</span> и нажмите <span class="ui">Проверить</span>. Должно быть <b>«Всё чисто»</b> и три зелёные галочки: IP скрыт, DNS не выдаёт провайдера, приложения из списка идут через мост.</div></li>
           <li><div>В чистом браузере откройте <a href="https://ipleak.net/">ipleak.net</a>. Там должен быть <b>адрес вашего сервера</b>, а не ваш домашний. В блоке WebRTC — тоже не ваш домашний адрес.</div></li>
         </ol>
         <figure class="shot"><img src="{{root}}assets/img/overview-check.webp" alt="Обзор Clod Helper после проверки: «Всё чисто», IP скрыт, DNS не выдаёт провайдера, приложения через мост" loading="lazy" width="1010" height="520"><figcaption>Так выглядит правильно настроенный мост</figcaption></figure>
-        <div class="call warn"><svg class="i" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg><p><b>Обновились с версии старше 0.8.17?</b> Один раз откройте ⚙ у Claude Desktop, выключите и снова включите <span class="ui">Не пускать мимо прокси</span> — так включится новая защита WebRTC.</p></div>
+{{^new}}
+        <div class="call warn"><svg class="i" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg><p><b>Обновились на Windows с версии старше 0.8.17?</b> Один раз откройте ⚙ у Claude Desktop, выключите и снова включите <span class="ui">Не пускать мимо прокси</span> — так включится новая защита WebRTC.</p></div>
+{{/new}}
         <button class="mark" type="button" data-step="check" aria-pressed="false"><span class="ck"></span>Сделано</button>
       </section>

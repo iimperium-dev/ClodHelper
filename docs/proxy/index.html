@@ -7,7 +7,12 @@
 <meta name="description" content="Пошаговая инструкция: арендовать сервер за 269 ₽ в месяц, поставить на него прокси одной командой и подключить к Clod Helper. Около 15 минут, без знаний Linux.">
 <meta property="og:title" content="Свой прокси за 15 минут">
 <meta property="og:description" content="Свой сервер, свой IP, прокси одной командой — и сразу в Clod Helper.">
-<meta property="og:image" content="media/video/poster.jpg">
+<meta property="og:image" content="https://iimperium-dev.github.io/ClodHelper/proxy/media/video/poster.jpg">
+<meta property="og:url" content="https://iimperium-dev.github.io/ClodHelper/proxy/">
+<meta property="og:site_name" content="Clod Helper">
+<meta property="og:locale" content="ru_RU">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://iimperium-dev.github.io/ClodHelper/proxy/">
 <meta name="theme-color" content="#0b0e0d">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7.5' fill='%23161c19'/%3E%3Cpath d='M 23.09 21.54 A 9 9 0 1 1 23.09 10.46' fill='none' stroke='%2322c084' stroke-width='3.1' stroke-linecap='round'/%3E%3Ccircle cx='25.2' cy='16' r='2.3' fill='%233ad897'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -519,7 +524,7 @@ footer a:hover{color:var(--fg)}
     </nav>
     <div class="sh-end">
       <a class="sh-gh" href="https://github.com/iimperium-dev/ClodHelper" aria-label="Исходный код на GitHub"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg></a>
-      <a class="sh-dl" href="https://github.com/iimperium-dev/ClodHelper/releases/latest"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg><span>Скачать</span></a>
+      <a class="sh-dl" href="https://github.com/iimperium-dev/ClodHelper/releases/latest" aria-label="Скачать Clod Helper"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg><span>Скачать</span></a>
       <button class="sh-burger" type="button" aria-label="Меню" aria-controls="sh-nav" aria-expanded="false"><svg class="m" viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/></svg><svg class="x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
     </div>
   </div>
@@ -694,7 +699,7 @@ footer a:hover{color:var(--fg)}
           </ul>
 
           <details class="geo" id="geo">
-            <summary><span class="gi"><svg class="i" viewBox="0 0 24 24"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/></svg></span><span class="gt"><b>Нужна другая страна?</b><span>США, Германия, Канада, Испания, Гонконг — какой тариф брать там</span></span><svg class="i chev" viewBox="0 0 24 24"><use href="#plus"/></svg></summary>
+            <summary><span class="gi"><svg class="i" viewBox="0 0 24 24"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/></svg></span><span class="gt"><b>Нужна другая страна?</b><span>США, Германия, Канада, Испания — какой тариф брать там</span></span><svg class="i chev" viewBox="0 0 24 24"><use href="#plus"/></svg></summary>
             <div class="geo-b">
               <p>ultra-S есть только в Финляндии и Нидерландах. В других странах берите самый дешёвый тариф из таблицы — прокси на любом из них работает одинаково. Всё остальное в инструкции не меняется.</p>
               <div class="gtab" role="table" aria-label="Тарифы по странам">
@@ -705,9 +710,9 @@ footer a:hover{color:var(--fg)}
                 <div class="gr" role="row"><span role="cell"><b>Канада</b><small>Ванкувер</small></span><span role="cell" class="t">promo-S</span><span role="cell" class="p">269 ₽</span><span role="cell" class="s">1 ядро · 1 ГБ · 10 ГБ NVMe · 1 Гбит/с</span></div>
                 <div class="gr" role="row"><span role="cell"><b>Германия</b><small>Франкфурт</small></span><span role="cell" class="t">promo-M</span><span role="cell" class="p">399 ₽</span><span role="cell" class="s">2 ядра · 2 ГБ · 30 ГБ NVMe</span></div>
                 <div class="gr" role="row"><span role="cell"><b>Испания</b><small>Мадрид</small></span><span role="cell" class="t">ultra-M</span><span role="cell" class="p">539 ₽</span><span role="cell" class="s">2 ядра · 2 ГБ · 50 ГБ NVMe</span></div>
-                <div class="gr" role="row"><span role="cell"><b>Гонконг</b><small>Китай</small></span><span role="cell" class="t">promo-B</span><span role="cell" class="p">1199 ₽</span><span role="cell" class="s">4 ядра · 8 ГБ · 150 ГБ NVMe — дорого, только если нужен именно Гонконг</span></div>
               </div>
               <ul class="geo-n">
+                <li><svg class="i" viewBox="0 0 24 24"><use href="#info"/></svg><span><b>Россия, Гонконг и Китай не подойдут</b> — там Claude не работает. Сомневаетесь в стране — сверьтесь со <a href="https://www.anthropic.com/supported-countries" target="_blank" rel="noopener">списком стран Anthropic</a>.</span></li>
                 <li><svg class="i" viewBox="0 0 24 24"><use href="#info"/></svg><span>В форме заказа <b>сначала выберите город</b>, потом тариф: список тарифов меняется от города. Проверьте цену внизу формы.</span></li>
                 <li><svg class="i" viewBox="0 0 24 24"><use href="#info"/></svg><span>Не берите тарифы с <b>HDD+</b> в названии — у них медленный диск, а прокси он не нужен.</span></li>
                 <li><svg class="i" viewBox="0 0 24 24"><use href="#info"/></svg><span>Пополняйте баланс в шаге 2 на цену своего тарифа. Ubuntu 24.04 выбирается так же, как в инструкции.</span></li>
@@ -934,7 +939,7 @@ Password:
     </div>
   </main>
 
-  <p class="disc">62yun — сторонний хостинг, мы с ним не связаны.</p>
+  <p class="disc">62yun — сторонний хостинг. Ссылки на него на этой странице реферальные: с заказов по ним проект получает вознаграждение от хостинга. Не хотите — откройте <a href="https://62yun.ru/" target="_blank" rel="noopener">62yun.ru</a> напрямую, инструкция от этого не меняется.</p>
 </div>
 <!--sf-->
 <footer class="sf">

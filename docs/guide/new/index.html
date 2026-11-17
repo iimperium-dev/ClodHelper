@@ -8,7 +8,12 @@
 <meta property="og:title" content="Claude с нуля — сразу правильно">
 <meta property="og:description" content="Claude с нуля и сразу правильно: свой прокси, Clod Helper, чистый браузер, Claude Desktop и регистрация — по шагам, со скриншотами.">
 <meta property="og:type" content="article">
-<meta property="og:image" content="../../proxy/media/video/poster.jpg">
+<meta property="og:image" content="https://iimperium-dev.github.io/ClodHelper/guide/media/video/poster.jpg">
+<meta property="og:url" content="https://iimperium-dev.github.io/ClodHelper/guide/new/">
+<meta property="og:site_name" content="Clod Helper">
+<meta property="og:locale" content="ru_RU">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://iimperium-dev.github.io/ClodHelper/guide/new/">
 <meta name="theme-color" content="#0b0e0d">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7.5' fill='%23161c19'/%3E%3Cpath d='M 23.09 21.54 A 9 9 0 1 1 23.09 10.46' fill='none' stroke='%2322c084' stroke-width='3.1' stroke-linecap='round'/%3E%3Ccircle cx='25.2' cy='16' r='2.3' fill='%233ad897'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -32,7 +37,7 @@
     </nav>
     <div class="sh-end">
       <a class="sh-gh" href="https://github.com/iimperium-dev/ClodHelper" aria-label="Исходный код на GitHub"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg></a>
-      <a class="sh-dl" href="https://github.com/iimperium-dev/ClodHelper/releases/latest"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg><span>Скачать</span></a>
+      <a class="sh-dl" href="https://github.com/iimperium-dev/ClodHelper/releases/latest" aria-label="Скачать Clod Helper"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg><span>Скачать</span></a>
       <button class="sh-burger" type="button" aria-label="Меню" aria-controls="sh-nav" aria-expanded="false"><svg class="m" viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/></svg><svg class="x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
     </div>
   </div>
@@ -44,6 +49,7 @@
     <div class="crumbs"><a href="../../">Главная</a><svg class="i" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg><a href="../">Гайд</a><svg class="i" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>Только начинаю</div>
     <h1>Claude с нуля — <em>сразу правильно</em></h1>
     <p class="lead">Свой сервер, Clod Helper, отдельный браузер и Claude Desktop — по шагам и со скриншотами. Аккаунт вы заведёте в самом конце, когда всё уже работает через ваш прокси.</p>
+    <p class="unsure"><b>Аккаунт Claude уже есть?</b> Тогда вам путь <a href="../upgrade/">«Уже пользуюсь Claude»</a> — второй аккаунт не регистрируйте.</p>
     <div class="meta">
       <span><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>около 40 минут</span>
       <span><svg class="i" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>Windows 10/11 · на macOS почти так же</span>
@@ -125,8 +131,8 @@
           <li><a href="#helper" data-step="helper"><span class="ck"></span>2. Clod Helper</a></li>
           <li><a href="#browser" data-step="browser"><span class="ck"></span>3. Чистый браузер</a></li>
           <li><a href="#desktop" data-step="desktop"><span class="ck"></span>4. Claude Desktop</a></li>
-          <li><a href="#login" data-step="login"><span class="ck"></span>5. Регистрация</a></li>
-          <li><a href="#check" data-step="check"><span class="ck"></span>6. Проверка</a></li>
+          <li><a href="#check" data-step="check"><span class="ck"></span>5. Проверка</a></li>
+          <li><a href="#login" data-step="login"><span class="ck"></span>6. Регистрация</a></li>
           <li><a href="#code" data-step="code"><span class="ck"></span>7. Claude Code</a></li>
           <li><a href="#daily"><span class="ck"></span>Каждый день</a></li>
           <li><a href="#phone"><span class="ck"></span>Телефон</a></li>
@@ -162,7 +168,7 @@
           <li>269 ₽ в месяц на свой сервер — оплата картой российского банка.</li>
           <li>Почта для аккаунта Claude — та, которой будете пользоваться долго.</li>
         </ul>
-        <div class="call"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg><p><b>В каком порядке и почему.</b> Сначала — прокси и программы, и только потом регистрация. Так аккаунт с первой минуты видит один ваш адрес, а не сначала домашний, потом чужой.</p></div>
+        <div class="call"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg><p><b>В каком порядке и почему.</b> Сначала — прокси, программы и проверка, и только потом регистрация. Так аккаунт с первой минуты видит один ваш адрес, а не сначала домашний, потом чужой.</p></div>
       </section>
 
 <!--part:rules-->
@@ -216,7 +222,7 @@
         <p>Браузер всё равно понадобится: через него входят в аккаунт, открывают claude.ai, меняют настройки и подписку. Ваш обычный браузер для этого не годится: в нём ваши Google-аккаунты, закладки, расширения-VPN, и запускается он мимо моста.</p>
         <p><b>Решение</b> — отдельный браузер только для Claude, который всегда идёт через ваш прокси.</p>
         <ol class="do">
-          <li><div><b>Установите браузер, которым вы не пользуетесь.</b> Подходят браузеры на Chromium: <a href="https://www.google.com/chrome/">Google Chrome</a>, если ваш основной — другой; если основной уже Chrome — возьмите <a href="https://brave.com/download/">Brave</a> или Microsoft Edge. При установке <b>ничего не импортируйте</b> из других браузеров и не входите в Google-аккаунт.</div></li>
+          <li><div><b>Установите браузер, которым вы не пользуетесь.</b> Подходят браузеры на Chromium: <a href="https://www.google.com/chrome/">Google Chrome</a>, если ваш основной — другой; если основной уже Chrome — возьмите <a href="https://brave.com/download/">Brave</a> или Microsoft Edge. При установке <b>ничего не импортируйте</b> из других браузеров и не входите в сам браузер под Google-аккаунтом — синхронизация ему не нужна.</div></li>
           <li><div>Закройте этот браузер полностью.</div></li>
           <li><div>В Clod Helper: <span class="ui">Приложения</span> → <span class="ui">Добавить</span> → начните вводить название («chrome», «brave», «edge») → выберите его в подсказке.</div></li>
           <li><div>Нажмите ⚙ справа от браузера и включите <span class="ui">Всегда через мост</span>, Windows спросит разрешение один раз. Теперь этот браузер идёт через прокси, даже если открыть его из меню «Пуск», и расширения не смогут это перебить.</div></li>
@@ -254,14 +260,28 @@
       </section>
 <!--/part:step-desktop-->
 
-<!--part:step-login n=5 new-->
+<!--part:step-check n=5 new-->
+      <section class="stp" id="check">
+        <div class="stp-h"><span class="stp-n">5</span><div><h2>Проверьте, что всё чисто</h2><span class="t">1 минута</span></div></div>
+
+        <p>Перед регистрацией убедитесь, что Claude увидит только адрес вашего сервера.</p>
+        <ol class="do">
+          <li><div>В Clod Helper откройте <span class="ui">Обзор</span> и нажмите <span class="ui">Проверить</span>. Должно быть <b>«Всё чисто»</b> и три зелёные галочки: IP скрыт, DNS не выдаёт провайдера, приложения из списка идут через мост.</div></li>
+          <li><div>В чистом браузере откройте <a href="https://ipleak.net/">ipleak.net</a>. Там должен быть <b>адрес вашего сервера</b>, а не ваш домашний. В блоке WebRTC — тоже не ваш домашний адрес.</div></li>
+        </ol>
+        <figure class="shot"><img src="../../assets/img/overview-check.webp" alt="Обзор Clod Helper после проверки: «Всё чисто», IP скрыт, DNS не выдаёт провайдера, приложения через мост" loading="lazy" width="1010" height="520"><figcaption>Так выглядит правильно настроенный мост</figcaption></figure>
+        <button class="mark" type="button" data-step="check" aria-pressed="false"><span class="ck"></span>Сделано</button>
+      </section>
+<!--/part:step-check-->
+
+<!--part:step-login n=6 new-->
       <section class="stp" id="login">
 
-        <div class="stp-h"><span class="stp-n">5</span><div><h2>Зарегистрируйтесь и войдите</h2><span class="t">3 минуты</span></div></div>
+        <div class="stp-h"><span class="stp-n">6</span><div><h2>Зарегистрируйтесь и войдите</h2><span class="t">3 минуты</span></div></div>
         <p>Аккаунт лучше заводить сразу правильно: в чистом браузере и через ваш прокси. Тогда он с первой минуты видит один и тот же адрес.</p>
         <ol class="do">
 
-          <li><div>В чистом браузере откройте <b>claude.ai</b> и зарегистрируйтесь. Почту используйте ту, которой будете пользоваться долго.</div></li>
+          <li><div>В чистом браузере откройте <b>claude.ai</b> и зарегистрируйтесь. Почту используйте ту, которой будете пользоваться долго. Проще всего — по почте: тогда в чистом браузере не придётся входить в Google.</div></li>
           <li><div>Если Claude прислал ссылку или код на почту — <b>скопируйте ссылку</b> и вставьте в чистый браузер. Не нажимайте её прямо в почте: она откроется в обычном браузере.</div></li>
           <li><div>Когда Claude Desktop попросит войти, он откроет страницу входа в браузере по умолчанию. Не входите там: скопируйте адрес этой страницы и откройте его в чистом браузере. После входа браузер предложит открыть Claude — согласитесь.</div></li>
         </ol>
@@ -269,19 +289,6 @@
         <button class="mark" type="button" data-step="login" aria-pressed="false"><span class="ck"></span>Сделано</button>
       </section>
 <!--/part:step-login-->
-
-<!--part:step-check n=6 new-->
-      <section class="stp" id="check">
-        <div class="stp-h"><span class="stp-n">6</span><div><h2>Проверьте, что всё чисто</h2><span class="t">1 минута</span></div></div>
-        <ol class="do">
-          <li><div>В Clod Helper откройте <span class="ui">Обзор</span> и нажмите <span class="ui">Проверить</span>. Должно быть <b>«Всё чисто»</b> и три зелёные галочки: IP скрыт, DNS не выдаёт провайдера, приложения из списка идут через мост.</div></li>
-          <li><div>В чистом браузере откройте <a href="https://ipleak.net/">ipleak.net</a>. Там должен быть <b>адрес вашего сервера</b>, а не ваш домашний. В блоке WebRTC — тоже не ваш домашний адрес.</div></li>
-        </ol>
-        <figure class="shot"><img src="../../assets/img/overview-check.webp" alt="Обзор Clod Helper после проверки: «Всё чисто», IP скрыт, DNS не выдаёт провайдера, приложения через мост" loading="lazy" width="1010" height="520"><figcaption>Так выглядит правильно настроенный мост</figcaption></figure>
-        <div class="call warn"><svg class="i" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg><p><b>Обновились с версии старше 0.8.17?</b> Один раз откройте ⚙ у Claude Desktop, выключите и снова включите <span class="ui">Не пускать мимо прокси</span> — так включится новая защита WebRTC.</p></div>
-        <button class="mark" type="button" data-step="check" aria-pressed="false"><span class="ck"></span>Сделано</button>
-      </section>
-<!--/part:step-check-->
 
 <!--part:step-code n=7 new-->
       <section class="stp" id="code">

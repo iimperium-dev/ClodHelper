@@ -2,7 +2,7 @@
    Подключается на всех страницах; свои стили страниц идут после него. */
 :root{
   --bg:#0b0e0d;--surf:#121614;--surf2:#1a1e1c;--border:#252a28;--border2:#303633;
-  --fg:#f1f4f2;--silver:#ccd1ce;--dim:#8b918e;--faint:#646a67;
+  --fg:#f1f4f2;--silver:#ccd1ce;--dim:#8b918e;--faint:#7f8582;
   --em:#22c084;--emB:#3ad897;--warn:#e0a33d;--bad:#e5645a;
   --sans:Inter,"Segoe UI Variable","Segoe UI",-apple-system,system-ui,sans-serif;
   --mono:"JetBrains Mono","Cascadia Mono",Menlo,Consolas,monospace;
@@ -11,6 +11,7 @@
 }
 /* декоративные подсветки шире экрана не должны раздвигать страницу на телефоне */
 html,body{overflow-x:clip}
+:where(a,button,summary,input,select,textarea,[tabindex]):focus-visible{outline:2px solid var(--emB);outline-offset:2px}
 
 /* ---- шапка ---- */
 .sh{position:sticky;top:0;z-index:60;background:rgba(11,14,13,.82);backdrop-filter:saturate(1.4) blur(14px);-webkit-backdrop-filter:saturate(1.4) blur(14px);border-bottom:1px solid var(--border)}

@@ -38,7 +38,7 @@ ${links}
     </nav>
     <div class="sh-end">
       <a class="sh-gh" href="${REPO}" aria-label="Исходный код на GitHub">${GH}</a>
-      <a class="sh-dl" href="${RELEASES}">${DL}<span>Скачать</span></a>
+      <a class="sh-dl" href="${RELEASES}" aria-label="Скачать Clod Helper">${DL}<span>Скачать</span></a>
       <button class="sh-burger" type="button" aria-label="Меню" aria-controls="sh-nav" aria-expanded="false"><svg class="m" viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/></svg><svg class="x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
     </div>
   </div>
@@ -95,6 +95,25 @@ function part(name, args, root) {
   return `<!--part:${name}${args}-->\n${s}\n<!--/part:${name}-->`;
 }
 
+// Превью ссылок в Telegram, VK и соцсетях: мессенджеры понимают только полные
+// адреса. На страницах og:image задан относительным путём, здесь он становится
+// полным, и рядом ставятся og:url, og:site_name, og:locale, twitter:card и
+// canonical. Переедет сайт на свой домен — поменять SITE.
+const SITE = "https://iimperium-dev.github.io/ClodHelper/";
+function meta(html, dir) {
+  const url = SITE + dir;
+  html = html.replace(/\n<meta property="og:(?:url|site_name|locale)"[^>]*>|\n<meta name="twitter:card"[^>]*>|\n<link rel="canonical"[^>]*>/g, "");
+  return html.replace(/<meta property="og:image" content="([^"]*)">/, (_, src) =>
+    [
+      `<meta property="og:image" content="${new URL(src, url).href}">`,
+      `<meta property="og:url" content="${url}">`,
+      `<meta property="og:site_name" content="Clod Helper">`,
+      `<meta property="og:locale" content="ru_RU">`,
+      `<meta name="twitter:card" content="summary_large_image">`,
+      `<link rel="canonical" href="${url}">`,
+    ].join("\n"));
+}
+
 let changed = 0;
 for (const file of walk(DOCS)) {
   const rel = relative(DOCS, file).split(sep);
@@ -103,6 +122,7 @@ for (const file of walk(DOCS)) {
   const page = depth ? rel[0] : "home";
   let html = readFileSync(file, "utf8");
   const before = html;
+  html = meta(html, rel.slice(0, -1).map((d) => d + "/").join(""));
   html = html.replace(/<!--sh-->[\s\S]*?<!--\/sh-->/, header(root, page));
   html = html.replace(/<!--sf-->[\s\S]*?<!--\/sf-->/, footer(root));
   html = html.replace(/<!--part:([\w-]+)((?:\s+[\w=.-]+)*)-->[\s\S]*?<!--\/part:\1-->/g, (_, name, args) => part(name, args, root));
