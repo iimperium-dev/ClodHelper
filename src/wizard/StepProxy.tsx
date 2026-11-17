@@ -14,6 +14,8 @@ const OWN_PROXY_GUIDE = "https://iimperium-dev.github.io/ClodHelper/proxy/";
 interface Props {
   initialUrl: string | null;
   onNext: (url: string) => void;
+  /** «Сначала очистка»: открыть программу на «Инструментах» без прокси. */
+  onSkipToTools?: () => void;
 }
 
 /*
@@ -22,7 +24,7 @@ interface Props {
   шопов, эскалация при неоднозначности). Гео-проверка информативная, НЕ
   блокирует «Дальше»: настоящая проверка соединения будет на шаге установки.
 */
-export function StepProxy({ initialUrl, onNext }: Props) {
+export function StepProxy({ initialUrl, onNext, onSkipToTools }: Props) {
   const [input, setInput] = useState(initialUrl ?? "");
   const [swapped, setSwapped] = useState(false);
 
@@ -74,18 +76,30 @@ export function StepProxy({ initialUrl, onNext }: Props) {
         части. Дальше всё настроится автоматически.
       </p>
 
-      <button
-        type="button"
-        onClick={() =>
-          import("@tauri-apps/plugin-opener").then((m) =>
-            m.openUrl(OWN_PROXY_GUIDE),
-          )
-        }
-        className="mt-3 inline-flex items-center gap-1.5 text-[12px] text-vb-silver-dim transition-colors hover:text-vb-silver"
-      >
-        Нет прокси?
-        <span className="text-vb-emerald/80">Поднимите свой за 15 минут →</span>
-      </button>
+      <div className="mt-3 flex flex-col items-start gap-1.5">
+        <button
+          type="button"
+          onClick={() =>
+            import("@tauri-apps/plugin-opener").then((m) =>
+              m.openUrl(OWN_PROXY_GUIDE),
+            )
+          }
+          className="inline-flex items-center gap-1.5 text-[12px] text-vb-silver-dim transition-colors hover:text-vb-silver"
+        >
+          Нет прокси?
+          <span className="text-vb-emerald/80">Поднимите свой за 15 минут →</span>
+        </button>
+        {onSkipToTools && (
+          <button
+            type="button"
+            onClick={onSkipToTools}
+            className="inline-flex items-center gap-1.5 text-[12px] text-vb-silver-dim transition-colors hover:text-vb-silver"
+          >
+            Был другой аккаунт Claude?
+            <span className="text-vb-emerald/80">Сначала очистка →</span>
+          </button>
+        )}
+      </div>
 
       <div className="surface-card mt-5 p-5">
         <input

@@ -385,3 +385,21 @@ test("браузер: расширение снимает защиту WebRTC �
   await expect(page.getByRole("button", { name: "Отключить", exact: true })).toBeVisible();
   expect(errors).toEqual([]);
 });
+
+test("первый запуск: «Сначала очистка» открывает Инструменты без прокси и ведёт обратно в мастер", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.setViewportSize({ width: 700, height: 580 });
+  await page.goto("/mock.html?still&fresh&platform=win");
+  await expect(page.getByText("Вставьте прокси").first()).toBeVisible({ timeout: 20_000 });
+  await page.getByRole("button", { name: /Сначала очистка/ }).click();
+  await expect(page.getByRole("heading", { name: "Инструменты" })).toBeVisible();
+  await expect(page.getByText("Очистка аккаунта Claude")).toBeVisible();
+  await expect(page.getByText(/Прокси ещё не добавлен/)).toBeVisible();
+  // Полоса остаётся при переходах по разделам, пока прокси не добавлен.
+  await go(page, "Обзор");
+  await expect(page.getByText(/Прокси ещё не добавлен/)).toBeVisible();
+  await page.getByRole("button", { name: "Добавить прокси" }).click();
+  await expect(page.getByText("Вставьте прокси").first()).toBeVisible();
+  expect(errors).toEqual([]);
+});

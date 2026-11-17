@@ -17,6 +17,8 @@ import { UpdateSplash } from "./pages/UpdateSplash";
 import { UpdateDialog } from "./components/UpdateDialog";
 import { WhatsNewModal } from "./components/WhatsNewModal";
 import { StatusProvider } from "./lib/status";
+import { Button } from "./components/Button";
+import { AlertTriangle } from "lucide-react";
 import { settingsGet, shimScriptPath, shimStatus, whatsNewTake } from "./lib/api";
 import type { AppView, WizardInstallResult, WizardStep } from "./lib/types";
 
@@ -83,6 +85,9 @@ function App() {
   const [step, setStep] = useState<WizardStep>("proxy");
   const [wizProxyUrl, setWizProxyUrl] = useState<string | null>(null);
   const [wizResult, setWizResult] = useState<WizardInstallResult | null>(null);
+  // Мастер пропущен кнопкой «Сначала очистка»: программа открыта без прокси,
+  // сверху полоса «Прокси ещё не добавлен» с возвратом в мастер.
+  const [noProxy, setNoProxy] = useState(false);
 
   if (IS_TOAST) return <UpdateToast />;
   if (IS_SPLASH) return <UpdateSplash />;
@@ -108,6 +113,11 @@ function App() {
               {step === "proxy" && (
                 <StepProxy
                   initialUrl={wizProxyUrl}
+                  onSkipToTools={() => {
+                    setNoProxy(true);
+                    prevIndex.current = NAV_ORDER.indexOf("tools");
+                    setView("tools");
+                  }}
                   onNext={(url) => {
                     setWizProxyUrl(url);
                     setStep("install");
@@ -125,7 +135,13 @@ function App() {
                 />
               )}
               {step === "done" && wizResult && (
-                <StepDone result={wizResult} onFinish={() => setView("overview")} />
+                <StepDone
+                  result={wizResult}
+                  onFinish={() => {
+                    setNoProxy(false);
+                    setView("overview");
+                  }}
+                />
               )}
             </WizardShell>
           </div>
@@ -139,6 +155,23 @@ function App() {
     <StatusProvider>
       <div className="flex h-screen w-screen flex-col overflow-hidden">
         <Titlebar />
+        {noProxy && (
+          <div className="flex items-center gap-3 border-b border-vb-warn/25 bg-vb-warn/[0.07] px-5 py-2.5">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-vb-warn" />
+            <span className="min-w-0 flex-1 text-[13px] text-vb-silver">
+              Прокси ещё не добавлен — Claude пока ходит напрямую. Добавьте его, когда сервер будет готов.
+            </span>
+            <Button
+              size="sm"
+              onClick={() => {
+                setStep("proxy");
+                setView("wizard");
+              }}
+            >
+              Добавить прокси
+            </Button>
+          </div>
+        )}
         <div className="flex min-h-0 flex-1">
           {view !== null && <Sidebar view={view} onNavigate={navigate} />}
           <main className="min-h-0 flex-1 overflow-y-auto">
