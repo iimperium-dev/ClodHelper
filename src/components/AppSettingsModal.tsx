@@ -646,7 +646,10 @@ export function AppSettingsModal({
                 {app.installed && launchable && (
                   <>
                     <ActionRow label="Ярлык на рабочий стол" onClick={() => void run(() => appsCreateShortcut(app.id, "desktop"), "Ярлык на рабочем столе")} />
-                    <ActionRow label="Ярлык в «Программы»" onClick={() => void run(() => appsCreateShortcut(app.id, "start_menu"), "Ярлык в «Программах»")} />
+                    <ActionRow
+                      label={isMac ? "Ярлык в «Программы»" : "Ярлык в меню Пуск"}
+                      onClick={() => void run(() => appsCreateShortcut(app.id, "start_menu"), isMac ? "Ярлык в «Программах»" : "Ярлык в Пуске")}
+                    />
                   </>
                 )}
                 {app.installed && (

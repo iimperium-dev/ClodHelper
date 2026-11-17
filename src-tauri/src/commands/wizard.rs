@@ -27,7 +27,7 @@ pub struct WizardInstallResult {
     /// Реальная проверка соединения через мост (не «зелёный pill по флагу»).
     pub test: shim::ShimTestResult,
     /// Включилось ли системное проксирование (env). false — не фатально,
-    /// тумблер есть в Обзоре.
+    /// режим включается в «Приложениях» → Claude Desktop → ⚙.
     pub env_on: bool,
 }
 
@@ -101,7 +101,7 @@ pub async fn wizard_install(
     step("task", "ok");
 
     // 3) Системное проксирование — главный выключатель новой модели.
-    //    Неудача не фатальна: тумблер есть в Обзоре.
+    //    Неудача не фатальна: режим есть в настройках Claude Desktop.
     step("env", "start");
     let env_on = tokio::task::spawn_blocking(|| {
         env_proxy::set(&format!("http://127.0.0.1:{}", shim::LISTEN_PORT)).is_ok()

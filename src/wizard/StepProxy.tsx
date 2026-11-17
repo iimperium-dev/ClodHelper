@@ -8,6 +8,9 @@ import { isParseReject, parseProxyInput, type ParsedProxy } from "../lib/proxyPa
 import type { ProxyCheckResult } from "../lib/types";
 import { cn } from "../lib/cn";
 
+/** Инструкция «Свой прокси» на сайте проекта. */
+const OWN_PROXY_GUIDE = "https://iimperium-dev.github.io/ClodHelper/proxy/";
+
 interface Props {
   initialUrl: string | null;
   onNext: (url: string) => void;
@@ -67,21 +70,21 @@ export function StepProxy({ initialUrl, onNext }: Props) {
         Вставьте прокси
       </h2>
       <p className="mt-1.5 text-[13px] text-vb-silver-dim">
-        Скопируйте строку целиком из письма продавца — формат любой, мы сами
-        разберём её на части. Дальше всё настроится автоматически.
+        Вставьте строку прокси целиком — формат любой, мы сами разберём её на
+        части. Дальше всё настроится автоматически.
       </p>
 
       <button
         type="button"
         onClick={() =>
           import("@tauri-apps/plugin-opener").then((m) =>
-            m.openUrl("https://proxy6.net/?r=692907"),
+            m.openUrl(OWN_PROXY_GUIDE),
           )
         }
         className="mt-3 inline-flex items-center gap-1.5 text-[12px] text-vb-silver-dim transition-colors hover:text-vb-silver"
       >
-        Где купить прокси?
-        <span className="text-vb-emerald/80">proxy6.net →</span>
+        Нет прокси?
+        <span className="text-vb-emerald/80">Поднимите свой за 15 минут →</span>
       </button>
 
       <div className="surface-card mt-5 p-5">
