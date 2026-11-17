@@ -10,7 +10,8 @@
 <!--
   Стенд интерфейса без Tauri: подставной бэкенд с реалистичными данными.
   npm run mock → http://localhost:1420/mock.html (в vite build не входит).
-  ?still — без анимаций (для снимков), ?platform=win — интерфейс Windows.
+  ?still — без анимаций (для снимков), ?platform=win — интерфейс Windows,
+  ?fresh — первый запуск: моста ещё нет, открывается мастер.
   Используется тестами tests/ui (Playwright).
 -->
 <script>
@@ -137,6 +138,11 @@
   }
   // Тесты подменяют ответы: page.addInitScript(() => { window.__mockOverrides = {...} }).
   Object.assign(R, window.__mockOverrides || {});
+  if (params.has("fresh")) {
+    R.settings_get = { proxy_url: null };
+    R.shim_script_path = null;
+    R.shim_status = { running: false };
+  }
   window.__R = R; // тесты меняют ответы на лету (например, растущие ошибки прокси)
   let cbId = 1;
   window.__TAURI_INTERNALS__ = {

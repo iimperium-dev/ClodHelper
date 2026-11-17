@@ -117,7 +117,7 @@ export function StepInstall({ proxyUrl, onBack, onDone }: Props) {
                 {label}
                 {softErr && (
                   <span className="ml-2 text-[11px] text-vb-warn">
-                    не включилось — тумблер есть в Обзоре
+                    не включилось — включается в «Приложениях» → Claude Desktop → ⚙
                   </span>
                 )}
               </span>

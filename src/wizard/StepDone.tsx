@@ -3,7 +3,7 @@ import { AlertTriangle, AppWindow, Check, Globe } from "lucide-react";
 import { Button } from "../components/Button";
 import type { WizardInstallResult } from "../lib/types";
 import { cn } from "../lib/cn";
-import { osName } from "../lib/platform";
+import { isMac, osName } from "../lib/platform";
 
 interface Props {
   result: WizardInstallResult;
@@ -74,15 +74,24 @@ export function StepDone({ result, onFinish }: Props) {
           ) : (
             <>
               <Globe className="h-4 w-4 shrink-0 text-vb-warn" />
-              Системное проксирование не включилось — тумблер есть на главном
-              экране
+              Системное проксирование не включилось — включите его в
+              «Приложениях» → Claude Desktop → ⚙ → «Claude Code в терминале»
             </>
           )}
         </div>
         <div className="flex items-center gap-2.5 rounded-lg border border-vb-border/70 px-3.5 py-2.5 text-[13px] text-vb-silver">
           <AppWindow className="h-4 w-4 shrink-0 text-vb-silver-dim" />
-          Claude Desktop, Cursor и другие приложения — в разделе «Приложения»
-          (ярлыки с прокси)
+          {isMac ? (
+            <>
+              Claude Desktop, браузер и другие программы — в разделе
+              «Приложения»
+            </>
+          ) : (
+            <>
+              Дальше: «Приложения» → Claude Desktop → «Подключить». Там же
+              кнопкой «Добавить» — отдельный браузер для сайта Claude
+            </>
+          )}
         </div>
       </div>
 
