@@ -1,0 +1,61 @@
+/* Видеоплеер портала: <div class="player" data-src data-poster data-title data-note data-dur>.
+   Разметку внутри строит assets/player.js. */
+.player{position:relative;border-radius:16px;overflow:hidden;border:1px solid var(--border);background:#000;aspect-ratio:16/9;outline:none;-webkit-tap-highlight-color:transparent;isolation:isolate}
+.player:focus-visible{box-shadow:0 0 0 2px var(--em)}
+.player video{display:block;width:100%;height:100%;object-fit:contain;background:#000}
+.player .cover{position:absolute;inset:0;display:grid;place-items:center;cursor:pointer;background-size:cover;background-position:center;transition:opacity .35s}
+.player .cover::before{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(11,14,13,.12) 0%,rgba(11,14,13,.3) 42%,rgba(11,14,13,.9) 74%,rgba(11,14,13,.98) 100%)}
+.player .big{position:relative;width:76px;height:76px;border-radius:50%;background:var(--em);color:#04120b;display:grid;place-items:center;box-shadow:0 0 0 10px rgba(34,192,132,.14),0 18px 40px -10px rgba(0,0,0,.7);transition:transform .25s cubic-bezier(.22,1,.36,1),box-shadow .25s}
+.player .big svg{width:30px;height:30px;fill:currentColor;margin-left:4px}
+.player .cover:hover .big{transform:scale(1.06);box-shadow:0 0 0 14px rgba(34,192,132,.18),0 18px 40px -10px rgba(0,0,0,.7)}
+.player .meta{position:absolute;left:26px;right:26px;bottom:22px;display:flex;align-items:flex-end;justify-content:space-between;gap:16px;text-align:left}
+.player .meta b{display:block;font-size:clamp(16px,2.2vw,21px);font-weight:650;letter-spacing:-.01em;line-height:1.25}
+.player .meta span{color:var(--silver);font-size:13.5px}
+.player .dur{font:500 12.5px var(--mono);color:var(--fg);background:rgba(11,14,13,.7);border:1px solid rgba(255,255,255,.08);border-radius:7px;padding:4px 8px;white-space:nowrap;backdrop-filter:blur(6px)}
+.player.started .cover{opacity:0;pointer-events:none}
+.player.ended .cover{opacity:1;pointer-events:auto}
+.player .bar{position:absolute;left:12px;right:12px;bottom:12px;display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:12px;background:rgba(11,14,13,.78);border:1px solid rgba(255,255,255,.07);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);opacity:0;transform:translateY(8px);pointer-events:none;transition:opacity .25s,transform .3s cubic-bezier(.22,1,.36,1)}
+.player.started:not(.ended).ui .bar,.player.started.paused:not(.ended) .bar{opacity:1;transform:none;pointer-events:auto}
+.player.started:not(.ui):not(.paused){cursor:none}
+.player .btn{all:unset;box-sizing:border-box;width:36px;height:36px;border-radius:9px;display:grid;place-items:center;color:var(--silver);cursor:pointer;flex:none;transition:background .15s,color .15s}
+.player .btn:hover{background:rgba(255,255,255,.07);color:var(--fg)}
+.player .btn:focus-visible{box-shadow:0 0 0 2px var(--em)}
+.player .btn svg{width:18px;height:18px}
+.player .btn svg.f{fill:currentColor;stroke:none}
+.player .time{font:500 12px var(--mono);color:var(--silver);white-space:nowrap;padding:0 6px;min-width:94px;text-align:center}
+.player .track{position:relative;flex:1;height:36px;cursor:pointer;touch-action:none;display:flex;align-items:center}
+.player .rail{position:relative;width:100%;height:4px;border-radius:2px;background:rgba(255,255,255,.12);overflow:visible;transition:height .15s}
+.player .track:hover .rail,.player .track.drag .rail{height:6px}
+.player .buf,.player .fill{position:absolute;left:0;top:0;bottom:0;border-radius:inherit}
+.player .buf{background:rgba(255,255,255,.14)}
+.player .fill{background:var(--em)}
+.player .knob{position:absolute;top:50%;width:14px;height:14px;margin:-7px 0 0 -7px;border-radius:50%;background:var(--fg);box-shadow:0 0 0 4px rgba(34,192,132,.35);transform:scale(0);transition:transform .15s}
+.player .track:hover .knob,.player .track.drag .knob{transform:scale(1)}
+.player .pv{position:absolute;bottom:34px;transform:translateX(-50%);font:500 11.5px var(--mono);background:var(--surf2);border:1px solid var(--border2);border-radius:6px;padding:2px 6px;opacity:0;pointer-events:none;transition:opacity .15s}
+.player .track:hover .pv,.player .track.drag .pv{opacity:1}
+.player .volwrap{display:flex;align-items:center;flex:none;border-radius:9px;transition:background .15s}
+.player .volwrap:hover,.player .volwrap:focus-within,.player .volwrap.drag{background:rgba(255,255,255,.05)}
+.player .vs{position:relative;width:0;height:36px;overflow:hidden;cursor:pointer;touch-action:none;display:flex;align-items:center;outline:none;transition:width .25s cubic-bezier(.22,1,.36,1),margin .25s}
+.player .volwrap:hover .vs,.player .volwrap:focus-within .vs,.player .volwrap.drag .vs{width:84px;margin-right:12px}
+.player .vs .rail{height:4px;margin-left:4px;width:calc(100% - 8px)}
+.player .vs .knob{transform:scale(1);width:12px;height:12px;margin:-6px 0 0 -6px;box-shadow:none}
+.player .vs:focus-visible .rail{box-shadow:0 0 0 2px var(--em)}
+.player .flash{position:absolute;left:50%;top:50%;width:64px;height:64px;margin:-32px;border-radius:50%;background:rgba(11,14,13,.6);display:grid;place-items:center;color:var(--fg);opacity:0;pointer-events:none;backdrop-filter:blur(6px)}
+.player .flash svg{width:26px;height:26px;fill:currentColor}
+.player .flash.go{animation:flash .55s ease-out}
+@keyframes flash{0%{opacity:1;transform:scale(.85)}100%{opacity:0;transform:scale(1.25)}}
+.player:fullscreen{border:0;border-radius:0}
+.player:-webkit-full-screen{border:0;border-radius:0;width:100%;height:100%}
+/* на страницах гайда .meta — строка меток; внутри плеера она своя */
+.player .meta{margin:0;flex-wrap:nowrap}
+.player .meta>div>span{display:block;padding:0;border:0;background:none;border-radius:0;line-height:1.4}
+@media (max-width:600px){
+  .player{border-radius:12px}
+  .player .big{width:60px;height:60px}
+  .player .big svg{width:24px;height:24px}
+  .player .meta{left:14px;right:14px;bottom:12px}
+  .player .meta span,.player .meta>div>span{display:none}
+  .player .bar{left:6px;right:6px;bottom:6px;padding:4px;gap:2px}
+  .player .time{min-width:0;font-size:11px;padding:0 4px}
+  .player .vol{display:none}
+}

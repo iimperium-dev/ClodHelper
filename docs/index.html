@@ -15,6 +15,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="assets/site.css">
+<link rel="stylesheet" href="assets/player.css">
 <style>
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%;scroll-behavior:smooth}
@@ -26,6 +27,17 @@ h2{font-size:clamp(26px,3.6vw,38px);line-height:1.12;letter-spacing:-.025em;font
 .kick{display:inline-flex;align-items:center;gap:8px;color:var(--em);font:600 13px/1 var(--sans);letter-spacing:.01em;margin-bottom:14px}
 .sub{color:var(--dim);font-size:17px;margin:12px 0 0;max-width:640px;text-wrap:pretty}
 section{padding:96px 0 0}
+
+/* видео-объяснение */
+.vid{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,7fr);gap:48px;align-items:center}
+.vid .player{box-shadow:0 30px 80px -40px rgba(0,0,0,.9)}
+.vlink{display:flex;align-items:center;gap:12px;margin-top:26px;padding:14px 16px;border-radius:12px;border:1px solid var(--border);background:var(--surf);text-decoration:none;color:var(--silver);font-size:14.5px;line-height:1.4;max-width:440px;transition:border-color .15s,background .15s}
+.vlink:hover{border-color:var(--border2);background:var(--surf2)}
+.vlink .ic{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;flex:none;background:rgba(34,192,132,.12);color:var(--em)}
+.vlink b{display:block;color:var(--fg);font-weight:600}
+.vlink svg.go{margin-left:auto;color:var(--em);transition:transform .2s}
+.vlink:hover svg.go{transform:translateX(3px)}
+@media (max-width:900px){.vid{grid-template-columns:1fr;gap:28px}}
 
 /* hero */
 .hero{position:relative;padding:84px 0 0;text-align:center}
@@ -220,6 +232,18 @@ h1 em{font-style:normal;color:var(--em)}
     </div>
   </div>
 
+  <section id="video">
+    <div class="vid">
+      <div>
+        <div class="kick">Видео · 1 минута</div>
+        <h2>Минута — и понятно, как это работает</h2>
+        <p class="sub">Зачем нужен свой прокси, что делает Clod Helper и с чего начать. Без терминов — для тех, кто слышит об этом впервые.</p>
+        <a class="vlink" href="proxy/"><span class="ic"><svg class="i" viewBox="0 0 24 24"><rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><path d="M6 6h.01"/><path d="M6 18h.01"/></svg></span><span><b>Где взять прокси</b>Свой сервер за 15 минут — пошагово, с видео</span><svg class="i go" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></a>
+      </div>
+      <div class="player" data-src="scan/media/explainer.mp4" data-poster="scan/media/explainer.jpg" data-title="Clod Helper — объяснение для чайника" data-note="Как это работает и с чего начать" data-dur="1:14"></div>
+    </div>
+  </section>
+
   <section id="paths">
     <div class="kick">Гайд</div>
     <h2>Какой у вас случай?</h2>
@@ -346,6 +370,7 @@ h1 em{font-style:normal;color:var(--em)}
   <div class="sf-bot"><span>Неофициальный проект, не связан с Anthropic. Claude — товарный знак Anthropic.</span><span>Clod Helper · MIT</span></div>
 </footer>
 <!--/sf-->
+<script src="assets/player.js"></script>
 <script src="assets/site.js" defer></script>
 </body>
 </html>

@@ -9,6 +9,8 @@
   --wrap:1120px;
   color-scheme:dark;
 }
+/* декоративные подсветки шире экрана не должны раздвигать страницу на телефоне */
+html,body{overflow-x:clip}
 
 /* ---- шапка ---- */
 .sh{position:sticky;top:0;z-index:60;background:rgba(11,14,13,.82);backdrop-filter:saturate(1.4) blur(14px);-webkit-backdrop-filter:saturate(1.4) blur(14px);border-bottom:1px solid var(--border)}

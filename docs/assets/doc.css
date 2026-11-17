@@ -186,6 +186,21 @@ figure.shot figcaption{padding:11px 16px;border-top:1px solid var(--border);colo
 @media (max-width:940px){.pick{grid-template-columns:1fr}.pk .pk-time{top:26px}}
 .unsure{margin-top:22px;padding:18px 20px;border-radius:14px;border:1px dashed var(--border2);color:var(--dim);font-size:15px;line-height:1.6}
 .unsure b{color:var(--silver)}
+.vmini{display:grid;grid-template-columns:minmax(0,420px) minmax(0,1fr);gap:28px;align-items:center;margin-top:22px;padding:14px;border-radius:16px;border:1px solid var(--border);background:var(--surf)}
+.vmini .player{border-radius:11px}
+.vmini-t{display:flex;flex-direction:column;gap:8px;padding-right:12px}
+.vmini-t b{font-size:18px;font-weight:650;letter-spacing:-.01em}
+.vmini-t span{color:var(--dim);font-size:15px;line-height:1.55}
+.vmini-t a{margin-top:6px;color:var(--em);font-weight:600;font-size:14.5px;line-height:1.45;text-decoration:none}
+.vmini-t a svg{width:17px;height:17px;margin-left:6px;vertical-align:-3px;transition:transform .2s}
+/* окошко маленькое: заголовок ролика короче, без подписи */
+.vmini .player .big{width:58px;height:58px;box-shadow:0 0 0 8px rgba(34,192,132,.14),0 14px 30px -10px rgba(0,0,0,.7)}
+.vmini .player .big svg{width:22px;height:22px;margin-left:3px}
+.vmini .player .meta{left:16px;right:16px;bottom:14px}
+.vmini .player .meta b{font-size:15.5px}
+.vmini .player .meta>div>span{display:none}
+.vmini-t a:hover svg{transform:translateX(3px)}
+@media (max-width:760px){.vmini{grid-template-columns:1fr;gap:16px;padding:10px}.vmini-t{padding:0 6px 6px}}
 
 /* переключатель пути на страницах гайда */
 .pathsw{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:22px}
