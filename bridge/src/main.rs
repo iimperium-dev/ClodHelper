@@ -89,6 +89,9 @@ const DEFAULT_PROXY_DOMAINS: &[&str] = &[
     // Google AI (только AI-endpoint'ы, НЕ все googleapis.com)
     "generativelanguage.googleapis.com",
     "ai.google.dev",
+    // Приложение Gemini (Windows/macOS) и сайт: гео-проверка идёт здесь
+    "gemini.google.com",
+    "gemini.google",
     // Прочие частые AI-API
     "x.ai",
     "mistral.ai",
