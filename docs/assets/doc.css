@@ -163,3 +163,37 @@ figure.shot figcaption{padding:11px 16px;border-top:1px solid var(--border);colo
   .qa summary{padding:15px 16px;font-size:15.5px}
   .qa .a{padding:0 16px 16px}
 }
+
+/* выбор пути (гайд) */
+.pick{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-top:40px}
+.pk{position:relative;display:flex;flex-direction:column;padding:26px 24px 22px;border:1px solid var(--border2);border-radius:18px;background:var(--surf);color:var(--fg);text-decoration:none;transition:border-color .2s,transform .2s,background .2s}
+.pk:hover{border-color:rgba(34,192,132,.55);background:#141917;transform:translateY(-2px);text-decoration:none}
+.pk:focus-visible{outline:2px solid var(--em);outline-offset:3px}
+.pk .pk-ic{display:grid;place-items:center;width:46px;height:46px;border-radius:13px;background:rgba(34,192,132,.12);border:1px solid rgba(34,192,132,.3);color:var(--em)}
+.pk .pk-ic svg{width:22px;height:22px}
+.pk .pk-t{display:block;margin-top:18px;font:650 21px/1.2 var(--sans);letter-spacing:-.015em}
+.pk .pk-who{display:block;margin-top:8px;color:var(--silver);font-size:15px;line-height:1.55}
+.pk .pk-time{position:absolute;top:24px;right:22px;color:var(--faint);font:500 12.5px/1 var(--sans)}
+.pk ol{list-style:none;margin:18px 0 0;padding:16px 0 0;border-top:1px solid var(--border);display:grid;gap:7px;counter-reset:p}
+.pk ol li{counter-increment:p;display:flex;gap:10px;align-items:baseline;color:var(--dim);font-size:14px;line-height:1.4}
+.pk ol li::before{content:counter(p);flex:none;width:20px;color:var(--faint);font:600 12px/1 var(--mono)}
+.pk ol li.hl{color:var(--fg)}
+.pk ol li.hl::before{color:var(--em)}
+.pk .pk-go{display:inline-flex;align-items:center;gap:8px;margin-top:auto;padding-top:20px;color:var(--em);font:600 15px/1 var(--sans)}
+.pk .pk-go svg{width:18px;height:18px;transition:transform .2s}
+.pk:hover .pk-go svg{transform:translateX(3px)}
+.pk.main{border-color:rgba(34,192,132,.35)}
+@media (max-width:940px){.pick{grid-template-columns:1fr}.pk .pk-time{top:26px}}
+.unsure{margin-top:22px;padding:18px 20px;border-radius:14px;border:1px dashed var(--border2);color:var(--dim);font-size:15px;line-height:1.6}
+.unsure b{color:var(--silver)}
+
+/* переключатель пути на страницах гайда */
+.pathsw{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:22px}
+.pathsw > span{color:var(--faint);font-size:13.5px;margin-right:4px}
+.pathsw a{display:inline-flex;align-items:center;gap:7px;padding:7px 12px;border-radius:9px;border:1px solid var(--border2);background:var(--surf);color:var(--dim);font-size:13.5px;line-height:1;text-decoration:none;transition:color .15s,border-color .15s}
+.pathsw a:hover{color:var(--fg);border-color:#3d4440}
+.pathsw a[aria-current="page"]{color:var(--fg);border-color:rgba(34,192,132,.5);background:rgba(34,192,132,.08)}
+.pathsw a[aria-current="page"]::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--em)}
+
+/* подсказка агенту — блок с текстом для копирования */
+.prompt{margin:16px 0;padding:16px 18px;border-radius:12px;border:1px solid var(--border2);background:#0d100f;font:14px/1.6 var(--mono);color:var(--silver);white-space:pre-wrap;overflow-wrap:anywhere}

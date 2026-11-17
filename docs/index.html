@@ -91,6 +91,11 @@ h1 em{font-style:normal;color:var(--em)}
 .step:hover .go svg{transform:translateX(3px)}
 @media (max-width:980px){.path{grid-template-columns:1fr 1fr}}
 @media (max-width:560px){.path{grid-template-columns:1fr}}
+.path.three{grid-template-columns:repeat(3,1fr)}
+@media (max-width:980px){.path.three{grid-template-columns:1fr}}
+.step .pi{display:grid;place-items:center;width:40px;height:40px;border-radius:12px;background:rgba(34,192,132,.12);border:1px solid rgba(34,192,132,.3);color:var(--em)}
+.step .pi svg{width:20px;height:20px}
+.step .who{display:flex;align-items:center;justify-content:space-between}
 
 /* инструменты */
 .tools{display:grid;grid-template-columns:1.25fr 1fr;grid-template-rows:auto auto;gap:16px;margin-top:40px}
@@ -215,10 +220,21 @@ h1 em{font-style:normal;color:var(--em)}
     </div>
   </div>
 
+  <section id="paths">
+    <div class="kick">Гайд</div>
+    <h2>Какой у вас случай?</h2>
+    <p class="sub">Выберите свой путь — гайд покажет нужные шаги в правильном порядке.</p>
+    <div class="path three">
+      <a class="step" href="guide/new/"><span class="who"><span class="pi"><svg class="i" viewBox="0 0 24 24"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg></span><span class="t">≈ 40 минут</span></span><b>Только начинаю</b><p>Аккаунта ещё нет или прокси не настраивали. Всё с нуля и сразу правильно.</p><span class="go">Начать<svg class="i" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></span></a>
+      <a class="step" href="guide/upgrade/"><span class="who"><span class="pi"><svg class="i" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg></span><span class="t">≈ 30 минут</span></span><b>Уже пользуюсь Claude</b><p>Работаете через VPN, купленный прокси или антидетект. Переезд на свой прокси с тем же аккаунтом.</p><span class="go">Начать<svg class="i" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></span></a>
+      <a class="step" href="guide/fresh/"><span class="who"><span class="pi"><svg class="i" viewBox="0 0 24 24"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/></svg></span><span class="t">≈ 45 минут</span></span><b>С чистого листа</b><p>Был другой аккаунт, переходите на новый. Архив чатов, очистка прошлого — и настройка заново.</p><span class="go">Начать<svg class="i" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></span></a>
+    </div>
+  </section>
+
   <section id="start">
     <div class="kick">С чего начать</div>
-    <h2>Четыре шага от нуля до спокойной работы</h2>
-    <p class="sub">Идите по порядку. Каждый шаг — отдельная понятная страница со скриншотами, а у прокси есть ещё и видео.</p>
+    <h2>Из чего состоит путь</h2>
+    <p class="sub">Четыре инструмента, на которых держится вся схема. У каждого — своя страница, а у прокси есть ещё и видео.</p>
     <div class="path">
       <a class="step" href="scan/"><span class="n"><span class="t">5 секунд</span></span><b>Проверьте аккаунт</b><p>Дата регистрации, верификация и статус — одной закладкой в браузере.</p><span class="go">Clod Scan<svg class="i" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></span></a>
       <a class="step" href="proxy/"><span class="n"><span class="t">15 минут · 269 ₽/мес</span></span><b>Поднимите свой прокси</b><p>Свой сервер с адресом, которым пользуетесь только вы. Без знания Linux.</p><span class="go">Свой прокси<svg class="i" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></span></a>
@@ -311,8 +327,8 @@ h1 em{font-style:normal;color:var(--em)}
 
   <div class="final">
     <h2>Начните с гайда — он проведёт по всем шагам</h2>
-    <p>От проверки аккаунта до первого сообщения в Claude Desktop через свой прокси. Со скриншотами и без лишней теории.</p>
-    <div class="cta"><a class="btn pri" href="guide/">Открыть гайд<svg class="i" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></a></div>
+    <p>Три пути: с нуля, переезд с VPN или чистый старт после прошлого аккаунта. Со скриншотами и без лишней теории.</p>
+    <div class="cta"><a class="btn pri" href="guide/">Выбрать свой путь<svg class="i" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></a></div>
   </div>
 </main>
 

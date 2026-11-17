@@ -1,0 +1,13 @@
+      <section class="stp" id="proxy">
+        <div class="stp-h"><span class="stp-n">{{n}}</span><div><h2>Поднимите свой прокси</h2><span class="t">15 минут · 269 ₽ в месяц</span></div></div>
+        <p>Это главный шаг. Вы арендуете маленький сервер и одной командой ставите на него прокси. Для этого есть отдельная подробная инструкция с видео — откройте её, пройдите до конца и возвращайтесь сюда.</p>
+        <a class="jump" href="{{root}}proxy/"><img src="{{root}}proxy/media/video/poster.jpg" alt="" loading="lazy" width="150" height="84"><span><small>Инструкция с видео · 7 минут</small><b>Свой прокси на своём сервере</b><span class="d">Регистрация, заказ сервера, одна команда в консоли</span></span><svg class="i go" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></a>
+        <div class="call ok"><svg class="i" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg><p><b>Итог этого шага</b> — строка вашего прокси вида <code>203.0.113.25:31559:логин:пароль</code>. Сохраните её: она понадобится в следующем шаге.</p></div>
+{{#upgrade}}
+        <div class="call"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg><p><b>Какую страну выбрать?</b> Ту же, через которую вы уже работали с Claude. Аккаунт привык к этой стране — пусть так и остаётся, меняется только адрес на ваш личный.</p></div>
+{{/upgrade}}
+{{^upgrade}}
+        <div class="call"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg><p><b>Какую страну выбрать?</b> Подойдёт рекомендуемый в инструкции сервер в Финляндии или Нидерландах. Главное — выбрать один раз и дальше не менять.</p></div>
+{{/upgrade}}
+        <button class="mark" type="button" data-step="proxy" aria-pressed="false"><span class="ck"></span>Сделано</button>
+      </section>

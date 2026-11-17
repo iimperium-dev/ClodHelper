@@ -1,0 +1,18 @@
+      <section class="stp" id="helper">
+        <div class="stp-h"><span class="stp-n">{{n}}</span><div><h2>Установите Clod Helper</h2><span class="t">2 минуты</span></div></div>
+{{#upgrade}}
+        <div class="call"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg><div><p><b>Clod Helper уже стоит?</b> Обновите его до последней версии — программа сама предложит обновление, или скачайте установщик ниже и поставьте поверх. Затем замените прокси на свой: <span class="ui">Прокси</span> → <span class="ui">Добавить</span> → вставьте строку → <span class="ui">Добавить в пул</span>. Старый прокси уберите кнопкой с корзиной. Дальше переходите к следующему шагу.</p></div></div>
+{{/upgrade}}
+        <ol class="do">
+          <li><div>Скачайте установщик со страницы <a href="https://github.com/iimperium-dev/ClodHelper/releases/latest">последней версии</a>: для Windows — файл <code>…x64-setup.exe</code>, для Mac — <code>…universal.dmg</code>. Запустите его.</div></li>
+          <li><div>Если Windows пишет «Система защитила ваш компьютер» — нажмите <span class="ui">Подробнее</span> → <span class="ui">Выполнить в любом случае</span>. Программа бесплатная и без платной подписи Microsoft, поэтому Windows осторожничает. <a href="{{root}}helper/#install">Подробнее и для Mac →</a></div></li>
+          <li><div>При первом запуске откроется мастер. Вставьте строку прокси из прошлого шага — формат любой, программа сама разберёт, где адрес, порт, логин и пароль. Нажмите <span class="ui">Дальше</span>.</div></li>
+        </ol>
+        <figure class="shot"><img src="{{root}}assets/img/wizard-proxy.webp" alt="Мастер Clod Helper: вставлена строка прокси, программа разобрала адрес, порт, логин и показала страну" loading="lazy" width="700" height="270"><figcaption>Строка разобрана: видно адрес, порт, логин и страну сервера</figcaption></figure>
+        <ol class="do" start="4" style="counter-reset:d 3">
+          <li><div>Дальше программа всё настроит сама — обычно меньше минуты. В конце появится <span class="ui">Всё работает</span> и адрес вашего сервера. Нажмите <span class="ui">Открыть Clod Helper</span>.</div></li>
+        </ol>
+        <figure class="shot narrow"><img src="{{root}}assets/img/wizard-done.webp" alt="Экран «Всё работает»: соединение через мост проверено настоящим запросом" loading="lazy" width="560" height="500"><figcaption>Мост установлен и сам запускается вместе с Windows</figcaption></figure>
+        <div class="call warn"><svg class="i" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg><p><b>«Этот прокси в России»?</b> Значит, сервер российский — Claude такой не примет. Нужен зарубежный: вернитесь к прошлому шагу.</p></div>
+        <button class="mark" type="button" data-step="helper" aria-pressed="false"><span class="ck"></span>Сделано</button>
+      </section>

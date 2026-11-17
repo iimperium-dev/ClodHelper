@@ -1,0 +1,18 @@
+      <section class="stp" id="desktop">
+        <div class="stp-h"><span class="stp-n">{{n}}</span><div><h2>Подключите Claude Desktop</h2><span class="t">3 минуты</span></div></div>
+        <p>Claude Desktop умеет сам ходить через прокси — Clod Helper включает это одной кнопкой и заодно ставит защиту от утечек.</p>
+        <ol class="do">
+{{#new}}
+          <li><div><b>Ещё нет Claude Desktop?</b> Откройте в чистом браузере <b>claude.ai/download</b>, скачайте версию для своей системы и установите. Запускать пока не нужно.</div></li>
+{{/new}}
+          <li><div>В Clod Helper откройте раздел <span class="ui">Приложения</span>. В строке <b>Claude Desktop</b> будет написано «Прокси Claude не настроен». Нажмите <span class="ui">Подключить</span>.</div></li>
+          <li><div>Windows спросит разрешение на изменения — нажмите <span class="ui">Да</span>. Это один раз.</div></li>
+          <li><div><b>Полностью закройте Claude Desktop</b>, если он был открыт: правой кнопкой по значку Claude в трее (у часов) → <span class="ui">Quit</span> / <span class="ui">Выход</span>. Простого крестика окна мало — Claude останется работать в фоне.</div></li>
+          <li><div>Откройте Claude кнопкой <span class="ui">Открыть</span> в строке Claude Desktop. Строка станет зелёной: «Через мост».</div></li>
+        </ol>
+        <figure class="shot"><img src="{{root}}assets/img/apps-connect.webp" alt="Раздел «Приложения»: у Claude Desktop кнопка «Подключить», у Google Chrome — «Перезапустить через мост»" loading="lazy" width="1010" height="660"><figcaption>«Подключить» у Claude Desktop. Жёлтая надпись у браузера — он открыт мимо моста: нажмите «Перезапустить через мост»</figcaption></figure>
+        <div class="call"><svg class="i" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></svg><div><p><b>Удобнее с ярлыком.</b> Правой кнопкой по строке Claude Desktop → <span class="ui">Ярлык на рабочий стол</span>. Появится ярлык <b>«Claude Desktop (proxy)»</b> — запускайте Claude им. Если Claude уже открыт, ярлык честно скажет закрыть его через трей и запустить снова.</p></div></div>
+        <div class="call ok"><svg class="i" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg><p>В настройках Claude Desktop (значок ⚙ справа в строке) уже включены <span class="ui">Не пускать мимо прокси</span> и <span class="ui">Не отправлять телеметрию</span>. Оставьте их включёнными.</p></div>
+        <div class="call"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg><p><b>На Mac</b> мастер уже подключил Claude Desktop сам — проверьте, что строка зелёная, и переходите дальше.</p></div>
+        <button class="mark" type="button" data-step="desktop" aria-pressed="false"><span class="ck"></span>Сделано</button>
+      </section>

@@ -1,0 +1,25 @@
+      <section class="stp" id="browser">
+        <div class="stp-h"><span class="stp-n">{{n}}</span><div><h2>Заведите чистый браузер для Claude</h2><span class="t">5 минут</span></div></div>
+        <p>Браузер всё равно понадобится: через него входят в аккаунт, открывают claude.ai, меняют настройки и подписку. Ваш обычный браузер для этого не годится: в нём ваши Google-аккаунты, закладки, расширения-VPN, и запускается он мимо моста.</p>
+        <p><b>Решение</b> — отдельный браузер только для Claude, который всегда идёт через ваш прокси.</p>
+        <ol class="do">
+          <li><div><b>Установите браузер, которым вы не пользуетесь.</b> Подходят браузеры на Chromium: <a href="https://www.google.com/chrome/">Google Chrome</a>, если ваш основной — другой; если основной уже Chrome — возьмите <a href="https://brave.com/download/">Brave</a> или Microsoft Edge. При установке <b>ничего не импортируйте</b> из других браузеров и не входите в Google-аккаунт.</div></li>
+          <li><div>Закройте этот браузер полностью.</div></li>
+          <li><div>В Clod Helper: <span class="ui">Приложения</span> → <span class="ui">Добавить</span> → начните вводить название («chrome», «brave», «edge») → выберите его в подсказке.</div></li>
+          <li><div>Нажмите ⚙ справа от браузера и включите <span class="ui">Всегда через мост</span>, Windows спросит разрешение один раз. Теперь этот браузер идёт через прокси, даже если открыть его из меню «Пуск», и расширения не смогут это перебить.</div></li>
+          <li><div>Открывайте браузер кнопкой <span class="ui">Открыть</span> в Clod Helper. В строке должно быть зелёное «Через мост».</div></li>
+        </ol>
+        <div class="pair">
+          <figure class="shot"><img src="{{root}}assets/img/apps-add.webp" alt="Поиск программы после нажатия «Добавить» в разделе «Приложения»" loading="lazy" width="1010" height="540"><figcaption>«Добавить» ищет среди установленных программ</figcaption></figure>
+          <figure class="shot"><img src="{{root}}assets/img/settings-browser.webp" alt="Настройки браузера в Clod Helper: «Весь трафик через прокси» и «Всегда через мост»" loading="lazy" width="432" height="739"><figcaption>«Весь трафик через прокси» уже включён. Включите «Всегда через мост»</figcaption></figure>
+        </div>
+        <div class="call warn"><svg class="i" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg><div><p><b>Не ставьте в этот браузер VPN и прокси-расширения</b> — FoxyProxy, SwitchyOmega, Browsec и подобные. Они перехватывают соединение. Если такое уже стоит, Clod Helper напишет «Прокси перехватывает …» и покажет кнопку <span class="ui">Отключить</span>.</p></div></div>
+        <div class="call"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg><p><b>Жёлтое «Напрямую, мимо моста»</b> значит, что браузер был открыт до Clod Helper. Нажмите <span class="ui">Перезапустить через мост</span> — программа сама закроет его и откроет заново, вкладки вернутся.</p></div>
+{{#upgrade}}
+        <div class="call"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg><p><b>Пользовались антидетектом</b> (1Browser, Dolphin и подобными)? Для Claude он больше не нужен. Со своим прокси и чистым браузером из Clod Helper он только мешает: войдите в аккаунт заново уже в чистом браузере.</p></div>
+{{/upgrade}}
+{{^upgrade}}
+        <div class="call"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg><p><b>Антидетект-браузеры</b> (1Browser, Dolphin и подобные) не нужны. Со своим прокси и чистым браузером из Clod Helper они только мешают.</p></div>
+{{/upgrade}}
+        <button class="mark" type="button" data-step="browser" aria-pressed="false"><span class="ck"></span>Сделано</button>
+      </section>

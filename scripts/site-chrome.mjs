@@ -73,6 +73,28 @@ function walk(dir, out = []) {
   return out;
 }
 
+// Общие куски гайдов (шаги, правила, «если что-то не так») — один раз в
+// scripts/site-parts/<имя>.html, а на страницах — метки
+//   <!--part:step-proxy n=3 upgrade-->…<!--/part:step-proxy-->
+// Внутри куска: {{root}} — путь к корню сайта, {{n}} и другие key=value —
+// подстановки, {{#флаг}}…{{/флаг}} — только если флаг указан в метке,
+// {{^флаг}}…{{/флаг}} — только если не указан.
+const PARTS = fileURLToPath(new URL("./site-parts/", import.meta.url));
+function part(name, args, root) {
+  const vars = { root };
+  for (const a of args.trim().split(/\s+/).filter(Boolean)) {
+    const [k, v] = a.split("=");
+    vars[k] = v ?? true;
+  }
+  let s = readFileSync(join(PARTS, name + ".html"), "utf8").replace(/\r\n/g, "\n").trimEnd();
+  s = s.replace(/\{\{([#^])(\w+)\}\}([\s\S]*?)\{\{\/\2\}\}\n?/g, (_, m, k, body) => ((m === "#") === !!vars[k] ? body : ""));
+  s = s.replace(/\{\{(\w+)\}\}/g, (_, k) => {
+    if (!(k in vars)) throw new Error(`кусок ${name}: нет значения для {{${k}}}`);
+    return vars[k];
+  });
+  return `<!--part:${name}${args}-->\n${s}\n<!--/part:${name}-->`;
+}
+
 let changed = 0;
 for (const file of walk(DOCS)) {
   const rel = relative(DOCS, file).split(sep);
@@ -83,6 +105,7 @@ for (const file of walk(DOCS)) {
   const before = html;
   html = html.replace(/<!--sh-->[\s\S]*?<!--\/sh-->/, header(root, page));
   html = html.replace(/<!--sf-->[\s\S]*?<!--\/sf-->/, footer(root));
+  html = html.replace(/<!--part:([\w-]+)((?:\s+[\w=.-]+)*)-->[\s\S]*?<!--\/part:\1-->/g, (_, name, args) => part(name, args, root));
   if (html !== before) {
     writeFileSync(file, html);
     changed++;

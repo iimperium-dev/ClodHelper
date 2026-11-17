@@ -28,7 +28,8 @@
   }
 
   // ---- отметки «Сделано» ----
-  const KEY = "clodhelper.guide.v1";
+  // свой прогресс у каждого пути гайда
+  const KEY = "clodhelper.guide.v2:" + location.pathname.replace(/index.html$/, "");
   const btns = $$(".mark[data-step]");
   if (btns.length) {
     const done = new Set(store.get(KEY, []));
