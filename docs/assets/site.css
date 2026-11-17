@@ -1,0 +1,84 @@
+/* Общий каркас портала Clod Helper: токены, шапка, подвал, базовые блоки.
+   Подключается на всех страницах; свои стили страниц идут после него. */
+:root{
+  --bg:#0b0e0d;--surf:#121614;--surf2:#1a1e1c;--border:#252a28;--border2:#303633;
+  --fg:#f1f4f2;--silver:#ccd1ce;--dim:#8b918e;--faint:#646a67;
+  --em:#22c084;--emB:#3ad897;--warn:#e0a33d;--bad:#e5645a;
+  --sans:Inter,"Segoe UI Variable","Segoe UI",-apple-system,system-ui,sans-serif;
+  --mono:"JetBrains Mono","Cascadia Mono",Menlo,Consolas,monospace;
+  --wrap:1120px;
+  color-scheme:dark;
+}
+
+/* ---- шапка ---- */
+.sh{position:sticky;top:0;z-index:60;background:rgba(11,14,13,.82);backdrop-filter:saturate(1.4) blur(14px);-webkit-backdrop-filter:saturate(1.4) blur(14px);border-bottom:1px solid var(--border)}
+.sh-in{max-width:var(--wrap);margin:0 auto;padding:0 24px;height:64px;display:flex;align-items:center;gap:22px}
+.sh-brand{display:flex;align-items:center;gap:10px;color:var(--fg);text-decoration:none;font:600 15px/1 var(--sans);letter-spacing:-.01em;white-space:nowrap;flex:none}
+.sh-brand svg{width:28px;height:28px;flex:none}
+.sh-nav{display:flex;align-items:center;gap:2px;flex:1;min-width:0}
+.sh-a{position:relative;display:flex;align-items:center;gap:7px;color:var(--dim);text-decoration:none;font:500 14px/1 var(--sans);padding:9px 12px;border-radius:9px;white-space:nowrap;transition:color .15s,background .15s}
+.sh-a:hover{color:var(--fg);background:var(--surf2)}
+.sh-a[aria-current="page"]{color:var(--fg)}
+.sh-a[aria-current="page"]::after{content:"";position:absolute;left:12px;right:12px;bottom:-13px;height:2px;border-radius:2px;background:var(--em)}
+.sh-a .tag{font:600 10.5px/1 var(--sans);letter-spacing:.02em;color:var(--em);background:rgba(34,192,132,.12);border:1px solid rgba(34,192,132,.25);padding:3px 6px;border-radius:6px}
+.sh-end{display:flex;align-items:center;gap:6px;margin-left:auto;flex:none}
+.sh-gh{display:grid;place-items:center;width:38px;height:38px;border-radius:9px;color:var(--dim);transition:color .15s,background .15s}
+.sh-gh:hover{color:var(--fg);background:var(--surf2)}
+.sh-gh svg{width:18px;height:18px;fill:currentColor}
+.sh-dl{display:flex;align-items:center;gap:8px;height:38px;padding:0 14px;border-radius:10px;background:var(--em);color:#04120b;text-decoration:none;font:600 14px/1 var(--sans);white-space:nowrap;transition:background .15s,transform .15s}
+.sh-dl:hover{background:var(--emB)}
+.sh-dl:active{transform:translateY(1px)}
+.sh-dl svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.sh-burger{display:none;width:40px;height:40px;border:1px solid var(--border2);border-radius:10px;background:var(--surf);color:var(--fg);place-items:center;cursor:pointer;padding:0}
+.sh-burger svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
+.sh-burger .x{display:none}
+.sh.open .sh-burger .x{display:block}
+.sh.open .sh-burger .m{display:none}
+
+@media (max-width:920px){
+  .sh-in{gap:12px}
+  .sh-nav{position:fixed;left:0;right:0;top:64px;flex-direction:column;align-items:stretch;gap:2px;padding:10px 16px 18px;background:var(--bg);border-bottom:1px solid var(--border);box-shadow:0 30px 60px -20px rgba(0,0,0,.7);transform:translateY(-8px);opacity:0;visibility:hidden;transition:opacity .18s,transform .18s,visibility .18s}
+  .sh.open .sh-nav{transform:none;opacity:1;visibility:visible}
+  .sh-a{font-size:16px;padding:14px 12px}
+  .sh-a[aria-current="page"]{background:var(--surf2)}
+  .sh-a[aria-current="page"]::after{left:0;right:auto;top:12px;bottom:12px;width:3px;height:auto}
+  .sh-burger{display:grid}
+}
+@media (max-width:520px){
+  .sh-in{padding:0 16px}
+  .sh-dl span{display:none}
+  .sh-dl{width:40px;padding:0;justify-content:center}
+  .sh-gh{display:none}
+}
+
+/* ---- подвал ---- */
+.sf{border-top:1px solid var(--border);margin-top:88px;background:linear-gradient(var(--bg),#090b0a)}
+.sf-in{max-width:var(--wrap);margin:0 auto;padding:44px 24px 40px;display:grid;grid-template-columns:1.4fr repeat(3,1fr);gap:32px}
+.sf-about{display:flex;flex-direction:column;gap:12px;color:var(--dim);font:14px/1.6 var(--sans);max-width:320px}
+.sf-about .sh-brand{margin-bottom:2px}
+.sf h4{margin:0 0 12px;font:600 13px/1 var(--sans);color:var(--silver);letter-spacing:.01em}
+.sf ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:9px}
+.sf a{color:var(--dim);text-decoration:none;font:14px/1.4 var(--sans);transition:color .15s}
+.sf a:hover{color:var(--fg)}
+.sf-bot{max-width:var(--wrap);margin:0 auto;padding:18px 24px 34px;border-top:1px solid var(--border);display:flex;flex-wrap:wrap;gap:8px 24px;justify-content:space-between;color:var(--faint);font:13px/1.5 var(--sans)}
+@media (max-width:760px){
+  .sf-in{grid-template-columns:1fr 1fr;padding:36px 16px 30px}
+  .sf-about{grid-column:1/-1}
+  .sf-bot{padding:16px 16px 30px}
+}
+
+/* «Следующий шаг» — карточка-переход между разделами портала */
+.next{display:flex;align-items:center;gap:16px;padding:20px 22px;border-radius:16px;border:1px solid var(--border2);background:var(--surf);color:var(--fg);text-decoration:none;transition:border-color .2s,background .2s}
+.next:hover{border-color:rgba(34,192,132,.5);background:var(--surf2)}
+.next small{display:block;color:var(--faint);font:500 12.5px/1 var(--sans);margin-bottom:7px}
+.next b{display:block;font:600 17px/1.3 var(--sans)}
+.next span.d{display:block;color:var(--dim);font:14px/1.5 var(--sans);margin-top:4px}
+.next svg.go{width:22px;height:22px;margin-left:auto;flex:none;fill:none;stroke:var(--em);stroke-width:2;stroke-linecap:round;stroke-linejoin:round;transition:transform .2s}
+.next:hover svg.go{transform:translateX(3px)}
+
+/* якоря не прячутся под липкой шапкой */
+[id]{scroll-margin-top:84px}
+
+/* старые страницы (scan, proxy) задают footer{} — подвал портала главнее */
+footer.sf{display:block;margin-top:88px;padding:0;gap:0;color:inherit;font-size:inherit;border-top:1px solid var(--border)}
+.disc{margin:56px 0 0;color:var(--faint);font-size:13px}

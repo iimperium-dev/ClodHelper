@@ -13,7 +13,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/MIT-1f2a25?style=for-the-badge&label=%D0%BB%D0%B8%D1%86%D0%B5%D0%BD%D0%B7%D0%B8%D1%8F&labelColor=0b0f0d" alt="Лицензия MIT" /></a>
 </p>
 
-[**Скачать**](https://github.com/iimperium-dev/ClodHelper/releases/latest) · [Возможности](#возможности) · [Как это работает](#как-это-работает) · [Установка](#установка) · [Вопросы](#частые-вопросы)
+[**Скачать**](https://github.com/iimperium-dev/ClodHelper/releases/latest) · [**Сайт и гайд**](https://iimperium-dev.github.io/ClodHelper/) · [Возможности](#возможности) · [Как это работает](#как-это-работает) · [Установка](#установка) · [Вопросы](#частые-вопросы)
 
 <br/>
 
@@ -146,8 +146,8 @@ Clod Helper ставит на компьютер маленький локаль
 
 Подойдёт любой HTTP или SOCKS5 прокси с логином и паролем в нужной вам стране.
 
-- **Купить готовый** — например, на [proxy6.net](https://proxy6.net/?r=692907) (реферальная ссылка автора: так вы поддерживаете проект).
-- **Поднять свой** на недорогом VPS: Ubuntu + [3proxy](https://github.com/3proxy/3proxy), логин с длинным паролем, нестандартный порт. Свой IP будет только у вас.
+- **Поднять свой — рекомендуем.** Сервер за 269 ₽ в месяц и одна команда в консоли, знать Linux не нужно: [пошаговая инструкция с видео](https://iimperium-dev.github.io/ClodHelper/proxy/). Адрес будет только у вас.
+- **Дальше** — [гайд от начала до конца](https://iimperium-dev.github.io/ClodHelper/guide/): Claude Desktop, отдельный браузер и Claude Code через мост.
 
 <br/>
 

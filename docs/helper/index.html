@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Clod Helper — прокси только для нужных программ</title>
+<meta name="description" content="Бесплатная программа для Windows и macOS: Claude Desktop, отдельный браузер и Claude Code — через ваш прокси, остальное напрямую. Защита от утечек, проверка IP и DNS, открытый код.">
+<meta property="og:title" content="Clod Helper — прокси только для нужных программ">
+<meta property="og:description" content="Claude Desktop, браузер и Claude Code — через ваш прокси, остальное напрямую. Бесплатно, с открытым кодом.">
+<meta property="og:type" content="website">
+<meta property="og:image" content="../proxy/media/video/poster.jpg">
+<meta name="theme-color" content="#0b0e0d">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7.5' fill='%23161c19'/%3E%3Cpath d='M 23.09 21.54 A 9 9 0 1 1 23.09 10.46' fill='none' stroke='%2322c084' stroke-width='3.1' stroke-linecap='round'/%3E%3Ccircle cx='25.2' cy='16' r='2.3' fill='%233ad897'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/site.css">
+<link rel="stylesheet" href="../assets/doc.css">
+<style>
+.hx{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:48px;align-items:center;padding:56px 0 0}
+.hx h1{font-size:clamp(36px,5vw,58px);line-height:1.04;letter-spacing:-.032em;font-weight:700;margin:0;text-wrap:balance}
+.hx h1 em{font-style:normal;color:var(--em)}
+.hx .lead{font-size:clamp(17px,2vw,19px);color:var(--silver);margin:18px 0 0;text-wrap:pretty}
+.cta{display:flex;flex-wrap:wrap;gap:12px;margin-top:30px}
+.btn{display:inline-flex;align-items:center;gap:10px;height:50px;padding:0 22px;border-radius:12px;font:600 15.5px/1 var(--sans);text-decoration:none!important;transition:background .15s,border-color .15s}
+.btn.pri{background:var(--em);color:#04120b;box-shadow:0 14px 40px -14px rgba(34,192,132,.7)}
+.btn.pri:hover{background:var(--emB)}
+.btn.sec{border:1px solid var(--border2);background:var(--surf);color:var(--fg)}
+.btn.sec:hover{background:var(--surf2)}
+.plat{display:flex;gap:18px;margin-top:20px;color:var(--dim);font-size:14px}
+.plat span{display:inline-flex;align-items:center;gap:7px}
+.plat svg{width:16px;height:16px;color:var(--em)}
+.win{position:relative;border-radius:16px;border:1px solid var(--border2);background:#0a0c0b;overflow:hidden;box-shadow:0 50px 120px -40px rgba(0,0,0,.9),0 0 0 1px rgba(255,255,255,.02)}
+.win::before{content:"";position:absolute;inset:-40% -20% auto auto;width:70%;height:80%;background:radial-gradient(closest-side,rgba(34,192,132,.18),transparent);pointer-events:none}
+.win img{display:block;width:100%;height:auto;position:relative}
+@media (max-width:900px){.hx{grid-template-columns:1fr;gap:36px;padding-top:40px}}
+
+.feat{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:36px}
+.f{padding:20px;border-radius:16px;border:1px solid var(--border);background:var(--surf)}
+.f .ic{width:40px;height:40px;border-radius:11px;display:grid;place-items:center;background:var(--bg);border:1px solid var(--border2);color:var(--em);margin-bottom:14px}
+.f b{display:block;font-size:16px;line-height:1.3;margin-bottom:6px}
+.f span{color:var(--dim);font-size:14.5px;line-height:1.55}
+@media (max-width:1000px){.feat{grid-template-columns:1fr 1fr}}
+@media (max-width:560px){.feat{grid-template-columns:1fr}}
+
+.h2{font-size:clamp(26px,3.4vw,36px);line-height:1.12;letter-spacing:-.025em;font-weight:650;margin:0;text-wrap:balance}
+.kick{color:var(--em);font:600 13px/1 var(--sans);margin-bottom:14px}
+.sub{color:var(--dim);font-size:17px;margin:12px 0 0;max-width:640px}
+.blk{padding-top:96px}
+
+/* тур по разделам */
+.tour{display:grid;grid-template-columns:280px minmax(0,1fr);gap:28px;margin-top:36px;align-items:start}
+.tabs{display:grid;gap:6px}
+.tab{display:flex;gap:14px;align-items:flex-start;text-align:left;padding:14px 16px;border-radius:14px;border:1px solid transparent;background:transparent;color:var(--dim);cursor:pointer;font:inherit;transition:background .2s,border-color .2s,color .2s}
+.tab:hover{color:var(--fg);background:var(--surf)}
+.tab[aria-selected="true"]{color:var(--fg);background:var(--surf);border-color:var(--border2)}
+.tab .ic{flex:none;width:34px;height:34px;border-radius:9px;display:grid;place-items:center;background:var(--bg);border:1px solid var(--border2);color:var(--dim)}
+.tab[aria-selected="true"] .ic{color:var(--em);border-color:rgba(34,192,132,.4)}
+.tab b{display:block;font-size:15.5px;font-weight:600;line-height:1.3}
+.tab span.d{display:block;font-size:13.5px;line-height:1.5;color:var(--faint);margin-top:3px}
+.tab[aria-selected="true"] span.d{color:var(--dim)}
+.pane{border-radius:16px;border:1px solid var(--border2);background:#0a0c0b;overflow:hidden}
+.pane img{display:block;width:100%;height:auto}
+.pane p{margin:0;padding:14px 18px;border-top:1px solid var(--border);color:var(--silver);font-size:15px}
+@media (max-width:900px){.tour{grid-template-columns:1fr}.tabs{grid-template-columns:repeat(5,minmax(0,1fr));gap:6px}.tab{flex-direction:column;align-items:center;text-align:center;padding:10px 6px;gap:6px}.tab span.d{display:none}.tab b{font-size:13px}}
+@media (max-width:480px){.tab b{font-size:11.5px}.tab .ic{width:30px;height:30px}}
+
+/* установка */
+.inst{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:32px}
+.os{padding:24px;border-radius:18px;border:1px solid var(--border);background:var(--surf)}
+.os h3{display:flex;align-items:center;gap:10px;margin:0 0 6px;font-size:19px}
+.os h3 svg{width:22px;height:22px;color:var(--em)}
+.os .req{color:var(--faint);font-size:14px;margin:0 0 14px}
+.os code{font-size:13px}
+@media (max-width:760px){.inst{grid-template-columns:1fr}}
+.dl{display:flex;flex-wrap:wrap;gap:10px;margin-top:20px}
+.flow{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:32px;counter-reset:fl}
+.flow div{position:relative;padding:20px 20px 20px 62px;border-radius:16px;border:1px solid var(--border);background:var(--surf);color:var(--silver);font-size:15px;line-height:1.55;counter-increment:fl}
+.flow div::before{content:counter(fl);position:absolute;left:18px;top:18px;width:30px;height:30px;border-radius:50%;display:grid;place-items:center;background:rgba(34,192,132,.13);border:1px solid rgba(34,192,132,.35);color:var(--em);font:600 14px/1 var(--sans)}
+.flow b{display:block;color:var(--fg);margin-bottom:4px}
+@media (max-width:860px){.flow{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<!--sh-->
+<header class="sh">
+  <div class="sh-in">
+    <a class="sh-brand" href="../"><svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7.5" fill="#161c19"/><rect x=".5" y=".5" width="31" height="31" rx="7" fill="none" stroke="#fff" stroke-opacity=".06"/><path d="M 23.09 21.54 A 9 9 0 1 1 23.09 10.46" fill="none" stroke="#22c084" stroke-width="3.1" stroke-linecap="round"/><circle cx="25.2" cy="16" r="2.3" fill="#3ad897"/></svg>Clod Helper</a>
+    <nav class="sh-nav" id="sh-nav" aria-label="Разделы">
+      <a class="sh-a" href="../helper/" aria-current="page">Clod Helper</a>
+      <a class="sh-a" href="../guide/">Гайд <span class="tag">старт</span></a>
+      <a class="sh-a" href="../proxy/">Свой прокси</a>
+      <a class="sh-a" href="../scan/">Clod Scan</a>
+      <a class="sh-a" href="../faq/">Вопросы</a>
+    </nav>
+    <div class="sh-end">
+      <a class="sh-gh" href="https://github.com/iimperium-dev/ClodHelper" aria-label="Исходный код на GitHub"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg></a>
+      <a class="sh-dl" href="https://github.com/iimperium-dev/ClodHelper/releases/latest"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg><span>Скачать</span></a>
+      <button class="sh-burger" type="button" aria-label="Меню" aria-controls="sh-nav" aria-expanded="false"><svg class="m" viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/></svg><svg class="x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+  </div>
+</header>
+<!--/sh-->
+
+<main class="w">
+  <div class="hx">
+    <div>
+      <div class="crumbs"><a href="../">Главная</a><svg class="i" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>Clod Helper</div>
+      <h1>Прокси только для <em>нужных</em> программ</h1>
+      <p class="lead">VPN гонит через себя весь компьютер. Clod Helper — только то, что вы выбрали: Claude Desktop, отдельный браузер, Claude Code. Остальное работает напрямую, как обычно.</p>
+      <div class="cta">
+        <a class="btn pri" href="https://github.com/iimperium-dev/ClodHelper/releases/latest"><svg class="i" viewBox="0 0 24 24"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg>Скачать бесплатно</a>
+        <a class="btn sec" href="../guide/">Как начать →</a>
+      </div>
+      <div class="plat">
+        <span><svg class="i" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Windows 10 / 11</span>
+        <span><svg class="i" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>macOS 11+</span>
+        <span><svg class="i" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Открытый код</span>
+      </div>
+    </div>
+    <div class="win"><img src="../assets/img/overview-check.webp" alt="Главный экран Clod Helper: мост активен, проверка «Всё чисто»" width="1010" height="520"></div>
+  </div>
+
+  <section class="blk" id="features">
+    <div class="kick">Возможности</div>
+    <h2 class="h2">Всё, чтобы прокси просто работал</h2>
+    <div class="feat">
+      <div class="f"><span class="ic"><svg class="i" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg></span><b>Отдельные приложения</b><span>Добавили программу — она ходит через прокси. Другие не трогаются.</span></div>
+      <div class="f"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg></span><b>Защита от утечек</b><span>Упал прокси — Claude останется без сети, а не уйдёт с вашего настоящего IP.</span></div>
+      <div class="f"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg></span><b>Честная проверка</b><span>Внешний IP, утечка DNS и каждый прокси — настоящим запросом.</span></div>
+      <div class="f"><span class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg></span><b>Браузер через мост</b><span>Свой браузер для Claude — весь через прокси и с защитой WebRTC.</span></div>
+      <div class="f"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></svg></span><b>Claude Code и VS Code</b><span>Терминал через прокси одним выбором: только AI или всё.</span></div>
+      <div class="f"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg></span><b>Закрепление IP</b><span>Закрепите программу за прокси — адрес не будет меняться.</span></div>
+      <div class="f"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg></span><b>Резервные прокси</b><span>До 5 прокси и резервы к каждому — для тех, кому нужно.</span></div>
+      <div class="f"><span class="ic"><svg class="i" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span><b>Подписанные обновления</b><span>Обновление в один клик. Подменённый файл программа не поставит.</span></div>
+    </div>
+  </section>
+
+  <section class="blk" id="tour">
+    <div class="kick">Внутри программы</div>
+    <h2 class="h2">Главные разделы — коротко</h2>
+    <div class="tour">
+      <div class="tabs" role="tablist" aria-label="Разделы Clod Helper">
+        <button class="tab" role="tab" aria-selected="true" data-img="overview-check" data-cap="«Обзор»: работает ли мост, через какой адрес вы выходите, и проверка IP, DNS и утечек одной кнопкой."><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span><span><b>Обзор</b><span class="d">Статус и проверка</span></span></button>
+        <button class="tab" role="tab" aria-selected="false" data-img="apps" data-cap="«Приложения»: Claude Desktop, ваш браузер для Claude и другие программы. Зелёное — идёт через мост; жёлтое — программа сама подскажет, что нажать."><span class="ic"><svg class="i" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/></svg></span><span><b>Приложения</b><span class="d">Что идёт через прокси</span></span></button>
+        <button class="tab" role="tab" aria-selected="false" data-img="proxies" data-cap="«Прокси»: ваш сервер с флагом страны и пингом. Можно добавить запасные."><span class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg></span><span><b>Прокси</b><span class="d">Ваши серверы</span></span></button>
+        <button class="tab" role="tab" aria-selected="false" data-img="sites" data-cap="«Сайты»: отдельные сайты через прокси в обычных браузерах. AI-сервисы всегда идут через прокси."><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><path d="M8 12h8"/></svg></span><span><b>Сайты</b><span class="d">Отдельные сайты</span></span></button>
+        <button class="tab" role="tab" aria-selected="false" data-img="tools" data-cap="«Инструменты»: архив локальных чатов Claude одним ZIP-файлом и очистка следов входа в Claude Desktop при смене аккаунта."><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></span><span><b>Инструменты</b><span class="d">Архив и очистка</span></span></button>
+      </div>
+      <div class="pane"><img id="tour-img" src="../assets/img/overview-check.webp" alt="Раздел Clod Helper" width="1010" height="520"><p id="tour-cap">«Обзор»: работает ли мост, через какой адрес вы выходите, и проверка IP, DNS и утечек одной кнопкой.</p></div>
+    </div>
+  </section>
+
+  <section class="blk" id="how">
+    <div class="kick">Как это работает</div>
+    <h2 class="h2">Маленький мост на вашем компьютере</h2>
+    <p class="sub">Clod Helper ставит локальный мост. Выбранные программы отправляют трафик в него, а мост — на ваш прокси, с логином и паролем, без настройки в каждой программе.</p>
+    <div class="flow">
+      <div><b>Вы вставляете строку прокси</b>Любой формат: программа сама разберёт адрес, порт, логин и пароль.</div>
+      <div><b>Мост запускается сам</b>Вместе с Windows или macOS, следит за прокси и переключается на резерв.</div>
+      <div><b>Выбранное — через прокси</b>Claude Desktop, браузер, терминал. Остальные программы — напрямую.</div>
+    </div>
+  </section>
+
+  <section class="blk" id="install">
+    <div class="kick">Установка</div>
+    <h2 class="h2">Две минуты — и готово</h2>
+    <div class="inst">
+      <div class="os">
+        <h3><svg class="i" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 12h18"/><path d="M12 3v18"/></svg>Windows</h3>
+        <p class="req">Windows 10 или 11 · файл <code>Clod.Helper_…_x64-setup.exe</code></p>
+        <div class="call"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg><p><b>«Система защитила ваш компьютер»?</b> Нажмите <span class="ui">Подробнее</span> → <span class="ui">Выполнить в любом случае</span>. Если файл не запускается — правой кнопкой по нему → <span class="ui">Свойства</span> → галочка <span class="ui">Разблокировать</span> → <span class="ui">ОК</span>.</p></div>
+      </div>
+      <div class="os">
+        <h3><svg class="i" viewBox="0 0 24 24"><path d="M12 20.94c1.5 0 2.75 1.06 4 1.06 3 0 6-8 6-12.22A4.91 4.91 0 0 0 17 5c-2.22 0-4 1.44-5 2-1-.56-2.78-2-5-2a4.9 4.9 0 0 0-5 4.78C2 14 5 22 8 22c1.25 0 2.5-1.06 4-1.06Z"/><path d="M10 2c1 .5 2 2 2 5"/></svg>macOS</h3>
+        <p class="req">macOS 11 и новее, Apple Silicon и Intel · файл <code>Clod.Helper_…_universal.dmg</code></p>
+        <div class="call"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg><p><b>macOS не открывает программу?</b> Правой кнопкой по Clod Helper в «Программах» → <span class="ui">Открыть</span> → <span class="ui">Открыть</span>. На macOS 15 и новее: <span class="ui">Системные настройки</span> → <span class="ui">Конфиденциальность и безопасность</span> → «Всё равно открыть».</p></div>
+      </div>
+    </div>
+    <div class="dl">
+      <a class="btn pri" href="https://github.com/iimperium-dev/ClodHelper/releases/latest"><svg class="i" viewBox="0 0 24 24"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg>Скачать последнюю версию</a>
+      <a class="btn sec" href="https://github.com/iimperium-dev/ClodHelper">Исходный код на GitHub</a>
+    </div>
+    <a class="jump" href="../guide/" style="margin-top:28px"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg></span><span><small>Что дальше</small><b>Гайд: настроить Claude Desktop, браузер и Claude Code</b><span class="d">По шагам, со скриншотами — около 10 минут после установки</span></span><svg class="i go" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></a>
+  </section>
+</main>
+
+<!--sf-->
+<footer class="sf">
+  <div class="sf-in">
+    <div class="sf-about">
+      <a class="sh-brand" href="../"><svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7.5" fill="#161c19"/><rect x=".5" y=".5" width="31" height="31" rx="7" fill="none" stroke="#fff" stroke-opacity=".06"/><path d="M 23.09 21.54 A 9 9 0 1 1 23.09 10.46" fill="none" stroke="#22c084" stroke-width="3.1" stroke-linecap="round"/><circle cx="25.2" cy="16" r="2.3" fill="#3ad897"/></svg>Clod Helper</a>
+      <span>Бесплатные инструменты и понятные инструкции, чтобы спокойно работать с Claude: свой прокси, мост для нужных программ, проверка аккаунта.</span>
+    </div>
+    <div><h4>Инструменты</h4><ul><li><a href="../helper/">Clod Helper</a></li><li><a href="../scan/">Clod Scan — проверка аккаунта</a></li><li><a href="https://github.com/iimperium-dev/ClodHelper/releases/latest">Скачать последнюю версию</a></li></ul></div>
+    <div><h4>Инструкции</h4><ul><li><a href="../guide/">Гайд: от начала до конца</a></li><li><a href="../proxy/">Свой прокси за 15 минут</a></li><li><a href="../faq/">Частые вопросы</a></li></ul></div>
+    <div><h4>Проект</h4><ul><li><a href="https://github.com/iimperium-dev/ClodHelper">Открытый код на GitHub</a></li><li><a href="https://github.com/iimperium-dev/ClodHelper/releases">Все версии и изменения</a></li><li><a href="https://github.com/iimperium-dev/ClodHelper/issues">Сообщить об ошибке</a></li></ul></div>
+  </div>
+  <div class="sf-bot"><span>Неофициальный проект, не связан с Anthropic. Claude — товарный знак Anthropic.</span><span>Clod Helper · MIT</span></div>
+</footer>
+<!--/sf-->
+<script src="../assets/site.js" defer></script>
+<script>
+(() => {
+  const tabs = [...document.querySelectorAll(".tab")];
+  const img = document.getElementById("tour-img"), cap = document.getElementById("tour-cap");
+  const pick = (t) => {
+    tabs.forEach((x) => x.setAttribute("aria-selected", String(x === t)));
+    img.src = "../assets/img/" + t.dataset.img + ".webp";
+    cap.textContent = t.dataset.cap;
+  };
+  tabs.forEach((t, i) => {
+    t.addEventListener("click", () => pick(t));
+    t.addEventListener("keydown", (e) => {
+      const d = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
+      if (d) { e.preventDefault(); const n = tabs[(i + d + tabs.length) % tabs.length]; n.focus(); pick(n); }
+    });
+  });
+  // заранее подгрузить картинки разделов
+  addEventListener("load", () => tabs.forEach((t) => { const i = new Image(); i.src = "../assets/img/" + t.dataset.img + ".webp"; }));
+})();
+</script>
+</body>
+</html>
