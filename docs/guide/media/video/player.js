@@ -216,6 +216,36 @@
   });
   video.addEventListener("dblclick", (e) => { if (e.pointerType !== "touch") fs(); });
 
+  // ---- кликабельные места в кадре ----
+  // s/e — секунды ролика, x/y/w/h — доли кадра 1920×1080 (сняты с готового mp4).
+  // Ссылка открывается в новой вкладке, ролик встаёт на паузу.
+  const SPOTS = [
+    { s: 15.7, e: 21.8, x: 0.224, y: 0.435, w: 0.548, h: 0.272, href: "../../proxy/#video", label: "Открыть видео «Свой прокси» в новой вкладке" },
+  ];
+  const spots = SPOTS.map((sp) => {
+    const a = document.createElement("a");
+    a.className = "vp-spot"; a.href = sp.href; a.target = "_blank"; a.rel = "noopener";
+    a.setAttribute("aria-label", sp.label); a.title = sp.label; a.tabIndex = -1;
+    a.innerHTML = '<span>Открыть<svg viewBox="0 0 24 24"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></span>';
+    a.addEventListener("click", () => video.pause());
+    video.after(a);
+    return { sp, a };
+  });
+  const placeSpots = () => {
+    const W = stage.clientWidth, H = stage.clientHeight;
+    const vw = Math.min(W, H * 16 / 9), vh = vw * 9 / 16, ox = (W - vw) / 2, oy = (H - vh) / 2;
+    spots.forEach(({ sp, a }) => Object.assign(a.style, { left: ox + sp.x * vw + "px", top: oy + sp.y * vh + "px", width: sp.w * vw + "px", height: sp.h * vh + "px" }));
+  };
+  const showSpots = () => {
+    const t = video.currentTime;
+    spots.forEach(({ sp, a }) => { const on = root.classList.contains("started") && t >= sp.s && t < sp.e; a.classList.toggle("on", on); a.tabIndex = on ? 0 : -1; });
+  };
+  if (spots.length) {
+    placeSpots();
+    if (window.ResizeObserver) new ResizeObserver(placeSpots).observe(stage); else addEventListener("resize", placeSpots);
+    ["timeupdate", "seeked", "play", "pause"].forEach((ev) => video.addEventListener(ev, showSpots));
+  }
+
   // громкость
   const applyVol = () => {
     vol.value = video.muted ? 0 : video.volume;

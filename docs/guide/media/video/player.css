@@ -33,6 +33,15 @@
 @keyframes vflash{0%{opacity:.95;transform:scale(.8)}100%{opacity:0;transform:scale(1.35)}}
 .vp-skip{position:absolute;top:50%;transform:translateY(-50%);padding:10px 16px;border-radius:99px;background:rgba(0,0,0,.55);color:#fff;font:500 14px var(--mono);opacity:0;pointer-events:none}
 .vp-skip.l{left:8%}.vp-skip.r{right:8%}
+/* кликабельное место в кадре (карточка другого ролика и т. п.) */
+.vp-spot{position:absolute;border-radius:1.4%/2.4%;cursor:pointer;opacity:0;visibility:hidden;transition:opacity .25s,visibility .25s,box-shadow .2s;-webkit-tap-highlight-color:transparent}
+.vp-spot.on{opacity:1;visibility:visible}
+.vp-spot:hover,.vp-spot:focus-visible{box-shadow:0 0 0 2px var(--emB),0 0 0 7px rgba(58,216,151,.18)}
+.vp-spot span{position:absolute;right:10px;top:10px;display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:99px;background:var(--em);color:#04120b;font:600 13px/1 var(--sans);box-shadow:0 6px 18px rgba(0,0,0,.45);transition:transform .2s}
+.vp-spot:hover span{transform:scale(1.05)}
+.vp-spot svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.vp.idle .vp-stage .vp-spot{cursor:pointer}
+@media (max-width:600px){.vp-spot span{right:5px;top:5px;padding:3px 7px;font-size:11px;gap:4px}.vp-spot svg{width:11px;height:11px}}
 .vp-skip.go{animation:vskip .7s ease-out}
 @keyframes vskip{0%{opacity:1}60%{opacity:1}100%{opacity:0}}
 
