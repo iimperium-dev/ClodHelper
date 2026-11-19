@@ -44,6 +44,24 @@ step() { printf '[%s/%s] %s\n' "$1" "$STEPS" "$2"; log "=== step $1: $2"; }
 # Run a command, send all its output to the log file.
 run() { log "+ $*"; "$@" </dev/null >>"$LOG" 2>&1; }
 
+APT_OPTS="-o DPkg::Lock::Timeout=600"
+# A previous apt/dpkg run was cut off (closed console, Ctrl+C, reboot during the
+# first automatic update) -> apt refuses everything with "dpkg was interrupted".
+# Finish it. dpkg has no lock timeout of its own, so wait while another apt holds the lock.
+apt_repair() {
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    if run dpkg --configure -a; then
+      # shellcheck disable=SC2086
+      run apt-get $APT_OPTS -f install -y || true
+      return 0
+    fi
+    [ "$i" = 1 ] && say "    waiting for another apt/dpkg process to finish..."
+    sleep 10
+  done
+  warn "dpkg --configure -a failed, see $LOG"
+}
+
 usage() {
   say "Usage: curl -fsSL https://iimperium-dev.github.io/ClodHelper/proxy/install.sh | bash -s -- [LOGIN] [PASSWORD] [HTTP_PORT] [SOCKS_PORT]"
   say "All four values are optional. Missing ones are generated (or reused from the last run)."
@@ -222,23 +240,29 @@ main() {
     dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q "install ok installed" || missing="$missing $pkg"
   done
   if [ -n "$missing" ]; then
+    apt_repair
     ok=""
     for i in 1 2 3 4 5; do
-      if run apt-get -o DPkg::Lock::Timeout=600 update; then ok=1; break; fi
+      # shellcheck disable=SC2086
+      if run apt-get $APT_OPTS update; then ok=1; break; fi
       say "    apt is busy or a mirror failed, retrying in 20 s ($i/5)..."
+      # some servers have broken IPv6: mirrors answer only over IPv4
+      APT_OPTS="-o DPkg::Lock::Timeout=600 -o Acquire::ForceIPv4=true"
       sleep 20
     done
     [ -n "$ok" ] || warn "apt-get update failed, trying to install anyway."
     ok=""
     for i in 1 2 3; do
       # shellcheck disable=SC2086
-      if run apt-get -o DPkg::Lock::Timeout=600 -o Dpkg::Options::=--force-confdef \
+      if run apt-get $APT_OPTS -o Dpkg::Options::=--force-confdef \
         -o Dpkg::Options::=--force-confold install -y $missing; then
         ok=1; break
       fi
       say "    install failed, retrying in 30 s ($i/3)..."
       sleep 30
-      run apt-get -o DPkg::Lock::Timeout=600 update
+      apt_repair
+      # shellcheck disable=SC2086
+      run apt-get $APT_OPTS update
     done
     [ -n "$ok" ] || die_log "Could not install packages:$missing"
   else
