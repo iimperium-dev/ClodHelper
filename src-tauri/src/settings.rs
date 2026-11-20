@@ -290,6 +290,8 @@ pub struct PrivacyState {
     pub offer: bool,
     /// Переключатели или строка про отчёты уже были показаны.
     pub notice_seen: bool,
+    /// Установка с версии до статистики: для неё плашка говорит «С этой версии».
+    pub legacy: bool,
 }
 
 pub fn privacy_state(s: &Settings) -> PrivacyState {
@@ -300,6 +302,7 @@ pub fn privacy_state(s: &Settings) -> PrivacyState {
         usage_stats: usage_stats_on(s),
         offer: a.offer,
         notice_seen: s.privacy_notice_seen,
+        legacy: s.telemetry.legacy,
     }
 }
 

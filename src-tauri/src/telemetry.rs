@@ -32,6 +32,8 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const REPORT_TIMEOUT: Duration = Duration::from_secs(20);
 const REPORT_FAIL: &str = "Не получилось отправить. Проверьте интернет и попробуйте ещё раз";
 const REPORT_REFUSED: &str = "Сервер сейчас не принимает отчёты. Попробуйте позже";
+/// 429: лимит на этот адрес на сегодня. Интерфейс узнаёт его по этому тексту.
+const REPORT_LIMIT: &str = "Лимит отчётов на сегодня исчерпан. Попробуйте завтра";
 const LOC_MAX_CHARS: usize = 128;
 /// Пинг дня уходит, когда монитор отметил трафик, а если трафика не было -
 /// через столько работы программы.
@@ -78,8 +80,11 @@ fn client(proxy: Option<&str>, timeout: Duration) -> Result<reqwest::Client, Str
         .user_agent(concat!("ClodHelper/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(timeout);
-    if let Some(p) = proxy {
-        b = b.proxy(reqwest::Proxy::all(p).map_err(|e| e.to_string())?);
+    match proxy {
+        Some(p) => b = b.proxy(reqwest::Proxy::all(p).map_err(|e| e.to_string())?),
+        // Прямая ветка действительно прямая: без HTTPS_PROXY из окружения
+        // (он ведёт в мост, и «напрямую» перестало бы быть прямым).
+        None => b = b.no_proxy(),
     }
     b.build().map_err(|e| e.to_string())
 }
@@ -137,9 +142,8 @@ enum Block {
 static BLOCKS: Mutex<Vec<(String, Block)>> = Mutex::new(Vec::new());
 
 fn is_blocked(path: &str, day: &str) -> bool {
-    let Ok(mut g) = BLOCKS.lock() else { return false };
-    g.retain(|(_, b)| !matches!(b, Block::Day(d) if d != day));
-    g.iter().any(|(p, _)| p == path)
+    let Ok(g) = BLOCKS.lock() else { return false };
+    g.iter().any(|(p, b)| p == path && matches!(b, Block::Run) || p == path && matches!(b, Block::Day(d) if d == day))
 }
 
 fn note_status(path: &str, status: u16, day: &str) {
@@ -530,9 +534,14 @@ struct CrashReport {
     loc: String,
 }
 
-/// Место для сервера: очищено и не длиннее 128 знаков.
+/// Место для сервера: очищено, только [A-Za-z0-9_./:<>-] (остальное - «_»),
+/// не длиннее 128 знаков. Пустое не шлётся.
 fn clean_loc(loc: &str) -> String {
-    scrub(loc.trim()).chars().take(LOC_MAX_CHARS).collect()
+    scrub(loc.trim())
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || "_./:<>-".contains(c) { c } else { '_' })
+        .take(LOC_MAX_CHARS)
+        .collect()
 }
 
 fn build_crash(kind: &str, msg: &str, stack: &str, sig: String, loc: &str) -> CrashReport {
@@ -576,14 +585,21 @@ fn first_time(sig: &str) -> bool {
 
 /// Отправить сбой в фоне (мост, обновление, интерфейс).
 fn spawn_crash(kind: &str, msg: &str, stack: &str, place: &str, op: &str) {
-    if !reports_on() || base().is_none() {
+    if base().is_none() {
         return;
     }
-    let c = build_crash(kind, msg, stack, sig(kind, place), op);
-    if !first_time(&c.sig) {
-        return;
-    }
+    let (kind, msg, stack, place, op) = (kind.to_string(), msg.to_string(), stack.to_string(), place.to_string(), op.to_string());
     tauri::async_runtime::spawn(async move {
+        // Чтение настроек и очистка текста - не в потоке async-рантайма.
+        let built = tokio::task::spawn_blocking(move || {
+            if !reports_on() {
+                return None;
+            }
+            let c = build_crash(&kind, &msg, &stack, sig(&kind, &place), &op);
+            first_time(&c.sig).then_some(c)
+        })
+        .await;
+        let Ok(Some(c)) = built else { return };
         if let Err(e) = send_crash(&c).await {
             tracing::info!("отчёт о сбое: {e}");
         }
@@ -758,6 +774,15 @@ fn new_nonce() -> String {
     sha2::Digest::finalize(h).iter().take(16).map(|b| format!("{b:02x}")).collect()
 }
 
+/// Номер отчёта от интерфейса: 16-64 знака [A-Za-z0-9_-]. Иначе свой.
+/// Интерфейс создаёт номер один раз на окно, и «Повторить» шлёт тот же.
+fn pick_nonce(from_ui: Option<String>) -> String {
+    match from_ui {
+        Some(n) if (16..=64).contains(&n.len()) && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') => n,
+        _ => new_nonce(),
+    }
+}
+
 /// Подготовка тела: на сервер уходит урезанная диагностика (без сайтов,
 /// меток, корпоративных прокси и чужих доменов), человек же видит в
 /// программе полный текст. Чтение файлов - в блокирующей задаче.
@@ -772,8 +797,8 @@ async fn prepare_report(text: String, contact: Option<String>, nonce: String) ->
 
 /// Тело ручного отчёта в том виде, в каком оно уйдёт на сервер (для
 /// «Посмотреть, что уйдёт»). Номер отчёта показан тот же формат, что и в отправке.
-pub async fn report_preview(text: String, contact: Option<String>) -> String {
-    match prepare_report(text, contact, new_nonce()).await {
+pub async fn report_preview(text: String, contact: Option<String>, nonce: Option<String>) -> String {
+    match prepare_report(text, contact, pick_nonce(nonce)).await {
         Ok(body) => serde_json::to_string_pretty(&body).unwrap_or_default(),
         Err(e) => e,
     }
@@ -795,7 +820,8 @@ async fn post_report_to(base: &str, body: &Value, timeout: Duration, bridge: &st
     })?;
     match status {
         200..=299 => Ok(()),
-        429 | 503 => Err(REPORT_REFUSED.to_string()),
+        429 => Err(REPORT_LIMIT.to_string()),
+        503 => Err(REPORT_REFUSED.to_string()),
         s => {
             tracing::info!("отчёт: ответ {s}");
             Err(REPORT_FAIL.to_string())
@@ -805,8 +831,8 @@ async fn post_report_to(base: &str, body: &Value, timeout: Duration, bridge: &st
 
 /// Отчёт, отправленный человеком: текст, состояние программы и контакт.
 /// Явное действие: согласие (privacy_notice_seen) на него не влияет.
-pub async fn send_report(text: String, contact: Option<String>) -> Result<(), String> {
-    let body = prepare_report(text, contact, new_nonce()).await?;
+pub async fn send_report(text: String, contact: Option<String>, nonce: Option<String>) -> Result<(), String> {
+    let body = prepare_report(text, contact, pick_nonce(nonce)).await?;
     let base = base().ok_or_else(|| REPORT_FAIL.to_string())?;
     post_report_to(&base, &body, REPORT_TIMEOUT, &bridge_proxy()).await
 }
@@ -1224,7 +1250,6 @@ mod tests {
         assert!(!is_blocked("/v1/other-kind", &today), "другой вид запроса не заблокирован");
         // Наступили следующие сутки: блок снят.
         assert!(!is_blocked("/v1/t429", "2099-01-01"));
-        assert!(!is_blocked("/v1/t429", &today), "снятый блок не возвращается");
     }
 
     #[tokio::test]
@@ -1251,7 +1276,8 @@ mod tests {
             let base = format!("http://127.0.0.1:{port}");
             let body = build_report_body("t", "d", None, NONCE);
             let r = post_report_to(&base, &body, Duration::from_secs(5), &format!("http://127.0.0.1:{bp}")).await;
-            assert_eq!(r, Err(REPORT_REFUSED.to_string()), "{st}");
+            let want = if st.starts_with("429") { REPORT_LIMIT } else { REPORT_REFUSED };
+            assert_eq!(r, Err(want.to_string()), "{st}");
             assert_eq!(log.lock().unwrap().len(), 1);
             assert_eq!(blog.lock().unwrap().len(), 0, "через мост на {st} не повторяем");
         }
@@ -1280,6 +1306,27 @@ mod tests {
         assert_eq!((d.len(), b.len()), (1, 1), "ровно два вызова: напрямую и через мост");
         assert_eq!(nonce_of(&d[0]), nonce);
         assert_eq!(nonce_of(&b[0]), nonce, "тот же nonce");
+    }
+
+    #[test]
+    fn loc_is_restricted_to_safe_chars() {
+        assert_eq!(clean_loc("$e"), "_e");
+        assert_eq!(clean_loc("global code"), "global_code");
+        assert_eq!(clean_loc("src/hosts.rs"), "src/hosts.rs");
+        assert_eq!(clean_loc("<anonymous>"), "<anonymous>");
+        assert_eq!(clean_loc("Функция"), "_______");
+        assert_eq!(clean_loc(&"a".repeat(300)).len(), 128);
+        assert_eq!(clean_loc("   "), "");
+    }
+
+    #[test]
+    fn nonce_from_ui_is_checked() {
+        let ok = "0123456789abcdef0123456789abcdef".to_string();
+        assert_eq!(pick_nonce(Some(ok.clone())), ok);
+        assert_eq!(pick_nonce(Some("short".into())).len(), 32);
+        assert_eq!(pick_nonce(Some("x".repeat(65))).len(), 32);
+        assert_ne!(pick_nonce(Some("bad nonce with spaces!!".into())), "bad nonce with spaces!!");
+        assert_eq!(pick_nonce(None).len(), 32);
     }
 
     #[test]

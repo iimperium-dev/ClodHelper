@@ -22,7 +22,7 @@ const PHASES: { id: string; label: string }[] = [
   { id: "presets", label: "Готовлю профили приложений" },
   // macOS: Claude просит пароль Mac один раз. Telegram мастер не трогает —
   // он подключается по выбору в «Приложениях».
-  ...(isMac ? [{ id: "claude", label: "Подключаю Claude Desktop — macOS спросит пароль" }] : []),
+  ...(isMac ? [{ id: "claude", label: "Подключаю Claude Desktop - macOS спросит пароль" }] : []),
   { id: "test", label: "Проверяю соединение настоящим запросом" },
 ];
 
@@ -83,7 +83,7 @@ export function StepInstall({ proxyUrl, onBack, onDone }: Props) {
       <WizardTitle
         sub={
           error
-            ? "Причина — ниже. Проверьте прокси или просто повторите."
+            ? "Причина - ниже. Проверьте прокси или просто повторите."
             : "Обычно меньше минуты. Ничего нажимать не нужно."
         }
       >
@@ -153,12 +153,12 @@ export function StepInstall({ proxyUrl, onBack, onDone }: Props) {
                 >
                   {label}
                   <span className="sr-only">
-                    {st === "run" ? " — идёт" : st === "ok" ? " — готово" : st === "err" ? " — ошибка" : ""}
+                    {st === "run" ? " - идёт" : st === "ok" ? " - готово" : st === "err" ? " - ошибка" : ""}
                   </span>
                 </span>
                 {softErr && (
                   <span className="mt-0.5 block text-[12px] text-vb-warn">
-                    Не включилось — можно позже: «Приложения» → Claude Desktop → шестерёнка
+                    Не включилось, можно позже: «Приложения», Claude Desktop, шестерёнка
                   </span>
                 )}
               </span>

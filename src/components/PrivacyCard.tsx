@@ -82,11 +82,17 @@ export function PrivacyCard() {
   const [reportOpen, setReportOpen] = useState(false);
   const reportBtn = useRef<HTMLButtonElement>(null);
 
-  useEffect(() => {
+  // Не прочиталось - не рисуем переключатели с выдуманными значениями.
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const load = () => {
+    setLoadError(null);
+    setState(null);
     void privacyGet()
       .then(setState)
-      .catch(() => setState({ auto_update: false, crash_reports: true, usage_stats: true, offer: false, notice_seen: true }));
-  }, []);
+      .catch((e) => setLoadError(typeof e === "string" && e ? e : "Не получилось прочитать настройки"));
+  };
+  useEffect(load, []);
 
   const change = (key: PrivacyKey, on: boolean) => {
     setState((s) => (s ? { ...s, [key]: on } : s));
@@ -100,12 +106,21 @@ export function PrivacyCard() {
       <h2 id="privacy-card-title" className="mb-3 text-[14px] font-medium text-vb-fg">
         Обновления и отчёты
       </h2>
-      {state === null ? (
-        <Loader2 className="h-4 w-4 animate-spin text-vb-silver-dim" aria-hidden />
+      {loadError !== null ? (
+        <div role="alert" className="flex items-center gap-3">
+          <p className="min-w-0 flex-1 text-[12px] leading-snug text-vb-loss">{loadError}</p>
+          <Button variant="secondary" size="sm" onClick={load}>
+            Повторить
+          </Button>
+        </div>
+      ) : state === null ? (
+        <Loader2 className="h-4 w-4 animate-spin text-vb-silver-dim" role="status" aria-label="Загрузка настроек" />
       ) : (
-        <PrivacySwitches idPrefix="settings" values={state} onChange={change} />
+        <>
+          <PrivacySwitches idPrefix="settings" values={state} onChange={change} />
+          <WhatIsSent />
+        </>
       )}
-      <WhatIsSent />
       <div className="mt-4 border-t border-vb-border/60 pt-3">
         <Button ref={reportBtn} variant="secondary" size="sm" onClick={() => setReportOpen(true)}>
           <MessageSquareWarning className="h-3.5 w-3.5" aria-hidden />

@@ -80,7 +80,7 @@ export function StepProxy({ initialUrl, onNext, onSkipToTools }: Props) {
 
   return (
     <>
-      <WizardTitle sub="Строку от продавца — целиком, в любом формате. Дальше всё настроится само.">
+      <WizardTitle sub="Строку от продавца - целиком, в любом формате. Дальше всё настроится само.">
         Вставьте прокси
       </WizardTitle>
 
@@ -130,8 +130,8 @@ export function StepProxy({ initialUrl, onNext, onSkipToTools }: Props) {
               {needsReview && (
                 <p className="mb-2 text-[12px] text-vb-warn">
                   {ambiguous
-                    ? "Формат неоднозначный — проверьте, где адрес, а где логин"
-                    : "Не до конца уверен в разборе — проверьте поля"}
+                    ? "Формат неоднозначный - проверьте, где адрес, а где логин"
+                    : "Не до конца уверен в разборе - проверьте поля"}
                 </p>
               )}
               <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[12px] sm:grid-cols-[auto_1fr_auto_1fr]">

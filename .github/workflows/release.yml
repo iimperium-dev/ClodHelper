@@ -105,9 +105,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: sourcemaps
-          path: dist/**/*.map
+          path: sourcemaps/**
           retention-days: 90
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   build-macos:
     runs-on: macos-latest

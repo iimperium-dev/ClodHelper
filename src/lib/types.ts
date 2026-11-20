@@ -435,6 +435,8 @@ export interface PrivacyState {
   offer: boolean;
   /** Переключатели или строка про отчёты уже были показаны. */
   notice_seen: boolean;
+  /** Установка со старой версии (до статистики). */
+  legacy: boolean;
 }
 
 export type PrivacyKey = "auto_update" | "crash_reports" | "usage_stats";

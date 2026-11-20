@@ -19,6 +19,10 @@ struct Rules {
     /// "password":"x", "pass": "x" в JSON.
     json_secret: Regex,
     bearer: Regex,
+    /// password: x, token: x, api-key: x, x-api-key: x.
+    kv_colon: Regex,
+    /// Cookie: ..., Set-Cookie: ...
+    cookie: Regex,
     /// Authorization / Proxy-Authorization: Basic ...
     auth_header: Regex,
     /// Домен с настоящим доменом верхнего уровня.
@@ -40,14 +44,24 @@ struct Rules {
     col: Regex,
 }
 
-/// Настоящие домены верхнего уровня. Расширения файлов (rs, js, ts, sh, app,
-/// json, exe, dll, ps1, md, log, txt, toml, py, pl, so, cc...) сюда не входят:
-/// иначе main.rs и index-AB12.js стали бы «доменами».
-const TLDS: &str = concat!(
-    "com|net|org|edu|gov|info|biz|name|pro|dev|io|ai|me|tv|fm|ly|gg|xyz|online|site|top|club|vip|cloud|tech|store|shop|",
-    "ru|su|ua|by|kz|uz|ge|am|az|lt|lv|ee|cz|sk|hu|ro|bg|hr|si|gr|de|fr|it|es|pt|nl|be|ch|at|se|no|fi|dk|",
-    "uk|ie|us|ca|mx|br|ar|cl|co|cn|jp|kr|in|id|th|vn|sg|hk|tw|tr|il|ir|ae|sa|eg|za|au|nz|eu|",
-    "internal|local|lan|home|localdomain|corp|intranet"
+/// Настоящие домены верхнего уровня. Расширения файлов (rs, js, ts, json,
+/// exe, dll, ps1, md, log, txt, toml, py, so...) сюда не входят: иначе
+/// main.rs и index-AB12.js стали бы «доменами».
+///
+/// Три группы по тому, как легко зона путается с кодом и файлами:
+/// - STRONG: чистим всегда;
+/// - EXT: совпадают с расширениями файлов (`x.sh`, `Clod Helper.app`):
+///   чистим при трёх и более метках или в контексте URL и хоста;
+/// - PROP: совпадают с обращением к полю (`data.id`, `window.top`,
+///   `console.info`, `user.name`): чистим только в контексте URL и хоста.
+const TLD_STRONG: &str = concat!(
+    "com|net|org|edu|gov|biz|xyz|online|site|club|vip|cloud|tech|store|shop|link|live|space|page|fun|work|world|today|news|life|",
+    "ru|su|ua|kz|uz|az|lv|ee|cz|sk|hu|ro|bg|hr|si|gr|de|fr|es|pt|nl|ch|se|fi|dk|uk|ie|us|mx|br|cn|jp|kr|tw|hk|sg|tr|il|ir|ae|sa|za|au|nz|eu|",
+    "internal|local|lan|localdomain|corp|intranet|рф"
+);
+const TLD_EXT: &str = "sh|app|pl|cc";
+const TLD_PROP: &str = concat!(
+    "info|name|pro|dev|io|ai|me|tv|fm|ly|gg|top|ge|am|lt|by|it|be|no|at|ca|ar|cl|co|in|id|th|vn|eg|is|to|home"
 );
 
 /// Свои и сервисные домены, которые оставляем как есть.
@@ -57,6 +71,89 @@ fn domain_allowed(host: &str) -> bool {
         .iter()
         .any(|d| h == *d || h.ends_with(&format!(".{d}")))
         || crate::diagnostics::is_service_domain(&h)
+}
+
+fn in_list(list: &str, tld: &str) -> bool {
+    list.split('|').any(|t| t == tld)
+}
+
+/// Оставить найденное как есть: свой или сервисный домен, вызов функции
+/// (`ident.tld(`), кадр стека, обращение к полю без контекста URL и хоста.
+fn keep_domain(s: &str, start: usize, end: usize) -> bool {
+    let host = &s[start..end];
+    if domain_allowed(host) {
+        return true;
+    }
+    let (before, after) = (&s[..start], &s[end..]);
+    if after.starts_with('(') {
+        return true;
+    }
+    // Кадр стека: «at name.tld (...)».
+    let line = &before[before.rfind('\n').map_or(0, |i| i + 1)..];
+    static FRAME: OnceLock<Regex> = OnceLock::new();
+    if FRAME.get_or_init(|| Regex::new(r"^\s*at\s+(?:async\s+|new\s+)?$").expect("regex")).is_match(line) {
+        return true;
+    }
+    let tld = host.rsplit('.').next().unwrap_or("").to_lowercase();
+    let labels = host.split('.').count();
+    let url_ctx = before.ends_with("://")
+        || before.ends_with('@')
+        || after.starts_with('/')
+        || (after.starts_with(':') && after[1..].starts_with(|c: char| c.is_ascii_digit()));
+    if in_list(TLD_PROP, &tld) {
+        return !url_ctx;
+    }
+    if in_list(TLD_EXT, &tld) {
+        return !(labels >= 3 || url_ctx);
+    }
+    false
+}
+
+/// Заменить домены вне белого списка на `<host>`.
+fn scrub_domains(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut last = 0;
+    for m in rules().domain.find_iter(s) {
+        if keep_domain(s, m.start(), m.end()) {
+            continue;
+        }
+        out.push_str(&s[last..m.start()]);
+        out.push_str("<host>");
+        last = m.end();
+    }
+    out.push_str(&s[last..]);
+    out
+}
+
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// Заменить известное значение. Логин, имя и хост - только по границам слова
+/// (с учётом кириллицы), пароль - как подстроку. Уже вставленные `<...>` не трогаем.
+fn replace_secret(s: &str, v: &str, tag: &str) -> String {
+    let Ok(re) = Regex::new(&format!("(?i){}", regex::escape(v))) else {
+        return s.replace(v, tag);
+    };
+    let word = tag != "<pass>";
+    let mut out = String::with_capacity(s.len());
+    let mut last = 0;
+    for m in re.find_iter(s) {
+        let (before, after) = (&s[..m.start()], &s[m.end()..]);
+        if before.ends_with('<') && after.starts_with('>') {
+            continue;
+        }
+        if word
+            && (before.chars().next_back().is_some_and(is_word_char) || after.chars().next().is_some_and(is_word_char))
+        {
+            continue;
+        }
+        out.push_str(&s[last..m.start()]);
+        out.push_str(tag);
+        last = m.end();
+    }
+    out.push_str(&s[last..]);
+    out
 }
 
 fn rules() -> &'static Rules {
@@ -86,15 +183,20 @@ fn rules() -> &'static Rules {
             )),
             json_secret: re(concat!(
                 r#"(?i)"((?:[A-Za-z0-9_-]*(?:key|token|password|passwd|secret)|(?:[A-Za-z0-9_-]*[_-])?(?:pass|pwd)))""#,
-                r#"\s*:\s*"(?:[^"\\]|\\.)*""#,
+                r#"\s*:\s*(?:"(?:[^"\\]|\\.)*"|-?[0-9][0-9.]*|true|false|null)"#,
             )),
             bearer: re(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+"),
             auth_header: re(
                 r#"(?i)\b((?:proxy-)?authorization["']?\s*[:=]\s*["']?)(basic|digest|negotiate|ntlm)\s+[^\s"',;]+"#,
             ),
             domain: re(&format!(
-                r"(?i)\b[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\.(?:{TLDS})\b"
+                r"(?i)\b[\p{{L}}\p{{N}}](?:[\p{{L}}\p{{N}}-]*[\p{{L}}\p{{N}}])?(?:\.[\p{{L}}\p{{N}}](?:[\p{{L}}\p{{N}}-]*[\p{{L}}\p{{N}}])?)*\.(?:{TLD_STRONG}|{TLD_EXT}|{TLD_PROP})\b"
             )),
+            kv_colon: re(concat!(
+                r#"(?i)\b((?:[A-Za-z0-9_-]*(?:token|secret|password|passwd)|(?:x-)?api[-_]?key|key|pass|pwd))"#,
+                r#"\s*:\s*([^\s"',;]+)"#,
+            )),
+            cookie: re(r"(?i)\b((?:set-)?cookie\s*:\s*)[^\r\n]+"),
             rdns: re(r"(?i)\b(?:[a-z0-9]+-)*\d{1,3}-\d{1,3}-\d{1,3}-\d{1,3}(?:\.[a-z0-9-]+)+\b"),
             num: re(r"\d+"),
             hexid: re(r"(?i)\b(?:0x)?[0-9a-f]{8,}\b"),
@@ -132,7 +234,7 @@ fn scrub_user_paths(text: &str) -> String {
 /// окружения (иначе обычный текст превратится в заглушки).
 const COMMON_WORDS: &[&str] = &[
     "user", "users", "admin", "administrator", "root", "guest", "default", "public", "home", "localhost", "onedrive",
-    "owner", "computer", "desktop", "laptop", "windows", "system", "local", "test",
+    "owner", "computer", "desktop", "laptop", "windows", "system", "local", "test", "пользователь", "администратор",
 ];
 
 /// Значения из окружения, которые выдают человека: имя пользователя,
@@ -258,15 +360,25 @@ pub fn scrub_with(text: &str, secrets: &[(String, &'static str)]) -> String {
         s = re.replace_all(&s, "${1}<proxy>").into_owned();
     }
     s = r.json_secret.replace_all(&s, "\"${1}\":\"<secret>\"").into_owned();
+    // «Authorization: Basic ...» раньше «Authorization: x»: схема остаётся видна.
     s = r.kv_secret.replace_all(&s, "${1}=<secret>").into_owned();
     s = r.auth_header.replace_all(&s, "${1}${2} <token>").into_owned();
     s = r.bearer.replace_all(&s, "Bearer <token>").into_owned();
+    s = r.cookie.replace_all(&s, "${1}<secret>").into_owned();
+    s = r
+        .kv_colon
+        .replace_all(&s, |c: &Captures| {
+            // Уже заменённое (<secret>, <token>) не трогаем.
+            if c[2].starts_with('<') {
+                c[0].to_string()
+            } else {
+                format!("{}: <secret>", &c[1])
+            }
+        })
+        .into_owned();
     for (v, tag) in secrets {
         // Без учёта регистра: Windows путает «Ivan» и «IVAN».
-        match Regex::new(&format!("(?i){}", regex::escape(v))) {
-            Ok(re) => s = re.replace_all(&s, regex::NoExpand(tag)).into_owned(),
-            Err(_) => s = s.replace(v.as_str(), tag),
-        }
+        s = replace_secret(&s, v, tag);
     }
     s = r.email.replace_all(&s, "<email>").into_owned();
     s = r
@@ -291,9 +403,7 @@ pub fn scrub_with(text: &str, secrets: &[(String, &'static str)]) -> String {
         .into_owned();
     // rDNS целиком, потом остальные домены вне белого списка.
     s = r.rdns.replace_all(&s, "<host>").into_owned();
-    r.domain
-        .replace_all(&s, |c: &Captures| if domain_allowed(&c[0]) { c[0].to_string() } else { "<host>".to_string() })
-        .into_owned()
+    scrub_domains(&s)
 }
 
 /// Обрезать до max БАЙТ UTF-8 по границе символа, без добавок в конец:
@@ -681,5 +791,75 @@ mod tests {
         assert_eq!(ui_function(""), "");
         assert_eq!(normalize_msg("Failed to fetch 'https://a.b/c' at 0xdeadbeef12 code 500"), "Failed to fetch '' at # code #");
         assert_eq!(normalize_msg("load index-AB12cd34.js failed"), "load index.js failed");
+    }
+
+    #[test]
+    fn colon_forms_cookies_and_numeric_json() {
+        assert_eq!(clean("password: hunter2 ok"), "password: <secret> ok");
+        assert_eq!(clean("pass: abc"), "pass: <secret>");
+        assert_eq!(clean("pwd : abc"), "pwd: <secret>");
+        assert_eq!(clean("secret: abc"), "secret: <secret>");
+        assert_eq!(clean("token: abc"), "token: <secret>");
+        assert_eq!(clean("key: abc"), "key: <secret>");
+        assert_eq!(clean("api-key: abc"), "api-key: <secret>");
+        assert_eq!(clean("X-Api-Key: abc123"), "X-Api-Key: <secret>");
+        assert_eq!(clean("Cookie: sid=1; theme=dark\nnext"), "Cookie: <secret>\nnext");
+        assert_eq!(clean("Set-Cookie: sid=1; Path=/"), "Set-Cookie: <secret>");
+        assert_eq!(clean(r#"{"password":123,"x":1}"#), r#"{"password":"<secret>","x":1}"#);
+        assert_eq!(clean(r#"{"pass": 12.5}"#), r#"{"pass":"<secret>"}"#);
+        // Уже очищенное и обычные слова не трогаем.
+        assert_eq!(clean("password=abc, token: Bearer xyz"), "password=<secret>, token: <secret> <token>");
+        assert_eq!(clean("monkey: banana, keyboard: ru"), "monkey: banana, keyboard: ru");
+    }
+
+    #[test]
+    fn more_zones_and_file_conflicts() {
+        assert_eq!(clean("open сайт.рф now"), "open <host> now");
+        assert_eq!(clean("a.example.link b.live c.space"), "<host> <host> <host>");
+        // Конфликтные с расширениями файлов: нужно три метки или контекст URL.
+        for keep in ["setup.sh", "Clod Helper.app", "run.pl", "a.cc", "install.sh now"] {
+            assert_eq!(clean(&format!("see {keep}")), format!("see {keep}"), "{keep}");
+        }
+        assert_eq!(clean("host a.b.sh x"), "host <host> x");
+        assert_eq!(clean("get https://tool.sh/install"), "get https://<host>/install");
+        assert_eq!(clean("on app.example.app:8443"), "on <host>:8443");
+    }
+
+    #[test]
+    fn code_like_names_are_not_domains() {
+        for keep in [
+            "console.info(x)", "user.name", "data.id", "arr.at(0)", "window.top", "this.ca", "obj.to", "a.lt",
+            "at Object.top (file.js:1:2)", "  at console.info (http://tauri.localhost/a.js:1:2)",
+        ] {
+            assert_eq!(clean(keep), keep, "{keep}");
+        }
+        // Но с контекстом URL и порта это хост.
+        assert_eq!(clean("https://example.io/x"), "https://<host>/x");
+        assert_eq!(clean("server.example.info:8080"), "<host>:8080");
+        // Функция с настоящим доменом вне стека - вызов, не хост.
+        assert_eq!(clean("call my.example.com(1)"), "call my.example.com(1)");
+    }
+
+    #[test]
+    fn known_secrets_match_whole_words_except_passwords() {
+        let s = |v: &str, t: &'static str| vec![(v.to_string(), t)];
+        assert_eq!(scrub_with("ivan ivanov divan Ivan.", &s("ivan", "<user>")), "<user> ivanov divan <user>.");
+        assert_eq!(scrub_with("Иван Иванов Иванович", &s("Иван", "<user>")), "<user> Иванов Иванович");
+        assert_eq!(scrub_with("host1 myhost host", &s("host", "<host>")), "host1 myhost <host>");
+        // Пароль - подстрока.
+        assert_eq!(scrub_with("xS3cretx S3cret", &s("S3cret", "<pass>")), "x<pass>x <pass>");
+        // Уже вставленные заглушки не ломаем.
+        assert_eq!(scrub_with("<user> user", &s("user", "<user>")), "<user> <user>");
+        assert_eq!(scrub_with("a <pass> b", &s("pass", "<pass>")), "a <pass> b");
+    }
+
+    #[test]
+    fn russian_common_words_are_not_secrets() {
+        let env = |k: &str| match k {
+            "USERNAME" => Some("Пользователь".to_string()),
+            "USER" => Some("Администратор".to_string()),
+            _ => None,
+        };
+        assert!(secrets_from_env(env).is_empty());
     }
 }

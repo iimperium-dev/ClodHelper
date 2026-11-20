@@ -49,6 +49,40 @@ const IS_SPLASH = new URLSearchParams(window.location.search).get("view") === "u
   застрять не может: в худшем случае раздел просто появляется без неё.
 */
 
+/**
+ * Вызвать `onShown` один раз, когда `active` и окно правда на виду: видимо,
+ * в фокусе и так секунду подряд. Скрытое окно (--tray, тихий перезапуск) ждёт
+ * visibilitychange или focus.
+ */
+function useOnceShown(active: boolean, onShown: () => void) {
+  const cb = useRef(onShown);
+  cb.current = onShown;
+  useEffect(() => {
+    if (!active) return;
+    let timer: number | undefined;
+    let done = false;
+    const visible = () => document.visibilityState === "visible" && document.hasFocus();
+    const arm = () => {
+      if (done || timer !== undefined || !visible()) return;
+      timer = window.setTimeout(() => {
+        timer = undefined;
+        if (!done && visible()) {
+          done = true;
+          cb.current();
+        }
+      }, 1000);
+    };
+    window.addEventListener("focus", arm);
+    document.addEventListener("visibilitychange", arm);
+    arm();
+    return () => {
+      window.removeEventListener("focus", arm);
+      document.removeEventListener("visibilitychange", arm);
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [active]);
+}
+
 function App() {
   // ─── Top-level routing ───────────────────────────────────────
   // На старте определяем: установлен ли уже мост → Обзор, иначе Wizard.
@@ -68,6 +102,8 @@ function App() {
   const [noticeSeen, setNoticeSeen] = useState<boolean | null>(null);
   // Плашка «отчёты и статистика» в главном окне.
   const [noticeBanner, setNoticeBanner] = useState(false);
+  // Установка со старой версии: плашка говорит «С этой версии».
+  const [noticeLegacy, setNoticeLegacy] = useState(false);
 
   useEffect(() => {
     if (IS_TRAY || IS_TOAST || IS_SPLASH) return;
@@ -83,7 +119,10 @@ function App() {
       .finally(() => setOfferLoaded(true));
     // Не удалось спросить - считаем, что видел: лишней плашки не нужно.
     void privacyGet()
-      .then((s) => setNoticeSeen(s.notice_seen))
+      .then((s) => {
+        setNoticeSeen(s.notice_seen);
+        setNoticeLegacy(s.legacy);
+      })
       .catch(() => setNoticeSeen(true));
     void (async () => {
       try {
@@ -133,40 +172,80 @@ function App() {
   // сверху полоса «Прокси ещё не добавлен» с возвратом в мастер.
   const [noProxy, setNoProxy] = useState(false);
 
-  // Окно предложения автообновления показано: там есть строка про отчёты.
-  const offerOpen = view !== null && view !== "wizard" && whatsNewTaken && !whatsNew && offerAuto;
-  useEffect(() => {
-    if (!offerOpen) return;
+  // «Показано» ставится, только когда человек правда мог это увидеть: окно
+  // видимо и в фокусе (не --tray и не тихий перезапуск после установки),
+  // и ещё секунду после этого. Идемпотентно.
+  const markedRef = useRef(false);
+  const markSeen = useCallback(() => {
+    if (markedRef.current) return;
+    markedRef.current = true;
     setNoticeSeen(true);
     void privacyNoticeSeen().catch(() => {});
-  }, [offerOpen]);
+  }, []);
+
+  // Окно предложения автообновления показано: там есть строка про отчёты.
+  const offerOpen = view !== null && view !== "wizard" && whatsNewTaken && !whatsNew && offerAuto;
+  useOnceShown(offerOpen, markSeen);
 
   // Мастер показал «Готово»: записываем выбранные переключатели, потом флаг.
-  // До этого момента ничего не пишется и ничего не уходит.
+  // До этого момента ничего не пишется и ничего не уходит. Если человек уже
+  // отвечал раньше (плашка и настройки), значения взяты из настроек и
+  // перезаписывать их нечем: пишутся только его щелчки.
   const wizPrivacyRef = useRef(wizPrivacy);
   wizPrivacyRef.current = wizPrivacy;
-  const wizDone = view === "wizard" && step === "done" && wizResult !== null;
-  useEffect(() => {
-    if (!wizDone) return;
+  const wizSeenBefore = useRef(false);
+  const wizMarked = useRef(false);
+  const markWizard = useCallback(() => {
+    if (wizMarked.current) return;
+    wizMarked.current = true;
     setNoticeSeen(true);
+    markedRef.current = true;
+    if (wizSeenBefore.current) return;
     void (async () => {
       for (const k of Object.keys(wizPrivacyRef.current) as PrivacyKey[]) {
         await privacySet(k, wizPrivacyRef.current[k]).catch(() => {});
       }
       await privacyNoticeSeen().catch(() => {});
     })();
-  }, [wizDone]);
+  }, []);
+  const wizDone = view === "wizard" && step === "done" && wizResult !== null;
+  useOnceShown(wizDone, markWizard);
+
+  // Вернулись в мастер, а человек уже отвечал (плашка, настройки): берём его выбор.
+  useEffect(() => {
+    if (view !== "wizard") return;
+    wizMarked.current = false;
+    void privacyGet()
+      .then((s) => {
+        wizSeenBefore.current = s.notice_seen;
+        if (s.notice_seen) {
+          setWizPrivacy({ auto_update: s.auto_update, crash_reports: s.crash_reports, usage_stats: s.usage_stats });
+        }
+      })
+      .catch(() => {});
+  }, [view]);
 
   // Все остальные: главное окно без мастера и без окна предложения. Один раз
-  // тихая плашка, флаг ставится при показе.
+  // тихая плашка (не поверх полосы «Прокси ещё не добавлен»); флаг ставится,
+  // когда она правда показана.
   const showNotice =
-    view !== null && view !== "wizard" && whatsNewTaken && offerLoaded && !whatsNew && !offerAuto && noticeSeen === false;
+    view !== null &&
+    view !== "wizard" &&
+    whatsNewTaken &&
+    offerLoaded &&
+    !whatsNew &&
+    !offerAuto &&
+    !noProxy &&
+    noticeSeen === false;
   useEffect(() => {
-    if (!showNotice) return;
-    setNoticeBanner(true);
-    setNoticeSeen(true);
-    void privacyNoticeSeen().catch(() => {});
+    if (showNotice) setNoticeBanner(true);
   }, [showNotice]);
+  useOnceShown(noticeBanner, markSeen);
+  const closeBanner = (then?: () => void) => {
+    markSeen();
+    setNoticeBanner(false);
+    then?.();
+  };
 
   if (IS_TOAST) return <UpdateToast />;
   if (IS_SPLASH) return <UpdateSplash />;
@@ -222,6 +301,7 @@ function App() {
                     void privacySet(key, on).catch(() => {});
                   }}
                   onFinish={() => {
+                    markWizard();
                     setNoProxy(false);
                     setOfferAuto(false);
                     setView("overview");
@@ -244,7 +324,7 @@ function App() {
           <div className="flex items-center gap-3 border-b border-vb-warn/25 bg-vb-warn/[0.07] px-5 py-2.5">
             <AlertTriangle className="h-4 w-4 shrink-0 text-vb-warn" />
             <span className="min-w-0 flex-1 text-[13px] text-vb-silver">
-              Прокси ещё не добавлен — Claude пока ходит напрямую. Добавьте его, когда сервер будет готов.
+              Прокси ещё не добавлен - Claude пока ходит напрямую. Добавьте его, когда сервер будет готов.
             </span>
             <Button
               size="sm"
@@ -265,18 +345,16 @@ function App() {
           >
             <Info className="h-4 w-4 shrink-0 text-vb-silver-dim" aria-hidden />
             <span className="min-w-0 flex-1 text-[13px] text-vb-silver">
-              С этой версии программа отправляет отчёты об ошибках и анонимную статистику. Выключить можно в настройках
+              {noticeLegacy ? "С этой версии программа отправляет" : "Программа отправляет"} отчёты об ошибках и анонимную
+              статистику. Выключить можно в настройках
             </span>
-            <Button variant="ghost" size="sm" onClick={() => setNoticeBanner(false)}>
+            <Button variant="ghost" size="sm" onClick={() => closeBanner()}>
               Понятно
             </Button>
             <Button
               variant="secondary"
               size="sm"
-              onClick={() => {
-                setNoticeBanner(false);
-                navigate("settings");
-              }}
+              onClick={() => closeBanner(() => navigate("settings"))}
             >
               Настройки
             </Button>

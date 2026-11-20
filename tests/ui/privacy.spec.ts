@@ -256,3 +256,145 @@ test("отчёт: «Посмотреть, что уйдёт» показывае
   await expect(pre).toHaveCount(0);
   await expect(dialog.getByRole("button", { name: "Отправить" })).toBeEnabled();
 });
+
+// ─── ревизия: окно на виду, выбор человека, номер отчёта, ошибки ───────────────
+
+/** Окно скрыто (--tray, тихий перезапуск): visibilityState hidden и нет фокуса. */
+async function hideWindow(page: Page) {
+  await page.addInitScript(() => {
+    const w = window as unknown as { __vis: string };
+    w.__vis = "hidden";
+    Object.defineProperty(document, "visibilityState", { get: () => w.__vis, configurable: true });
+    document.hasFocus = () => w.__vis === "visible";
+  });
+}
+async function showWindow(page: Page) {
+  await page.evaluate(() => {
+    (window as unknown as { __vis: string }).__vis = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+}
+
+test("скрытое окно: флаг не ставится, пока окно не стало видимым (плашка)", async ({ page }) => {
+  await hideWindow(page);
+  await page.goto("/mock.html?still&noticebanner&platform=win");
+  await expect(page.getByRole("region", { name: "Отчёты и статистика" })).toBeVisible({ timeout: 20_000 });
+  await page.waitForTimeout(2500);
+  expect(await noticeSeen(page)).toBe(false);
+  await showWindow(page);
+  await expect.poll(() => noticeSeen(page), { timeout: 5000 }).toBe(true);
+});
+
+test("скрытое окно: флаг не ставится и у окна предложения", async ({ page }) => {
+  await hideWindow(page);
+  await page.goto("/mock.html?still&autooffer&platform=win");
+  await expect(page.getByRole("dialog", { name: "Автообновление. Включить?" })).toBeVisible({ timeout: 20_000 });
+  await page.waitForTimeout(2500);
+  expect(await noticeSeen(page)).toBe(false);
+  await showWindow(page);
+  await expect.poll(() => noticeSeen(page), { timeout: 5000 }).toBe(true);
+});
+
+test("скрытое окно: «Готово» мастера ничего не пишет, пока окно не на виду", async ({ page }) => {
+  await hideWindow(page);
+  await page.goto("/mock.html?still&fresh&platform=win");
+  await page.getByLabel("Строка прокси").fill("185.68.187.138:8000:user:pass");
+  await page.getByRole("button", { name: "Дальше" }).click();
+  await expect(page.getByRole("heading", { name: "Всё работает" })).toBeVisible({ timeout: 15_000 });
+  await page.waitForTimeout(2500);
+  expect(await writes(page)).toEqual([]);
+  expect(await noticeSeen(page)).toBe(false);
+  await showWindow(page);
+  await expect.poll(() => noticeSeen(page), { timeout: 5000 }).toBe(true);
+  expect((await writes(page)).map((w) => w.key).sort()).toEqual(["auto_update", "crash_reports", "usage_stats"]);
+});
+
+test("мастер не перезаписывает выбор, который человек уже сделал", async ({ page }) => {
+  await page.goto("/mock.html?still&fresh&statsoff&platform=win");
+  await page.getByLabel("Строка прокси").fill("185.68.187.138:8000:user:pass");
+  await page.getByRole("button", { name: "Дальше" }).click();
+  await expect(page.getByRole("heading", { name: "Всё работает" })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole("switch", { name: "Отправлять анонимную статистику" })).toHaveAttribute("aria-checked", "false");
+  await page.waitForTimeout(1800);
+  expect(await writes(page)).toEqual([]);
+  expect((await privacy(page)).usage_stats).toBe(false);
+});
+
+test("плашка для новой установки: без «С этой версии»", async ({ page }) => {
+  await page.goto("/mock.html?still&noticebanner&newinstall&platform=win");
+  const banner = page.getByRole("region", { name: "Отчёты и статистика" });
+  await expect(banner).toBeVisible({ timeout: 20_000 });
+  await expect(banner).toContainText("Программа отправляет отчёты об ошибках и анонимную статистику");
+  await expect(banner).not.toContainText("С этой версии");
+});
+
+test("плашка не показывается, пока видна полоса «Прокси ещё не добавлен»", async ({ page }) => {
+  await page.goto("/mock.html?still&fresh&platform=win");
+  await page.getByText("Сначала очистка").click();
+  await expect(page.getByText(/Прокси ещё не добавлен/)).toBeVisible({ timeout: 10_000 });
+  await page.waitForTimeout(1500);
+  await expect(page.getByRole("region", { name: "Отчёты и статистика" })).toHaveCount(0);
+  expect(await noticeSeen(page)).toBe(false);
+});
+
+test("отчёт: один nonce на окно, «Повторить» шлёт тот же", async ({ page }) => {
+  const { dialog } = await openReport(page, "&reportfail");
+  await dialog.getByLabel("Что случилось").fill("Сломалось");
+  await dialog.getByRole("button", { name: "Отправить" }).click();
+  await expect(dialog.getByRole("alert")).toBeVisible();
+  await dialog.getByRole("button", { name: "Повторить" }).click();
+  await expect(dialog.getByRole("alert")).toBeVisible();
+  const nonces = await page.evaluate(() => (window as unknown as { __reportNonces: string[] }).__reportNonces);
+  expect(nonces).toHaveLength(2);
+  expect(nonces[0]).toMatch(/^[0-9a-f]{32}$/);
+  expect(nonces[1]).toBe(nonces[0]);
+});
+
+test("отчёт: предпросмотр сбрасывается при правке текста и контакта", async ({ page }) => {
+  const { dialog } = await openReport(page);
+  await dialog.getByLabel("Что случилось").fill("Раз");
+  await dialog.getByRole("button", { name: "Посмотреть, что уйдёт" }).click();
+  await expect(dialog.getByLabel("Что уйдёт на сервер")).toBeVisible();
+  await dialog.getByLabel("Что случилось").fill("Раз два");
+  await expect(dialog.getByLabel("Что уйдёт на сервер")).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Посмотреть, что уйдёт" }).click();
+  await expect(dialog.getByLabel("Что уйдёт на сервер")).toContainText("Раз два");
+  await dialog.getByLabel("Как с вами связаться").fill("@me");
+  await expect(dialog.getByLabel("Что уйдёт на сервер")).toHaveCount(0);
+});
+
+test("отчёт: лимит на сегодня - без «Повторить»", async ({ page }) => {
+  const { dialog } = await openReport(page, "&reportlimit");
+  await dialog.getByLabel("Что случилось").fill("Сломалось");
+  await dialog.getByRole("button", { name: "Отправить" }).click();
+  await expect(dialog.getByRole("alert")).toContainText("Лимит отчётов на сегодня исчерпан. Попробуйте завтра");
+  await expect(dialog.getByRole("button", { name: "Повторить" })).toHaveCount(0);
+  await expect(dialog.getByRole("button", { name: "Закрыть" })).toBeVisible();
+});
+
+test("отчёт: сервер не принимает - можно повторить позже", async ({ page }) => {
+  const { dialog } = await openReport(page, "&reportbusy");
+  await dialog.getByLabel("Что случилось").fill("Сломалось");
+  await dialog.getByRole("button", { name: "Отправить" }).click();
+  await expect(dialog.getByRole("alert")).toContainText("Сервер сейчас не принимает отчёты. Попробуйте позже");
+  await expect(dialog.getByRole("button", { name: "Повторить" })).toBeEnabled();
+});
+
+test("отчёт: долгая отправка - строка про запасной путь", async ({ page }) => {
+  const { dialog } = await openReport(page, "&reportslow");
+  await dialog.getByLabel("Что случилось").fill("Долго");
+  await dialog.getByRole("button", { name: "Отправить" }).click();
+  await expect(dialog.getByText("Отправляю через запасной путь, это может занять до 40 секунд")).toHaveCount(0);
+  await expect(dialog.getByText("Отправляю через запасной путь, это может занять до 40 секунд")).toBeVisible({ timeout: 10_000 });
+  await expect(dialog.getByText("Отправлено. Спасибо")).toBeVisible({ timeout: 10_000 });
+});
+
+test("настройки: не прочиталось - ошибка и «Повторить», переключателей нет", async ({ page }) => {
+  await openSettings(page, "&privacyfail");
+  const card = page.getByRole("region", { name: "Обновления и отчёты" });
+  await expect(card.getByRole("alert")).toContainText("Не получилось прочитать настройки");
+  await expect(card.getByRole("switch")).toHaveCount(0);
+  await page.evaluate(() => ((window as unknown as { __privacyFailOff: boolean }).__privacyFailOff = true));
+  await card.getByRole("button", { name: "Повторить" }).click();
+  await expect(card.getByRole("switch")).toHaveCount(3);
+});

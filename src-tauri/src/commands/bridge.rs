@@ -293,8 +293,8 @@ pub async fn privacy_notice_seen() -> Result<(), String> {
 
 /// Тело ручного отчёта так, как оно уйдёт на сервер (очищенное, JSON с отступами).
 #[tauri::command]
-pub async fn telemetry_report_preview(text: String, contact: Option<String>) -> String {
-    crate::telemetry::report_preview(text, contact).await
+pub async fn telemetry_report_preview(text: String, contact: Option<String>, nonce: Option<String>) -> String {
+    crate::telemetry::report_preview(text, contact, nonce).await
 }
 
 /// Ошибка интерфейса (window.onerror и т.п.): уходит в отчёты о сбоях, если
@@ -314,8 +314,8 @@ pub fn notice_event(id: String, ev: String) {
 
 /// Отчёт, который человек отправил сам. Шлётся всегда.
 #[tauri::command]
-pub async fn telemetry_report(text: String, contact: Option<String>) -> Result<(), String> {
-    crate::telemetry::send_report(text, contact).await
+pub async fn telemetry_report(text: String, contact: Option<String>, nonce: Option<String>) -> Result<(), String> {
+    crate::telemetry::send_report(text, contact, nonce).await
 }
 
 /// Фирменный звук уведомления.

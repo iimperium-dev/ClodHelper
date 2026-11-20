@@ -103,6 +103,15 @@ fn parse(text: &str, current: &str) -> Result<Vec<Notice>, String> {
     Ok(v)
 }
 
+/// Сервер рассылок спрашиваем не чаще раза в час (по фокусу окна запрос шёл
+/// бы раз в минуту). GitHub - как раньше.
+const SERVER_MIN_GAP: std::time::Duration = std::time::Duration::from_secs(3600);
+static SERVER_AT: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
+fn server_due() -> bool {
+    SERVER_AT.lock().map(|g| g.is_none_or(|t| t.elapsed() >= SERVER_MIN_GAP)).unwrap_or(true)
+}
+
 /// Скачать рассылки и обновить кэш. Возвращает новые (ещё не всплывавшие).
 pub async fn fetch() -> Result<Vec<Notice>, String> {
     // Только отладочная сборка: рассылка из локального файла — проверить
@@ -126,8 +135,16 @@ pub async fn fetch() -> Result<Vec<Notice>, String> {
     .await
     .unwrap_or((false, false));
     let server_fut = async {
-        if server_on {
-            Some(fetch_server(current, au).await)
+        if server_on && server_due() {
+            let r = fetch_server(current, au).await;
+            // Отметка только после ответа: сбой или «ещё не показали переключатели»
+            // не должны откладывать следующую попытку на час.
+            if r.is_ok() {
+                if let Ok(mut g) = SERVER_AT.lock() {
+                    *g = Some(std::time::Instant::now());
+                }
+            }
+            Some(r)
         } else {
             None
         }

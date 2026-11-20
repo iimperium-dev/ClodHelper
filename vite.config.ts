@@ -14,12 +14,16 @@ const host = process.env.TAURI_DEV_HOST;
  * dist целиком, и карты попали бы в программу).
  */
 function moveSourcemaps(): Plugin {
+  let root = process.cwd();
+  let dist = path.join(root, "dist");
   return {
     name: "move-sourcemaps",
     apply: "build",
+    configResolved(config) {
+      root = config.root;
+      dist = path.resolve(root, config.build.outDir);
+    },
     closeBundle() {
-      const root = process.cwd();
-      const dist = path.join(root, "dist");
       if (!fs.existsSync(dist)) return;
       const version = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).version as string;
       const out = path.join(root, "sourcemaps", version);

@@ -15,6 +15,18 @@ interface Props {
 
 type Phase = "edit" | "sending" | "done" | "error";
 
+/** Номер отчёта: 32 hex, один на открытие окна. «Повторить» шлёт тот же, сервер выбросит дубль. */
+function makeNonce(): string {
+  const a = new Uint8Array(16);
+  crypto.getRandomValues(a);
+  return Array.from(a, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Этот текст приходит из программы, когда сервер ответил 429: повтор сегодня бесполезен. */
+const LIMIT_PREFIX = "Лимит отчётов на сегодня";
+/** Дольше этого отправка уже идёт запасным путём (до 20 + 20 секунд). */
+const SLOW_AFTER_MS = 8000;
+
 /** Сервер берёт до 4 КБ текста: 2000 букв кириллицей это 4000 байт. */
 const TEXT_MAX = 2000;
 const TEXT_WARN_AT = 1600;
@@ -38,6 +50,8 @@ export function ReportDialog({ open, onClose, returnFocusTo }: Props) {
   // «Посмотреть, что уйдёт»: очищенное тело отчёта.
   const [preview, setPreview] = useState<string | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
+  const [slow, setSlow] = useState(false);
+  const nonce = useRef("");
   const sending = useRef(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
@@ -52,6 +66,8 @@ export function ReportDialog({ open, onClose, returnFocusTo }: Props) {
       setPhase("edit");
       setError("");
       setPreview(null);
+      setSlow(false);
+      nonce.current = makeNonce();
       sending.current = false;
       const t = window.setTimeout(() => textRef.current?.focus(), 60);
       return () => window.clearTimeout(t);
@@ -98,13 +114,17 @@ export function ReportDialog({ open, onClose, returnFocusTo }: Props) {
     if (sending.current || !text.trim()) return;
     sending.current = true;
     setPhase("sending");
+    setSlow(false);
+    const slowTimer = window.setTimeout(() => setSlow(true), SLOW_AFTER_MS);
     try {
-      await telemetryReport(text.trim(), contact.trim() || null);
+      await telemetryReport(text.trim(), contact.trim() || null, nonce.current);
       setPhase("done");
     } catch (e) {
       setError(typeof e === "string" && e ? e : "Не получилось отправить. Проверьте интернет и попробуйте ещё раз");
       setPhase("error");
     } finally {
+      window.clearTimeout(slowTimer);
+      setSlow(false);
       sending.current = false;
     }
   };
@@ -116,7 +136,7 @@ export function ReportDialog({ open, onClose, returnFocusTo }: Props) {
     }
     setPreviewBusy(true);
     try {
-      setPreview(await telemetryReportPreview(text.trim(), contact.trim() || null));
+      setPreview(await telemetryReportPreview(text.trim(), contact.trim() || null, nonce.current));
     } catch {
       setPreview("Не получилось подготовить показ");
     } finally {
@@ -125,6 +145,8 @@ export function ReportDialog({ open, onClose, returnFocusTo }: Props) {
   };
 
   const locked = phase === "sending";
+  // Дневной лимит: «Повторить» не нужен, пока не наступит завтра.
+  const limitHit = phase === "error" && error.startsWith(LIMIT_PREFIX);
   const ease = [0.22, 1, 0.36, 1] as const;
 
   return createPortal(
@@ -175,7 +197,10 @@ export function ReportDialog({ open, onClose, returnFocusTo }: Props) {
                   value={text}
                   disabled={locked}
                   maxLength={TEXT_MAX}
-                  onChange={(e) => setText(e.target.value)}
+                  onChange={(e) => {
+                    setText(e.target.value);
+                    setPreview(null);
+                  }}
                   className={cn(FIELD, "mt-1 resize-none")}
                 />
                 {text.length > TEXT_WARN_AT && (
@@ -190,7 +215,10 @@ export function ReportDialog({ open, onClose, returnFocusTo }: Props) {
                   id={`${uid}-contact`}
                   value={contact}
                   disabled={locked}
-                  onChange={(e) => setContact(e.target.value)}
+                  onChange={(e) => {
+                    setContact(e.target.value);
+                    setPreview(null);
+                  }}
                   placeholder="Telegram или почта, если нужен ответ"
                   className={cn(FIELD, "mt-1")}
                 />
@@ -220,14 +248,21 @@ export function ReportDialog({ open, onClose, returnFocusTo }: Props) {
                     {error}
                   </p>
                 )}
+                {locked && slow && (
+                  <p className="mt-3 text-[12px] leading-snug text-vb-silver-faint">
+                    Отправляю через запасной путь, это может занять до 40 секунд
+                  </p>
+                )}
                 <div className="mt-5 flex justify-end gap-2">
                   <Button variant="ghost" onClick={onClose} disabled={locked}>
-                    Отмена
+                    {limitHit ? "Закрыть" : "Отмена"}
                   </Button>
-                  <Button data-retry onClick={() => void send()} disabled={locked || !text.trim()}>
-                    {locked && <Loader2 className="h-4 w-4 animate-spin" aria-hidden />}
-                    {locked ? "Отправляю…" : phase === "error" ? "Повторить" : "Отправить"}
-                  </Button>
+                  {!limitHit && (
+                    <Button data-retry onClick={() => void send()} disabled={locked || !text.trim()}>
+                      {locked && <Loader2 className="h-4 w-4 animate-spin" aria-hidden />}
+                      {locked ? "Отправляю…" : phase === "error" ? "Повторить" : "Отправить"}
+                    </Button>
+                  )}
                 </div>
               </>
             )}

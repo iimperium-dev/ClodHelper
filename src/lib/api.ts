@@ -568,13 +568,13 @@ export function privacyNoticeSeen(): Promise<void> {
 }
 
 /** Тело ручного отчёта так, как оно уйдёт на сервер: очищенное, JSON с отступами. */
-export function telemetryReportPreview(text: string, contact: string | null): Promise<string> {
-  return invoke<string>("telemetry_report_preview", { text, contact });
+export function telemetryReportPreview(text: string, contact: string | null, nonce: string): Promise<string> {
+  return invoke<string>("telemetry_report_preview", { text, contact, nonce });
 }
 
 /** Отчёт, который человек отправил сам. Ошибка - готовый текст по-русски. */
-export function telemetryReport(text: string, contact: string | null): Promise<void> {
-  return invoke<void>("telemetry_report", { text, contact });
+export function telemetryReport(text: string, contact: string | null, nonce: string): Promise<void> {
+  return invoke<void>("telemetry_report", { text, contact, nonce });
 }
 
 export function playChime(): Promise<void> {
