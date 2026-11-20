@@ -79,7 +79,6 @@ pub fn run() {
 
     // Сбои Rust: запись на диск до аварийного выхода, отправка при старте.
     telemetry::install_panic_hook();
-    telemetry::mark_legacy();
 
     // Из Dock/Finder приложение получает PATH без Homebrew/nvm — node, npm и
     // claude не нашлись бы. Чиним до любых спавнов.
@@ -288,6 +287,9 @@ pub fn run() {
             update_notify::spawn_watcher(app.handle().clone());
 
             // Статистика (раз в сутки) и отчёт о сбое прошлого запуска.
+            // Метка установки - здесь: единственный экземпляр уже проверен,
+            // режим заставки обновления сюда не доходит.
+            telemetry::mark_legacy();
             telemetry::spawn();
 
             // macOS: агент переменных старого формата (`/bin/sh -c`, виден в

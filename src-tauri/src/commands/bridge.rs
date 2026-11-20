@@ -272,8 +272,9 @@ pub fn privacy_set(key: String, on: bool) -> Result<settings::PrivacyState, Stri
 /// Ошибка интерфейса (window.onerror и т.п.): уходит в отчёты о сбоях, если
 /// они включены. Не больше 5 за запуск.
 #[tauri::command]
-pub fn telemetry_ui_error(msg: String, stack: String) {
-    crate::telemetry::report_ui(&msg, &stack);
+pub async fn telemetry_ui_error(msg: String, stack: String) {
+    // Читает настройки с диска - не в потоке async-рантайма.
+    let _ = tokio::task::spawn_blocking(move || crate::telemetry::report_ui(&msg, &stack)).await;
 }
 
 /// Отчёт, который человек отправил сам. Шлётся всегда.

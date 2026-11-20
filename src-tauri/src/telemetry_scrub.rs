@@ -10,8 +10,14 @@ use std::sync::OnceLock;
 struct Rules {
     proxy_line: Regex,
     url_auth: Regex,
+    /// Прокси без схемы: login:pass@host:port, login:pass:host:port, host:port@login:pass.
+    bare_at: Regex,
+    bare_colon: Regex,
+    bare_host_first: Regex,
     win_user: Regex,
+    win_user_end: Regex,
     unix_user: Regex,
+    unix_user_end: Regex,
     email: Regex,
     ipv4: Regex,
     ipv6: Regex,
@@ -26,9 +32,26 @@ fn rules() -> &'static Rules {
         Rules {
             // host:port:login:pass (хост с точкой: домен или IPv4).
             proxy_line: re(r"\b[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+:\d{2,5}:[^\s:]+:[^\s:]+"),
-            url_auth: re(r"([A-Za-z][A-Za-z0-9+.-]*)://[^\s/@:]+(?::[^\s/]*)?@"),
+            // Пароль может содержать «/» и «@»: берём до ПОСЛЕДНЕГО «@» в слове.
+            url_auth: re(r"([A-Za-z][A-Za-z0-9+.-]*)://[^\s/@:]+(?::\S*)?@"),
+            bare_at: re(concat!(
+                r#"(^|[\s"'(<\[,;=])[^\s@:"'/=]+:(?:[^\s/]|/[^\s/])*@"#,
+                r"(?:[A-Za-z0-9-]+\.)*[A-Za-z0-9-]+:\d{2,5}\b",
+            )),
+            bare_colon: re(concat!(
+                r#"(^|[\s"'(<\[,;=])[^\s@:"'/=]+:[^\s:@"'/]+:"#,
+                r"(?:[A-Za-z0-9-]+\.)+[A-Za-z0-9-]+:\d{2,5}\b",
+            )),
+            bare_host_first: re(concat!(
+                r#"(^|[\s"'(<\[,;=])(?:[A-Za-z0-9-]+\.)+[A-Za-z0-9-]+:\d{2,5}@"#,
+                r"[^\s@:]+:\S+",
+            )),
+            // Имя пользователя целиком до следующего «\» или «/», пробелы внутри
+            // можно. Без разделителя после имени - старое правило (до пробела).
             win_user: re(r#"(?i)([A-Z]:[\\/]+Users[\\/]+)[^\\/\s"'<>|]+"#),
+            win_user_end: re(r#"(?i)([A-Z]:[\\/]+Users[\\/]+)[^\\/"'<>|:*?\r\n]{1,64}([\\/])"#),
             unix_user: re(r#"(?i)(/(?:Users|home)/)[^/\s"'<>|\\]+"#),
+            unix_user_end: re(r#"(?i)(/(?:Users|home)/)[^/"'<>|\\:*?\r\n]{1,64}(/)"#),
             email: re(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}"),
             ipv4: re(r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),
             ipv6: re(concat!(
@@ -40,6 +63,58 @@ fn rules() -> &'static Rules {
             col: re(r"(:\d+):\d+\b"),
         }
     })
+}
+
+/// Имя пользователя в путях Windows и Unix заменить на `<user>`.
+fn scrub_user_paths(text: &str) -> String {
+    let r = rules();
+    let mut s = r.win_user_end.replace_all(text, "${1}<user>${2}").into_owned();
+    s = r.win_user.replace_all(&s, "${1}<user>").into_owned();
+    s = r.unix_user_end.replace_all(&s, "${1}<user>${2}").into_owned();
+    r.unix_user.replace_all(&s, "${1}<user>").into_owned()
+}
+
+/// Слова, которые нельзя считать личными, даже если они лежат в переменных
+/// окружения (иначе обычный текст превратится в заглушки).
+const COMMON_WORDS: &[&str] = &[
+    "user", "users", "admin", "administrator", "root", "guest", "default", "public", "home", "localhost", "onedrive",
+    "owner", "computer", "desktop", "laptop", "windows", "system", "local", "test",
+];
+
+/// Значения из окружения, которые выдают человека: имя пользователя,
+/// компьютера, домена, папка профиля и OneDrive. `get` читает переменную.
+pub fn secrets_from_env(get: impl Fn(&str) -> Option<String>) -> Vec<(String, &'static str)> {
+    let mut out: Vec<(String, &'static str)> = Vec::new();
+    let mut add = |v: &str, tag: &'static str| {
+        let v = v.trim();
+        let low = v.to_lowercase();
+        if v.chars().count() >= 3 && !COMMON_WORDS.contains(&low.as_str()) && !out.iter().any(|(x, _)| x.to_lowercase() == low) {
+            out.push((v.to_string(), tag));
+        }
+    };
+    let last_part = |p: &str| p.trim_end_matches(['\\', '/']).rsplit(['\\', '/']).next().unwrap_or("").to_string();
+    for k in ["USERNAME", "USER"] {
+        if let Some(v) = get(k) {
+            add(&v, "<user>");
+        }
+    }
+    for k in ["COMPUTERNAME", "USERDOMAIN", "HOSTNAME"] {
+        if let Some(v) = get(k) {
+            add(&v, "<host>");
+        }
+    }
+    for k in ["USERPROFILE", "HOME"] {
+        if let Some(v) = get(k) {
+            add(&last_part(&v), "<user>");
+        }
+    }
+    for k in ["OneDrive", "OneDriveCommercial"] {
+        if let Some(v) = get(k) {
+            add(&last_part(&v), "<dir>");
+        }
+    }
+    out.sort_by_key(|(v, _)| std::cmp::Reverse(v.len()));
+    out
 }
 
 /// Логины, пароли и хосты из прокси (пул и резервы) для точной замены.
@@ -75,9 +150,16 @@ pub fn secrets_from_urls(urls: &[String]) -> Vec<(String, &'static str)> {
     out
 }
 
-/// Известные секреты берутся из настроек (пул прокси и резервы).
+/// Известные секреты: пул прокси с резервами и данные из окружения.
 fn known_secrets() -> Vec<(String, &'static str)> {
-    secrets_from_urls(&crate::settings::bridge_upstreams(&crate::settings::load()))
+    let mut v = secrets_from_urls(&crate::settings::bridge_upstreams(&crate::settings::load()));
+    for e in secrets_from_env(|k| std::env::var(k).ok()) {
+        if !v.iter().any(|(x, _)| x.eq_ignore_ascii_case(&e.0)) {
+            v.push(e);
+        }
+    }
+    v.sort_by_key(|(x, _)| std::cmp::Reverse(x.len()));
+    v
 }
 
 /// Очистить текст перед отправкой.
@@ -89,11 +171,17 @@ pub fn scrub_with(text: &str, secrets: &[(String, &'static str)]) -> String {
     let r = rules();
     let mut s = r.proxy_line.replace_all(text, "<proxy>").into_owned();
     s = r.url_auth.replace_all(&s, "${1}://<auth>@").into_owned();
-    for (v, tag) in secrets {
-        s = s.replace(v.as_str(), tag);
+    s = scrub_user_paths(&s);
+    for re in [&r.bare_at, &r.bare_colon, &r.bare_host_first] {
+        s = re.replace_all(&s, "${1}<proxy>").into_owned();
     }
-    s = r.win_user.replace_all(&s, "${1}<user>").into_owned();
-    s = r.unix_user.replace_all(&s, "${1}<user>").into_owned();
+    for (v, tag) in secrets {
+        // Без учёта регистра: Windows путает «Ivan» и «IVAN».
+        match Regex::new(&format!("(?i){}", regex::escape(v))) {
+            Ok(re) => s = re.replace_all(&s, regex::NoExpand(tag)).into_owned(),
+            Err(_) => s = s.replace(v.as_str(), tag),
+        }
+    }
     s = r.email.replace_all(&s, "<email>").into_owned();
     s = r
         .ipv4
@@ -136,8 +224,7 @@ pub fn sig(kind: &str, place: &str) -> String {
     let mut p = place.trim().replace('\\', "/");
     p = r.url_tail.replace_all(&p, "").into_owned();
     p = r.col.replace_all(&p, "${1}").into_owned();
-    p = r.win_user.replace_all(&p, "${1}<user>").into_owned();
-    p = r.unix_user.replace_all(&p, "${1}<user>").into_owned();
+    p = scrub_user_paths(&p);
     let mut h = Sha256::new();
     h.update(kind.as_bytes());
     h.update(b"\n");
@@ -197,6 +284,65 @@ mod tests {
         assert_eq!(clean(r"C:\\Users\\john\\x"), r"C:\\Users\\<user>\\x");
         assert_eq!(clean("/Users/anna/Library/x"), "/Users/<user>/Library/x");
         assert_eq!(clean("/home/bob/.config"), "/home/<user>/.config");
+    }
+
+    #[test]
+    fn user_name_with_space_is_replaced_whole() {
+        assert_eq!(clean(r"C:\Users\Иван Петров\AppData\x"), r"C:\Users\<user>\AppData\x");
+        assert_eq!(clean("c:/users/John Smith Jr/x.rs"), "c:/users/<user>/x.rs");
+        assert_eq!(clean("/Users/Anna Maria/Library/x"), "/Users/<user>/Library/x");
+        assert_eq!(clean("/home/mary ann/.config"), "/home/<user>/.config");
+        // Без разделителя после имени - до пробела, текст дальше не калечим.
+        assert_eq!(clean(r"нет доступа к C:\Users\anna повтор"), r"нет доступа к C:\Users\<user> повтор");
+        assert_eq!(clean(r"open C:\Users\anna failed"), r"open C:\Users\<user> failed");
+        assert_eq!(
+            sig("rust", r"C:\Users\Иван Петров\.cargo\x.rs:5"),
+            sig("rust", "C:/Users/boris/.cargo/x.rs:5")
+        );
+    }
+
+    #[test]
+    fn env_values_are_secrets() {
+        let env = |k: &str| match k {
+            "USERNAME" => Some("ivanp".to_string()),
+            "USER" => Some("admin".to_string()),
+            "COMPUTERNAME" => Some("DESKTOP-7K2QX".to_string()),
+            "USERDOMAIN" => Some("ab".to_string()),
+            "HOSTNAME" => Some("macbook-ivan".to_string()),
+            "USERPROFILE" => Some(r"C:\Users\Иван Петров".to_string()),
+            "HOME" => Some("/Users/olga/".to_string()),
+            "OneDrive" => Some(r"C:\Users\Иван Петров\OneDrive - Рога и Копыта".to_string()),
+            "OneDriveCommercial" => Some(r"C:\Users\x\OneDrive".to_string()),
+            _ => None,
+        };
+        let s = secrets_from_env(env);
+        let has = |v: &str, t: &str| s.iter().any(|(x, tag)| x == v && *tag == t);
+        assert!(has("ivanp", "<user>") && has("DESKTOP-7K2QX", "<host>") && has("macbook-ivan", "<host>"));
+        assert!(has("Иван Петров", "<user>") && has("olga", "<user>") && has("OneDrive - Рога и Копыта", "<dir>"));
+        assert!(s.iter().all(|(v, _)| v != "admin" && v != "ab" && v != "OneDrive"), "общие слова и короткие не берём");
+        let out = scrub_with("host desktop-7k2qx, user IVANP, dir OneDrive - Рога и Копыта, admin ok", &s);
+        assert_eq!(out, "host <host>, user <user>, dir <dir>, admin ok");
+    }
+
+    #[test]
+    fn scrubs_proxies_without_scheme() {
+        assert_eq!(clean("proxy login:pass@1.2.3.4:8000 end"), "proxy <proxy> end");
+        assert_eq!(clean("login:pass@host.com:8000"), "<proxy>");
+        assert_eq!(clean("login:p/a@ss@host.com:8000 x"), "<proxy> x");
+        assert_eq!(clean("login:pass:1.2.3.4:8000"), "<proxy>");
+        assert_eq!(clean("login:pass:host.com:8000,"), "<proxy>,");
+        assert_eq!(clean("1.2.3.4:8000@login:pass"), "<proxy>");
+        assert_eq!(clean("set a=login:pass@1.2.3.4:8000;"), "set a=<proxy>;");
+        assert_eq!(clean(r#"{"p":"login:pass@1.2.3.4:8000"}"#), r#"{"p":"<proxy>"}"#);
+        // Обычный текст не трогаем.
+        assert_eq!(clean("Contact: me@mail.ru ok"), "Contact: <email> ok");
+        assert_eq!(clean("время 12:30:45 дальше"), "время 12:30:45 дальше");
+    }
+
+    #[test]
+    fn url_password_may_contain_slash_and_at() {
+        assert_eq!(clean("http://user:p/a@ss@host.com:8080/x"), "http://<auth>@host.com:8080/x");
+        assert_eq!(clean("socks5://u:@@/x@1.2.3.4:1080 end"), "socks5://<auth>@<ip>:1080 end");
     }
 
     #[test]

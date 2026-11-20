@@ -394,9 +394,23 @@ fn wait_for_bridge_process() -> bool {
     status().running
 }
 
+/// Идёт перезапуск (stop + start): watchdog не вмешивается и ничего не шлёт.
+static RESTARTING: AtomicBool = AtomicBool::new(false);
+/// Мост хоть раз был жив в этом запуске программы.
+static SEEN_ALIVE: AtomicBool = AtomicBool::new(false);
+
 pub fn restart() -> Result<(), String> {
-    let _ = stop()?;
-    start()
+    RESTARTING.store(true, Ordering::Relaxed);
+    let r = stop().and_then(|_| start());
+    RESTARTING.store(false, Ordering::Relaxed);
+    r
+}
+
+/// Сообщать ли серверу о падении моста: только если в этом запуске мост уже
+/// был жив, прокси настроен и это не перезапуск. Иначе уйдут ложные
+/// start_failed до мастера и revived при перезапуске.
+fn should_report_bridge(seen_alive: bool, proxy_set: bool, restarting: bool) -> bool {
+    seen_alive && proxy_set && !restarting
 }
 
 // ─── Watchdog (авто-подъём упавшего шима) ────────────────────────
@@ -428,10 +442,21 @@ pub fn spawn_watchdog() {
                 std::thread::sleep(Duration::from_secs(WATCHDOG_INTERVAL_SEC));
                 continue;
             }
+            // Идёт перезапуск: не мешаем и не считаем это падением.
+            if RESTARTING.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_secs(WATCHDOG_INTERVAL_SEC));
+                continue;
+            }
             // Порт отвечает — мост жив, скан процессов не нужен.
             if port_alive() || status().running {
+                SEEN_ALIVE.store(true, Ordering::Relaxed);
                 consecutive_revivals = 0;
             } else {
+                let report = should_report_bridge(
+                    SEEN_ALIVE.load(Ordering::Relaxed),
+                    !crate::settings::effective_proxies(&crate::settings::load()).is_empty(),
+                    RESTARTING.load(Ordering::Relaxed),
+                );
                 // шим мёртв — пытаемся поднять. start() идемпотентен (через .vbs).
                 match start() {
                     Ok(()) => {
@@ -440,11 +465,18 @@ pub fn spawn_watchdog() {
                             "watchdog: шим был мёртв — поднял (попытка #{})",
                             consecutive_revivals
                         );
-                        crate::telemetry::report_bridge("Мост не отвечал, поднят заново", "watchdog:revived");
+                        if report {
+                            crate::telemetry::report_bridge("Мост не отвечал, поднят заново", "watchdog:revived");
+                        }
                     }
                     Err(e) => {
                         tracing::error!("watchdog: не смог поднять шим: {e}");
-                        crate::telemetry::report_bridge(&format!("Мост не отвечал, поднять не вышло: {e}"), "watchdog:start_failed");
+                        if report {
+                            crate::telemetry::report_bridge(
+                                &format!("Мост не отвечал, поднять не вышло: {e}"),
+                                "watchdog:start_failed",
+                            );
+                        }
                     }
                 }
                 // анти-флаппинг: если шим падает раз за разом (битый конфиг/порт),
@@ -593,5 +625,18 @@ pub async fn test() -> ShimTestResult {
             error: Some(format!("{e}")),
             external_ip: None,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bridge_reports_only_after_it_was_alive() {
+        assert!(!should_report_bridge(false, true, false), "мост ещё не был жив: старт до мастера");
+        assert!(!should_report_bridge(true, false, false), "прокси не настроен");
+        assert!(!should_report_bridge(true, true, true), "идёт перезапуск");
+        assert!(should_report_bridge(true, true, false));
     }
 }

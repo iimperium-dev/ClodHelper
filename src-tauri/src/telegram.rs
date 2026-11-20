@@ -177,11 +177,10 @@ fn open_proxy_window(main: &str) -> Result<(), String> {
 
 /// Запомнить, что окно прокси Telegram уже показывали.
 fn mark_prompted() {
-    let mut s = crate::settings::load();
-    if !s.telegram_prompted {
+    let _ = crate::settings::with_settings_strict(|s| {
         s.telegram_prompted = true;
-        let _ = crate::settings::save(&s);
-    }
+        Ok(())
+    });
 }
 
 /// Автонастройка: один раз, когда Telegram впервые замечен идущим напрямую

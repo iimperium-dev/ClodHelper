@@ -102,29 +102,63 @@ pub async fn fetch() -> Result<Vec<Notice>, String> {
     if let Some(path) = std::env::var_os("CLOD_NOTICES_FILE") {
         let text = std::fs::read_to_string(path).map_err(|e| format!("CLOD_NOTICES_FILE: {e}"))?;
         let s = crate::settings::set_notices_cache(parse(&text, env!("CARGO_PKG_VERSION"))?)?;
-        return Ok(s.notices_cache.iter().filter(|n| !s.notices_toasted.contains(&n.id)).cloned().collect());
+        return Ok(cached(&s).into_iter().filter(|n| !s.notices_toasted.contains(&n.id)).collect());
     }
     // raw.githubusercontent.com у части провайдеров в России заблокирован:
     // не достали напрямую — берём через свой прокси (строгий вход моста).
     // Два источника: файл на GitHub и сервер рассылок. Один упал — берём
-    // другой; ошибка — только если упали оба.
+    // другой; ошибка — только если не получилось ничего. Сервер статистики
+    // спрашиваем только при включённой статистике.
     let current = env!("CARGO_PKG_VERSION");
-    let (github, server) = tokio::join!(fetch_github(current), fetch_server(current));
-    let list = match (github, server) {
-        (Err(a), Err(b)) => return Err(format!("рассылки: GitHub — {a}; сервер — {b}")),
-        (a, b) => {
-            // Один источник лежит: прежний кэш - третьим, самым младшим,
-            // чтобы его записи не пропадали из колокольчика.
-            let partial = a.is_err() || b.is_err();
-            let mut lists = vec![a.unwrap_or_default(), b.unwrap_or_default()];
-            if partial {
-                lists.push(crate::settings::load().notices_cache);
-            }
-            merge(lists)
+    let server_on = tokio::task::spawn_blocking(|| {
+        crate::settings::load_checked().is_ok_and(|s| crate::settings::usage_stats_on(&s))
+    })
+    .await
+    .unwrap_or(false);
+    let server_fut = async {
+        if server_on {
+            Some(fetch_server(current).await)
+        } else {
+            None
         }
     };
-    let s = crate::settings::set_notices_cache(list)?;
-    Ok(s.notices_cache.iter().filter(|n| !s.notices_toasted.contains(&n.id)).cloned().collect())
+    let (github, server) = tokio::join!(fetch_github(current), server_fut);
+    if let (Err(a), false) = (&github, matches!(server, Some(Ok(_)))) {
+        return Err(match &server {
+            Some(Err(b)) => format!("рассылки: GitHub — {a}; сервер — {b}"),
+            _ => format!("рассылки: GitHub — {a}"),
+        });
+    }
+    // Кэш каждого источника свой: ответил — заменяется целиком, упал —
+    // остаётся прежний (заново проверенный на пригодность этой версии).
+    let s = crate::settings::update_notices_caches(|s| {
+        combine_caches(&s.notices_cache, &s.notices_cache_server, github, server, current)
+    })?;
+    Ok(cached(&s).into_iter().filter(|n| !s.notices_toasted.contains(&n.id)).collect())
+}
+
+/// Новые кэши (GitHub, сервер). Источник ответил (Ok) — его кэш заменяется
+/// целиком; упал (Err) или не спрашивался (None) — берём его прежний кэш,
+/// заново пропущенный через applies(current).
+fn combine_caches(
+    prev_github: &[Notice],
+    prev_server: &[Notice],
+    github: Result<Vec<Notice>, String>,
+    server: Option<Result<Vec<Notice>, String>>,
+    current: &str,
+) -> (Vec<Notice>, Vec<Notice>) {
+    let keep = |prev: &[Notice]| -> Vec<Notice> { prev.iter().filter(|n| applies(n, current)).cloned().collect() };
+    let gh = github.unwrap_or_else(|_| keep(prev_github));
+    let srv = match server {
+        Some(Ok(v)) => v,
+        _ => keep(prev_server),
+    };
+    (gh, srv)
+}
+
+/// Все закэшированные рассылки (оба источника), новые сверху.
+pub fn cached(s: &crate::settings::Settings) -> Vec<Notice> {
+    merge(vec![s.notices_cache.clone(), s.notices_cache_server.clone()])
 }
 
 /// Файл рассылок на GitHub: напрямую, не вышло — через мост. 404 — пусто.
@@ -232,7 +266,7 @@ pub fn list() -> Vec<NoticeItem> {
             link: None,
         });
     }
-    for n in &s.notices_cache {
+    for n in &cached(&s) {
         items.push(NoticeItem {
             id: n.id.clone(),
             kind: "news",
@@ -301,6 +335,37 @@ mod tests {
         let m = merge(vec![vec![n("a", "2026-11-01", "свежий a")], Vec::new(), cache]);
         assert_eq!(m.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(), vec!["a", "old"]);
         assert_eq!(m[0].title, "свежий a");
+    }
+
+    #[test]
+    fn source_caches_are_independent() {
+        let n = |id: &str, max: Option<&str>| Notice {
+            id: id.into(),
+            date: "2026-11-01".into(),
+            title: id.into(),
+            body: String::new(),
+            link: None,
+            platforms: vec![],
+            min_version: None,
+            max_version: max.map(str::to_string),
+        };
+        let prev_gh = vec![n("gh-old", None), n("gh-gone", Some("0.1.0"))];
+        let prev_srv = vec![n("srv-old", None)];
+        let ids = |v: &[Notice]| v.iter().map(|x| x.id.clone()).collect::<Vec<_>>();
+        // GitHub упал, сервер ответил: кэш GitHub - прежний (минус неподходящее), кэш сервера заменён целиком.
+        let (gh, srv) = combine_caches(&prev_gh, &prev_srv, Err("нет сети".into()), Some(Ok(vec![n("srv-new", None)])), "0.8.3");
+        assert_eq!(ids(&gh), vec!["gh-old"], "прежний кэш заново прошёл applies");
+        assert_eq!(ids(&srv), vec!["srv-new"], "ответивший источник заменяется целиком");
+        // Сервер упал, GitHub ответил пустым списком: пустой ответ тоже заменяет кэш.
+        let (gh, srv) = combine_caches(&prev_gh, &prev_srv, Ok(vec![]), Some(Err("500".into())), "0.8.3");
+        assert!(gh.is_empty());
+        assert_eq!(ids(&srv), vec!["srv-old"]);
+        // Сервер не спрашивали (статистика выключена): его кэш остаётся.
+        let (_, srv) = combine_caches(&prev_gh, &prev_srv, Ok(vec![]), None, "0.8.3");
+        assert_eq!(ids(&srv), vec!["srv-old"]);
+        // Колокольчик видит оба источника.
+        let s = crate::settings::Settings { notices_cache: prev_gh, notices_cache_server: prev_srv, ..Default::default() };
+        assert_eq!(cached(&s).len(), 3);
     }
 
     #[test]

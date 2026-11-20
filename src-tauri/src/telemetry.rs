@@ -8,7 +8,7 @@
 //! - `/v1/report` - отчёт, который человек отправил сам (всегда).
 //!
 //! Любой текст перед отправкой чистится (telemetry_scrub.rs). Сначала запрос
-//! идёт напрямую, не вышло - через мост. Без повторов.
+//! идёт напрямую; через мост - только если соединиться не удалось. Без повторов.
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -24,8 +24,10 @@ use crate::telemetry_scrub::{place_from_stack, scrub, sig, truncate};
 #[cfg(not(debug_assertions))]
 const BASE: &str = "https://stats.clodhelper.com";
 const TIMEOUT: Duration = Duration::from_secs(10);
-/// Первый пинг и разбор «отложенного» сбоя - через минуту после запуска.
-const FIRST_DELAY: Duration = Duration::from_secs(60);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// Пинг дня уходит, когда монитор отметил трафик, а если трафика не было -
+/// через столько работы программы.
+const MAX_WAIT_FOR_USE: Duration = Duration::from_secs(30 * 60);
 /// Как часто проверять, не пора ли слать пинг.
 const CHECK_EVERY: Duration = Duration::from_secs(3 * 3600);
 const MAX_UI_REPORTS: usize = 5;
@@ -59,6 +61,7 @@ fn os_name() -> &'static str {
 fn client(proxy: Option<&str>) -> Result<reqwest::Client, String> {
     let mut b = reqwest::Client::builder()
         .user_agent(concat!("ClodHelper/", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(CONNECT_TIMEOUT)
         .timeout(TIMEOUT);
     if let Some(p) = proxy {
         b = b.proxy(reqwest::Proxy::all(p).map_err(|e| e.to_string())?);
@@ -70,18 +73,26 @@ fn bridge_proxy() -> String {
     format!("http://127.0.0.1:{}", crate::claude_desktop::PROXY_PORT)
 }
 
-/// Выполнить запрос напрямую, не вышло - через мост. Без повторов.
+/// Через мост идём только когда напрямую не удалось соединиться: запрос
+/// не дошёл до сервера. Тайм-аут, обрыв после отправки и любой HTTP-статус
+/// повторять нельзя: сервер мог уже принять запрос.
+fn should_try_bridge(e: &reqwest::Error) -> bool {
+    e.is_connect()
+}
+
+/// Выполнить запрос напрямую; не удалось соединиться - через мост.
 async fn with_fallback<F, Fut, T>(f: F) -> Result<T, String>
 where
     F: Fn(reqwest::Client) -> Fut,
-    Fut: std::future::Future<Output = Result<T, String>>,
+    Fut: std::future::Future<Output = Result<T, reqwest::Error>>,
 {
     match f(client(None)?).await {
         Ok(v) => Ok(v),
-        Err(direct) => {
+        Err(direct) if should_try_bridge(&direct) => {
             let bridge = bridge_proxy();
             f(client(Some(&bridge))?).await.map_err(|via| format!("напрямую: {direct}; через мост: {via}"))
         }
+        Err(direct) => Err(direct.to_string()),
     }
 }
 
@@ -92,8 +103,8 @@ async fn post(path: &str, body: &Value) -> Result<(), String> {
     with_fallback(|c| {
         let (url, body) = (url.clone(), body.clone());
         async move {
-            let r = c.post(url).json(&body).send().await.map_err(|e| e.to_string())?;
-            r.error_for_status().map(|_| ()).map_err(|e| e.to_string())
+            let r = c.post(url).json(&body).send().await?;
+            r.error_for_status().map(|_| ())
         }
     })
     .await
@@ -106,11 +117,11 @@ pub async fn get(path_and_query: &str) -> Result<Option<String>, String> {
     with_fallback(|c| {
         let url = url.clone();
         async move {
-            let r = c.get(url).send().await.map_err(|e| e.to_string())?;
+            let r = c.get(url).send().await?;
             if r.status() == reqwest::StatusCode::NOT_FOUND {
                 return Ok(None);
             }
-            r.error_for_status().map_err(|e| e.to_string())?.text().await.map(Some).map_err(|e| e.to_string())
+            r.error_for_status()?.text().await.map(Some)
         }
     })
     .await
@@ -231,7 +242,15 @@ pub fn plan_ping(st: &TelemetryState, now: &Stamp, version: &str, au: bool) -> P
 }
 
 /// Записать, что пинг дошёл (только после ответа 2xx).
+#[cfg(test)]
 pub fn commit_ping(st: &mut TelemetryState, p: &Ping, now: &Stamp) {
+    let planned = st.pending_how.clone();
+    commit_ping_planned(st, p, now, &planned);
+}
+
+/// То же, но pending_how очищается, только если с момента расчёта пинга он
+/// не поменялся (установщик мог записать новое значение, пока шёл запрос).
+pub fn commit_ping_planned(st: &mut TelemetryState, p: &Ping, now: &Stamp, planned_how: &Option<String>) {
     st.first_sent = true;
     st.last_day = Some(now.day.clone());
     if p.w {
@@ -245,12 +264,17 @@ pub fn commit_ping(st: &mut TelemetryState, p: &Ping, now: &Stamp) {
     }
     if p.how.is_some() || st.legacy {
         st.how_version = Some(p.v.clone());
-        st.pending_how = None;
+        if st.pending_how == *planned_how {
+            st.pending_how = None;
+        }
     }
 }
 
+/// Будит задачу пинга, когда монитор впервые за день отметил трафик.
+static USED_NOTIFY: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
 /// Мониторинг видит, что проверка прокси прошла: сегодня прокси работал.
-/// В настройки пишем только при смене дня.
+/// В настройки пишем только при смене дня и сразу будим задачу пинга.
 pub fn note_used() {
     static DAY: Mutex<String> = Mutex::new(String::new());
     let day = Stamp::now().day;
@@ -260,33 +284,92 @@ pub fn note_used() {
     }
     if settings::update_telemetry(|t| t.used_day = Some(day.clone())).is_ok() {
         *g = day;
+        USED_NOTIFY.notify_one();
     }
 }
 
-/// Обновились со старой версии (до статистики) - не считать новой установкой.
-/// Вызывать при старте, до интерфейса.
-pub fn mark_legacy() {
-    let s = settings::load();
-    if !s.telemetry.first_sent && s.telemetry.install_week.is_none() && !s.telemetry.legacy && s.last_version_seen.is_some() {
-        let _ = settings::update_telemetry(|t| t.legacy = true);
+/// Первая отметка установки. Уже есть версия из «Что нового» - обновились со
+/// старой версии (до статистики): legacy, не новая установка. Нет - новая
+/// установка: неделя пишется сразу, не дожидаясь сервера. Возвращает, менялось ли.
+pub fn init_install_state(t: &mut TelemetryState, had_version: bool, week: &str) -> bool {
+    if t.first_sent || t.install_week.is_some() || t.legacy {
+        return false;
     }
+    if had_version {
+        t.legacy = true;
+    } else {
+        t.install_week = Some(week.to_string());
+    }
+    true
+}
+
+/// Вызывать из setup: после проверки единственного экземпляра, не в режиме
+/// заставки, до интерфейса.
+pub fn mark_legacy() {
+    let week = Stamp::now().week;
+    let Ok(s) = settings::load_checked() else { return };
+    if !init_install_state(&mut s.telemetry.clone(), s.last_version_seen.is_some(), &week) {
+        return;
+    }
+    let _ = settings::with_settings_strict(|s| {
+        let had = s.last_version_seen.is_some();
+        init_install_state(&mut s.telemetry, had, &week);
+        Ok(())
+    });
+}
+
+/// День, за который пинг уже принят сервером (2xx). Если запись в настройки
+/// не удалась, в тот же день повторно не шлём.
+static SENT_DAY: Mutex<String> = Mutex::new(String::new());
+
+fn sent_today(day: &str) -> bool {
+    SENT_DAY.lock().map(|g| *g == day).unwrap_or(false)
+}
+
+fn mark_sent_today(day: &str) {
+    if let Ok(mut g) = SENT_DAY.lock() {
+        *g = day.to_string();
+    }
+}
+
+/// Статистика разрешена только по прочитанным настройкам: если файл не
+/// читается, считаем выключенной.
+fn load_if_stats_on() -> Option<settings::Settings> {
+    settings::load_checked().ok().filter(settings::usage_stats_on)
+}
+
+/// Отчёты о сбоях разрешены только по прочитанным настройкам.
+fn reports_on() -> bool {
+    settings::load_checked().is_ok_and(|s| settings::crash_reports_on(&s))
 }
 
 /// Отправить пинг, если сегодня ещё не отправляли.
 async fn ping_if_due() {
-    let s = settings::load();
-    if !settings::usage_stats_on(&s) || base().is_none() {
+    let now = Stamp::now();
+    if sent_today(&now.day) || base().is_none() {
         return;
     }
-    let now = Stamp::now();
+    // Чтение файла - не в потоке async-задачи.
+    let Ok(Some(s)) = tokio::task::spawn_blocking(load_if_stats_on).await else { return };
     if s.telemetry.last_day.as_deref() == Some(&now.day) {
         return;
     }
+    let planned_how = s.telemetry.pending_how.clone();
     let p = plan_ping(&s.telemetry, &now, env!("CARGO_PKG_VERSION"), s.auto_update == Some(true));
     let Ok(body) = serde_json::to_value(&p) else { return };
     match post("/v1/ping", &body).await {
         Ok(()) => {
-            let _ = settings::update_telemetry(|t| commit_ping(t, &p, &now));
+            mark_sent_today(&now.day);
+            let day = now.day.clone();
+            let res = tokio::task::spawn_blocking(move || {
+                settings::update_telemetry(|t| commit_ping_planned(t, &p, &now, &planned_how))
+            })
+            .await;
+            match res {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => tracing::warn!("статистика: пинг за {day} принят, но запись не удалась: {e}"),
+                Err(e) => tracing::warn!("статистика: запись отметки пинга оборвалась: {e}"),
+            }
         }
         Err(e) => tracing::info!("статистика: {e}"),
     }
@@ -294,12 +377,28 @@ async fn ping_if_due() {
 
 /// Фон: сбой прошлого запуска и пинг. Вызывается из setup.
 pub fn spawn() {
+    // Сбой прошлого запуска - сразу, без ожидания.
     tauri::async_runtime::spawn(async {
-        tokio::time::sleep(FIRST_DELAY).await;
         send_pending_crash().await;
+    });
+    tauri::async_runtime::spawn(async {
+        let started = tokio::time::Instant::now();
         loop {
+            // Пинг дня: когда монитор отметил трафик (used = true) или через
+            // 30 минут работы, если трафика не было. Что раньше.
+            let left = MAX_WAIT_FOR_USE.saturating_sub(started.elapsed());
+            if !left.is_zero() {
+                tokio::select! {
+                    _ = USED_NOTIFY.notified() => {}
+                    _ = tokio::time::sleep(left) => {}
+                }
+            }
             ping_if_due().await;
-            tokio::time::sleep(CHECK_EVERY).await;
+            // Дальше: проснуться от трафика нового дня или проверить через 3 часа.
+            tokio::select! {
+                _ = USED_NOTIFY.notified() => {}
+                _ = tokio::time::sleep(CHECK_EVERY) => {}
+            }
         }
     });
 }
@@ -348,7 +447,7 @@ fn first_time(sig: &str) -> bool {
 
 /// Отправить сбой в фоне (мост, обновление, интерфейс).
 fn spawn_crash(kind: &str, msg: &str, stack: &str, place: &str) {
-    if !settings::crash_reports_on(&settings::load()) || base().is_none() {
+    if !reports_on() || base().is_none() {
         return;
     }
     let c = build_crash(kind, msg, stack, place);
@@ -368,7 +467,7 @@ pub fn report_ui(msg: &str, stack: &str) {
         return;
     }
     let place = place_from_stack(msg, stack);
-    if !settings::crash_reports_on(&settings::load()) || base().is_none() || !first_time(&sig("ui", &place)) {
+    if !reports_on() || base().is_none() || !first_time(&sig("ui", &place)) {
         return;
     }
     UI_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -399,13 +498,16 @@ fn pending_path() -> Option<std::path::PathBuf> {
 pub fn install_panic_hook() {
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| write_pending(info)));
+        // Паника внутри хука при панике - сразу abort, поймать её нельзя.
+        // Поэтому write_pending не делает ничего рискованного: чтение
+        // настроек и запись файла, без unwrap.
+        write_pending(info);
         prev(info);
     }));
 }
 
 fn write_pending(info: &std::panic::PanicHookInfo<'_>) {
-    if base().is_none() || !settings::crash_reports_on(&settings::load()) {
+    if base().is_none() || !reports_on() {
         return;
     }
     let msg = match info.payload().downcast_ref::<&str>() {
@@ -416,19 +518,28 @@ fn write_pending(info: &std::panic::PanicHookInfo<'_>) {
     let stack = std::backtrace::Backtrace::force_capture().to_string();
     let c = build_crash("rust", &format!("{msg} ({place})"), &stack, &place);
     if let (Some(path), Ok(text)) = (pending_path(), serde_json::to_string(&c)) {
-        let _ = std::fs::write(path, text);
+        // Атомарно: tmp + rename, чтобы при аварийном выходе не остался обрезанный файл.
+        let tmp = path.with_extension("json.tmp");
+        if std::fs::write(&tmp, text).is_ok() && std::fs::rename(&tmp, &path).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
     }
 }
 
 /// Отправить сбой прошлого запуска. Файл удаляется после одной попытки.
 async fn send_pending_crash() {
-    let Some(path) = pending_path() else { return };
-    let Ok(text) = std::fs::read_to_string(&path) else { return };
-    let _ = std::fs::remove_file(&path);
-    if !settings::crash_reports_on(&settings::load()) || base().is_none() {
-        return;
-    }
-    let Ok(c) = serde_json::from_str::<CrashReport>(&text) else { return };
+    // Файлы и настройки - в блокирующей задаче. Файл удаляется до попытки.
+    let read = tokio::task::spawn_blocking(|| {
+        let path = pending_path()?;
+        let text = std::fs::read_to_string(&path).ok()?;
+        let _ = std::fs::remove_file(&path);
+        if !reports_on() || base().is_none() {
+            return None;
+        }
+        serde_json::from_str::<CrashReport>(&text).ok()
+    })
+    .await;
+    let Ok(Some(c)) = read else { return };
     if let Err(e) = send_crash(&c).await {
         tracing::info!("отчёт о сбое: {e}");
     }
@@ -439,17 +550,25 @@ async fn send_pending_crash() {
 /// Отчёт, отправленный человеком: текст, состояние программы и контакт.
 pub async fn send_report(text: String, contact: Option<String>) -> Result<(), String> {
     const FAIL: &str = "Не получилось отправить. Проверьте интернет и попробуйте ещё раз";
-    let diag = tokio::task::spawn_blocking(crate::diagnostics::report).await.map_err(|_| FAIL.to_string())?;
-    let mut body = json!({
-        "v": env!("CARGO_PKG_VERSION"),
-        "os": os_name(),
-        "text": scrub(&truncate(&text, 10_000)),
-        "diag": scrub(&truncate(&diag, 64 * 1024)),
-    });
-    // Контакт человек вписал сам и хочет, чтобы ему ответили: не чистим.
-    if let Some(c) = contact.map(|c| c.trim().to_string()).filter(|c| !c.is_empty()) {
-        body["contact"] = json!(truncate(&c, 200));
-    }
+    // Подготовка отчёта: на сервер уходит урезанная диагностика (без сайтов,
+    // меток, корпоративных прокси и чужих доменов), человек же видит в
+    // программе полный текст. Чтение файлов - в блокирующей задаче.
+    let body = tokio::task::spawn_blocking(move || {
+        let diag = crate::diagnostics::report_for_server();
+        let mut body = json!({
+            "v": env!("CARGO_PKG_VERSION"),
+            "os": os_name(),
+            "text": scrub(&truncate(&text, 10_000)),
+            "diag": scrub(&truncate(&diag, 64 * 1024)),
+        });
+        // Контакт человек вписал сам и хочет, чтобы ему ответили: не чистим.
+        if let Some(c) = contact.map(|c| c.trim().to_string()).filter(|c| !c.is_empty()) {
+            body["contact"] = json!(truncate(&c, 200));
+        }
+        body
+    })
+    .await
+    .map_err(|_| FAIL.to_string())?;
     post("/v1/report", &body).await.map_err(|e| {
         tracing::info!("отчёт: {e}");
         FAIL.to_string()
@@ -603,6 +722,116 @@ mod tests {
         assert_eq!(a.sig, b.sig);
         assert!(!a.msg.contains("anna") && !a.msg.contains("mail.com") && !a.msg.contains("1.2.3.4"));
         assert_eq!(a.kind, "rust");
+    }
+
+    #[test]
+    fn fresh_install_gets_week_at_once_update_gets_legacy() {
+        let mut t = st();
+        assert!(init_install_state(&mut t, false, "2026-W47"));
+        assert_eq!(t.install_week.as_deref(), Some("2026-W47"));
+        assert!(!t.legacy, "новая установка не legacy, даже если первый пинг не дошёл");
+        // Повторный запуск ничего не меняет.
+        assert!(!init_install_state(&mut t, false, "2026-W48"));
+        assert_eq!(t.install_week.as_deref(), Some("2026-W47"));
+        let mut old = st();
+        assert!(init_install_state(&mut old, true, "2026-W47"));
+        assert!(old.legacy && old.install_week.is_none());
+        let mut sent = TelemetryState { first_sent: true, ..st() };
+        assert!(!init_install_state(&mut sent, false, "2026-W47"));
+        // Пинг новой установки несёт установленную неделю, а не «текущую».
+        let p = plan_ping(&t, &at(2026, 12, 20), "0.9.0", false);
+        assert_eq!(p.iw.as_deref(), Some("2026-W47"));
+        assert!(p.first);
+    }
+
+    #[test]
+    fn pending_how_survives_change_during_request() {
+        let now = at(2026, 11, 20);
+        let mut s = TelemetryState { pending_how: Some("manual".into()), ..st() };
+        let planned = s.pending_how.clone();
+        let p = plan_ping(&s, &now, "0.9.0", false);
+        // Пока шёл запрос, установщик записал новое значение.
+        s.pending_how = Some("auto".into());
+        commit_ping_planned(&mut s, &p, &now, &planned);
+        assert_eq!(s.pending_how.as_deref(), Some("auto"), "новое значение не затираем");
+        assert_eq!(s.how_version.as_deref(), Some("0.9.0"));
+        // Не менялось - очищается.
+        let mut s2 = TelemetryState { pending_how: Some("manual".into()), ..st() };
+        let planned = s2.pending_how.clone();
+        commit_ping_planned(&mut s2, &p, &now, &planned);
+        assert_eq!(s2.pending_how, None);
+    }
+
+    #[test]
+    fn sent_today_blocks_repeat_in_same_day() {
+        assert!(!sent_today("2099-01-01"));
+        mark_sent_today("2099-01-01");
+        assert!(sent_today("2099-01-01"));
+        assert!(!sent_today("2099-01-02"));
+    }
+
+    /// Мини-сервер: на каждое соединение отвечает заданным статусом.
+    fn serve_status(status: &'static str) -> u16 {
+        use std::io::{Read, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for s in l.incoming().flatten() {
+                let mut s = s;
+                let mut buf = [0u8; 2048];
+                let _ = s.read(&mut buf);
+                let _ = s.write_all(format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes());
+            }
+        });
+        port
+    }
+
+    #[tokio::test]
+    async fn fallback_only_on_connect_error() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        // HTTP-статус 500: сервер ответил, моста не пробуем.
+        let port = serve_status("500 Internal Server Error");
+        let calls = AtomicUsize::new(0);
+        let url = format!("http://127.0.0.1:{port}/x");
+        let r: Result<(), String> = with_fallback(|c| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            let url = url.clone();
+            async move { c.post(url).send().await?.error_for_status().map(|_| ()) }
+        })
+        .await;
+        assert!(r.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "после HTTP-статуса повтора нет");
+        // Тайм-аут после отправки: тоже без повтора.
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let calls = AtomicUsize::new(0);
+        let url = format!("http://127.0.0.1:{port}/x");
+        let r: Result<(), String> = with_fallback(|c| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            let url = url.clone();
+            async move {
+                c.post(url).timeout(Duration::from_millis(300)).send().await?.error_for_status().map(|_| ())
+            }
+        })
+        .await;
+        assert!(r.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "после тайм-аута повтора нет");
+        drop(l);
+        // Соединиться не удалось (порт закрыт): второй заход через мост.
+        let port = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let calls = AtomicUsize::new(0);
+        let url = format!("http://127.0.0.1:{port}/x");
+        let r: Result<(), String> = with_fallback(|c| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            let url = url.clone();
+            async move { c.post(url).send().await?.error_for_status().map(|_| ()) }
+        })
+        .await;
+        assert!(r.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "ошибка соединения: напрямую и через мост");
     }
 
     #[test]

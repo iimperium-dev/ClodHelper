@@ -89,9 +89,11 @@ pub async fn apps_layout_get() -> Result<Option<serde_json::Value>, String> {
 
 #[tauri::command]
 pub async fn apps_layout_set(layout: serde_json::Value) -> Result<(), String> {
-    let mut s = settings::load();
-    s.apps_layout = Some(layout);
-    settings::save(&s)
+    settings::with_settings(|s| {
+        s.apps_layout = Some(layout);
+        Ok(())
+    })
+    .map(|_| ())
 }
 
 /// Открыть в браузере страницу расширения, перехватившего прокси.
