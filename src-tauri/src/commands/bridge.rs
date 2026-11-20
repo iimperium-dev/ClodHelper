@@ -140,7 +140,8 @@ pub async fn bridge_versions(app: AppHandle) -> Result<BridgeVersions, String> {
 /// Есть ли новая версия Clod Helper (последний релиз GitHub).
 #[tauri::command]
 pub async fn update_check(app: AppHandle) -> Result<Option<crate::updater::UpdateInfo>, String> {
-    let found = crate::updater::check().await?;
+    // Ручная проверка раскатку не смотрит (но уважает остановку выпуска).
+    let found = crate::updater::check(crate::updater::Mode::Manual).await?;
     crate::update_notify::remember(&found);
     // Колокольчик и трей узнают об обновлении и от ручной проверки.
     let _ = app.emit("notices:changed", crate::notices::unread());
@@ -163,6 +164,11 @@ pub async fn update_install(app: AppHandle, info: crate::updater::UpdateInfo) ->
 /// Установка обновления; `how` ("manual" | "auto") уходит в статистику.
 /// Тихий путь автообновления передаст "auto".
 pub(crate) async fn install_update(app: AppHandle, info: crate::updater::UpdateInfo, how: &str) -> Result<(), String> {
+    // Одна установка за раз (ручная или тихая): вторая получает ошибку и не
+    // трогает ни статистику, ни отметки первой.
+    if crate::updater::is_installing() {
+        return Err(crate::updater::ALREADY.into());
+    }
     let emitter = app.clone();
     let progress = move |p: crate::updater::UpdateProgress| {
         let _ = emitter.emit("update:progress", p);
@@ -170,16 +176,22 @@ pub(crate) async fn install_update(app: AppHandle, info: crate::updater::UpdateI
     // Установщик может стартовать и тут же закрыть программу: как запущено -
     // записываем заранее, при ошибке снимаем.
     crate::telemetry::set_pending_how(Some(how));
-    if let Err(e) = crate::updater::install(&info, &progress).await {
+    if let Err(e) = crate::updater::install(&info, &progress, how).await {
+        if e == crate::updater::ALREADY {
+            return Err(e);
+        }
         crate::telemetry::set_pending_how(None);
         crate::telemetry::report_update(&e);
         return Err(e);
     }
     crate::update_notify::close_toast(&app);
-    progress(crate::updater::UpdateProgress { stage: "restart", received: 0, total: 0 });
-    // Пауза, чтобы «Перезапускаю…» успело показаться: иначе окно исчезает
-    // посреди «Устанавливаю» и это выглядит как вылет.
-    tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+    // Тихая установка идёт без окон: ни «Перезапускаю», ни пауз.
+    if how != "auto" {
+        progress(crate::updater::UpdateProgress { stage: "restart", received: 0, total: 0 });
+        // Пауза, чтобы «Перезапускаю…» успело показаться: иначе окно исчезает
+        // посреди «Устанавливаю» и это выглядит как вылет.
+        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+    }
     // Новую версию поставит и запустит фоновый скрипт (macOS) или
     // установщик (Windows), когда мы выйдем.
     app.exit(0);
@@ -419,7 +431,12 @@ pub async fn claude_wipe_run(
     export_chats: Option<bool>,
 ) -> Result<crate::claude_wipe::WipeResult, String> {
     let export = export_chats.unwrap_or(false);
-    tokio::task::spawn_blocking(move || crate::claude_wipe::wipe(include_desktop, include_code, include_chats, export))
+    // Пока идёт очистка, тихая установка обновления ждёт.
+    let busy = crate::auto_update::busy_guard();
+    tokio::task::spawn_blocking(move || {
+        let _busy = busy;
+        crate::claude_wipe::wipe(include_desktop, include_code, include_chats, export)
+    })
         .await
         .map_err(|e| format!("Внутренняя ошибка: {e}"))?
 }
@@ -427,7 +444,11 @@ pub async fn claude_wipe_run(
 /// Сохранить все локальные чаты Claude в ZIP в «Загрузки».
 #[tauri::command]
 pub async fn claude_chats_export() -> Result<crate::claude_chats_export::Archive, String> {
-    tokio::task::spawn_blocking(crate::claude_chats_export::export)
+    let busy = crate::auto_update::busy_guard();
+    tokio::task::spawn_blocking(move || {
+        let _busy = busy;
+        crate::claude_chats_export::export()
+    })
         .await
         .map_err(|e| format!("Внутренняя ошибка: {e}"))?
 }

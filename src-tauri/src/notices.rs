@@ -282,6 +282,8 @@ pub fn list() -> Vec<NoticeItem> {
             link_label: None,
         });
     }
+    // Итог установки обновления: «Обновлено до X» / «Не установилось».
+    items.extend(crate::auto_update::bell_items(&s, crate::auto_update::now_secs()));
     for n in &cached(&s) {
         items.push(NoticeItem {
             id: n.id.clone(),

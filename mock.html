@@ -125,7 +125,8 @@
       dns: [{ ip: "172.253.11.22", country: "United States of America", org: "Google LLC" }],
       ip_hidden: true, dns_leak: false, leaking_apps: [], error: null,
     },
-    update_check: { version: "0.7.0", notes: "", url: "x", sums_url: "y" },
+    update_check: { version: "0.7.0", notes: "", url: "x", sums_url: "y", page: "https://example.com/release",
+      ...(params.has("manual") ? { manual_only: true } : {}) },
     notices_list: params.has("notice")
       ? [{ id: "whats-new-0-9-1", kind: "news", date: "2026-11-11", title: "Вышла версия 0.9.1", body: "Что изменилось в этой версии.", link: "https://example.com/new", link_label: "Что нового", read: false }]
       : [],
@@ -285,6 +286,11 @@
         return null;
       }
       if (cmd.startsWith("plugin:event|")) return 1;
+      if (cmd === "update_install") {
+        await wait(200);
+        if (params.has("busyupd")) throw "Обновление уже устанавливается";
+        return null;
+      }
       if (cmd === "auto_update_get") return { enabled: autoUpdate === true, offer: autoUpdate === null && !params.has("fresh") };
       if (cmd === "privacy_get") return privacyState();
       if (cmd === "privacy_set") {

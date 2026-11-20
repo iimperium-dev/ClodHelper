@@ -44,6 +44,8 @@ pub async fn wizard_install(
     let step = |phase: &str, state: &str| {
         let _ = app.emit("wizard:step", format!("{phase}:{state}"));
     };
+    // Пока идёт установка мастера, тихая установка обновления ждёт.
+    let _busy = crate::auto_update::busy_guard();
     proxy::parse(&proxy_url)?;
 
     // 1) Мост: копия из ресурсов в %LOCALAPPDATA%\ClaudeDesktopProxy.

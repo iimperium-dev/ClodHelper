@@ -1,4 +1,5 @@
 mod apps;
+mod auto_update;
 mod autostart;
 mod bridge_file;
 mod claude_desktop;
@@ -87,7 +88,15 @@ pub fn run() {
 
     // Контекст (с ресурсами фронтенда) создаётся один раз: второй вызов
     // generate_context! вшил бы фронтенд в exe повторно.
-    let context = tauri::generate_context!();
+    #[allow(unused_mut)]
+    let mut context = tauri::generate_context!();
+    // Запуск в трей (--tray: автозапуск, тихое обновление): главное окно
+    // сразу создаётся скрытым, без мелькания на экране.
+    if std::env::args().any(|a| a == "--tray") {
+        for w in context.config_mut().app.windows.iter_mut().filter(|w| w.label == "main") {
+            w.visible = false;
+        }
+    }
 
     // Заставка на время установки обновления — отдельный короткий режим.
     #[cfg(target_os = "windows")]
@@ -286,6 +295,9 @@ pub fn run() {
             // Фоновая проверка обновлений: новая версия — уведомление в углу
             // экрана со звуком (одно на версию).
             update_notify::spawn_watcher(app.handle().clone());
+            // Тихая автоустановка: скачивание заранее и установка при простое;
+            // итог установки, начатой прошлой копией, проверяется тут же.
+            auto_update::spawn(app.handle().clone());
 
             // Статистика (раз в сутки) и отчёт о сбое прошлого запуска.
             // Метка установки - здесь: единственный экземпляр уже проверен,

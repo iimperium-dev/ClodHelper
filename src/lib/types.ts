@@ -410,6 +410,14 @@ export interface UpdateInfo {
   sha256: string;
   /** Пункты «Что нового» этой версии. */
   highlights?: string[];
+  /** Срочное исправление. */
+  force?: boolean;
+  /** Слишком старая установка: обновить можно только вручную со страницы релиза. */
+  manual_only?: boolean;
+  /** Страница релиза на GitHub. */
+  page?: string;
+  /** Доля установок, которым предложена версия. */
+  rollout?: number;
 }
 
 /** Автообновление (settings.auto_update). */

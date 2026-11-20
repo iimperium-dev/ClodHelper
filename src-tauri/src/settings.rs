@@ -116,6 +116,21 @@ pub struct Settings {
     /// «Что нового». None — сборки до этого поля (или первый запуск).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_version_seen: Option<String>,
+    /// Случайный номер установки 0-99 для поэтапной раскатки обновлений
+    /// (auto_update.rs). Создаётся один раз и никуда не отправляется.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_rollout: Option<u8>,
+    /// Отметка «запустил установку версии X»: на следующем запуске по ней
+    /// видно, получилось ли.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_attempt: Option<UpdateAttempt>,
+    /// Неудачные установки подряд (для одной версии).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_failures: Option<UpdateFailures>,
+    /// Последнее событие установки для колокольчика («Обновлено до X» или
+    /// «Обновление до X не установилось»).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_notice: Option<UpdateNotice>,
     /// Автообновление: новые версии ставятся сами. None — человека ещё не
     /// спрашивали (установка до этой функции): после «Что нового» ему
     /// один раз предлагают включить. Мастер первого запуска пишет явно.
@@ -167,6 +182,33 @@ pub struct Settings {
     /// bridge-sites.json на лету, без перезапуска.
     #[serde(default)]
     pub sites: Vec<SiteEntry>,
+}
+
+/// Запущенная установка обновления: версия, время (unix, с) и способ
+/// ("auto" | "manual").
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UpdateAttempt {
+    pub version: String,
+    pub at: u64,
+    pub how: String,
+}
+
+/// Сколько установок версии `version` подряд не завершилось и когда была
+/// последняя неудача (unix, с).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UpdateFailures {
+    pub version: String,
+    pub count: u32,
+    pub last_at: u64,
+}
+
+/// Итог установки для колокольчика: `ok` - обновились (тихо), иначе - не
+/// получилось.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UpdateNotice {
+    pub ok: bool,
+    pub version: String,
+    pub at: u64,
 }
 
 /// Состояние пинга статистики: что уже отправлено. Флаги пишутся только

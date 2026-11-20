@@ -181,6 +181,8 @@ fn run(app: AppHandle, h: TrayHandles) {
                     skip_healthz_until = None;
                     // Один опрос моста на всё приложение: окна получают
                     // свежий /healthz событием и сами мост не опрашивают.
+                    // Тихая автоустановка обновления смотрит, идёт ли трафик.
+                    crate::auto_update::note_bridge(&raw);
                     let _ = app.emit("bridge-health", raw);
                     Some(x)
                 }
@@ -395,7 +397,7 @@ pub(crate) fn merge_listener(main: &mut serde_json::Value, other: &serde_json::V
     if other["service"] != "clod-bridge" {
         return;
     }
-    for key in ["total", "active", "via_upstream", "via_direct", "errors"] {
+    for key in ["total", "active", "via_upstream", "via_direct", "errors", "bytes"] {
         let sum = main[key].as_u64().unwrap_or(0) + other[key].as_u64().unwrap_or(0);
         main[key] = sum.into();
     }

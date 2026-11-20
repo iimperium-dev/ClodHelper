@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Loader2 } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { Button } from "./Button";
-import { updateCheck } from "../lib/api";
+import { autoUpdateGet, updateCheck } from "../lib/api";
 import { openUpdateDialog } from "../lib/updateBus";
 import type { UpdateInfo } from "../lib/types";
 import { cn } from "../lib/cn";
@@ -46,8 +46,10 @@ export function UpdateBanner({ compact }: { compact?: boolean }) {
   const [checked, setChecked] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [auto, setAuto] = useState(false);
 
   useEffect(() => {
+    void autoUpdateGet().then((a) => setAuto(a.enabled)).catch(() => {});
     void checkOnce(false).then((r) => {
       setInfo(r.info);
       setError(r.error);
@@ -89,7 +91,11 @@ export function UpdateBanner({ compact }: { compact?: boolean }) {
             </div>
             <div className={cn("text-[12px]", error && !info ? "text-vb-warn" : "truncate text-vb-silver-faint")}>
               {info
-                ? "Посмотрите, что нового, — обновление в один клик"
+                ? info.manual_only
+                  ? "Поставьте вручную со страницы релиза"
+                  : auto
+                    ? "Поставится само, когда программа будет свёрнута"
+                    : "Посмотрите, что нового, - обновление в один клик"
                 : busy
                   ? "Проверяю…"
                   : error
@@ -101,7 +107,7 @@ export function UpdateBanner({ compact }: { compact?: boolean }) {
           </div>
           {info ? (
             <Button variant="primary" size="sm" onClick={() => openUpdateDialog(info)}>
-              Обновить
+              {info.manual_only ? "Подробнее" : "Обновить"}
             </Button>
           ) : (
             !compact && (
