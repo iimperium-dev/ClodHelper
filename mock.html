@@ -130,7 +130,8 @@
       ip_hidden: true, dns_leak: false, leaking_apps: [], error: null,
     },
     update_check: { version: "0.7.0", notes: "", url: "x", sums_url: "y", page: "https://example.com/release",
-      ...(params.has("manual") ? { manual_only: true } : {}) },
+      ...(params.has("manual") ? { manual_only: true } : {}),
+      handles_silently: !params.has("autooffer") && !params.has("manual") && !params.has("nosilent") },
     notices_list: params.has("notice")
       ? [{ id: "whats-new-0-9-1", kind: "news", date: "2026-11-11", title: "Вышла версия 0.9.1", body: "Что изменилось в этой версии.", link: "https://example.com/new", link_label: "Что нового", read: false }]
       : [],

@@ -21,6 +21,9 @@ export function parseSums(text) {
   return m;
 }
 
+/** Один и тот же коммит (полные sha, без учёта регистра). */
+export const sameCommit = (a, b) => /^[0-9a-f]{40}$/i.test(String(a)) && String(a).toLowerCase() === String(b).toLowerCase();
+
 /** Нужный запуск release.yml для коммита тега: успешный, тот же коммит и путь. */
 export function pickRun(runs, { tag, sha, repo }) {
   const mine = (runs ?? []).filter(
@@ -57,6 +60,10 @@ export function verifySums({ built, assets, manifest, sumsTxt }) {
     const name = f.file;
     const want = String(f.sha256 ?? "").toLowerCase();
     if (!SHA.test(want)) throw new Error(`${p}: в манифесте не сумма SHA-256`);
+    // Платформа и тип установщика должны сходиться: windows - .exe, darwin - .dmg.
+    const ext = p.startsWith("windows-") ? /\.exe$/i : p.startsWith("darwin-") ? /\.dmg$/i : null;
+    if (!ext) throw new Error(`${p}: неизвестная платформа в манифесте`);
+    if (!ext.test(String(name))) throw new Error(`${p}: файл ${name} не того типа (нужен ${p.startsWith("windows-") ? ".exe" : ".dmg"})`);
     const b = built.get(name);
     if (!b) throw new Error(`${p}: файла ${name} нет среди собранных CI (суммы сборки)`);
     const a = assets.get(name);

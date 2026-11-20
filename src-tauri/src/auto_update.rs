@@ -19,16 +19,21 @@ use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::settings::{self, Settings, UpdateAttempt, UpdateFailures, UpdateNotice};
+use crate::settings::{self, Settings, UpdateAttempt, UpdateFailures, UpdateNotice, UpdateSeen};
 use crate::updater::{Mode, UpdateInfo};
 
 /// Пока ждём условий - проверка раз в 5 минут.
 const TICK: Duration = Duration::from_secs(5 * 60);
 /// Человек не трогал мышь и клавиатуру не меньше 10 минут.
 pub const MIN_IDLE_SECS: u64 = 10 * 60;
-/// Мост «тихий»: 5 минут не росли счётчики трафика. Открытые соединения
-/// не считаем: Claude Code держит их, пока запущен.
-pub const BRIDGE_QUIET_SECS: u64 = 5 * 60;
+/// Мост «тихий»: за окно в 5 минут через входы Claude прошло меньше 64 КБ.
+/// Открытые соединения не считаем: Claude Code держит их, пока запущен.
+pub const QUIET_WINDOW_SECS: u64 = 5 * 60;
+pub const QUIET_BYTES: u64 = 64 * 1024;
+/// Как часто смотрим счётчики моста.
+const SAMPLE_EVERY: Duration = Duration::from_secs(30);
+/// Тихая установка ждёт дольше этого - показываем обычное уведомление с кнопкой.
+pub const PATIENCE_SECS: u64 = 48 * 3600;
 /// После неудачной установки - пауза не меньше 6 часов.
 pub const FAIL_COOLDOWN_SECS: u64 = 6 * 3600;
 /// Столько неудач подряд для одной версии - и снова ручная кнопка.
@@ -110,49 +115,90 @@ pub fn is_busy() -> bool {
 
 // ---------------------------------------------------------------- мост
 
-#[derive(Default)]
-struct BridgeSeen {
-    last_counter: Option<u64>,
-    /// Когда в последний раз рос счётчик трафика.
-    busy_at: Option<Instant>,
+/// Счётчики входов Claude (8889 и 8890): байты и число соединений. Вход
+/// Telegram (SOCKS) и закреплённые порты не берём: Telegram пингует раз в
+/// минуту, и мост никогда не казался бы тихим.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Counters {
+    pub bytes: u64,
+    pub total: u64,
+    /// У всех ответивших входов есть поле "bytes" (мост новее этой правки).
+    pub has_bytes: bool,
 }
 
-static BRIDGE: Mutex<BridgeSeen> = Mutex::new(BridgeSeen { last_counter: None, busy_at: None });
-
-/// Счётчик трафика из /healthz: байты (поле "bytes"), если мост их отдаёт,
-/// иначе число принятых соединений "total". Активные соединения не берём.
-fn traffic_counter(raw: &serde_json::Value) -> Option<u64> {
-    raw["bytes"].as_u64().or_else(|| raw["total"].as_u64())
+/// Окно наблюдения: база (время и счётчики на начало), итог прошлого
+/// полного окна и последний замер.
+#[derive(Debug, Default)]
+pub struct BridgeWindow {
+    base: Option<(u64, Counters)>,
+    last_quiet: Option<bool>,
+    latest: Option<Counters>,
 }
 
-/// Монитор моста (monitor.rs) передаёт каждый свежий /healthz: по нему видно,
-/// когда через мост в последний раз рос счётчик трафика.
-pub fn note_bridge(raw: &serde_json::Value) {
-    let counter = traffic_counter(raw);
-    let Ok(mut b) = BRIDGE.lock() else { return };
-    if matches!((b.last_counter, counter), (Some(a), Some(c)) if a != c) {
-        b.busy_at = Some(Instant::now());
+fn grew(now: u64, then: u64) -> u64 {
+    // Счётчик упал - мост перезапускался, считаем с нуля.
+    now.checked_sub(then).unwrap_or(now)
+}
+
+/// Тихо ли за промежуток между `base` и `now`.
+fn span_quiet(base: Counters, now: Counters) -> bool {
+    if now.has_bytes && base.has_bytes {
+        grew(now.bytes, base.bytes) < QUIET_BYTES
+    } else {
+        // Старый мост без байтов: любое новое соединение - не тишина.
+        grew(now.total, base.total) == 0
     }
-    if counter.is_some() {
-        b.last_counter = counter;
+}
+
+/// Новый замер (`t` - секунды). Каждые QUIET_WINDOW_SECS окно закрывается.
+pub fn window_step(w: &mut BridgeWindow, t: u64, c: Counters) {
+    w.latest = Some(c);
+    match w.base {
+        None => w.base = Some((t, c)),
+        Some((t0, c0)) if t.saturating_sub(t0) >= QUIET_WINDOW_SECS => {
+            w.last_quiet = Some(span_quiet(c0, c));
+            w.base = Some((t, c));
+        }
+        Some(_) => {}
     }
 }
 
-/// Свежий /healthz всех входов моста обновляет счётчики трафика.
-fn sample_bridge() {
-    use crate::monitor::{fetch_healthz_port, merge_listener, other_health_ports};
-    let Some(mut raw) = fetch_healthz_port(crate::shim::LISTEN_PORT, Duration::from_millis(800)) else { return };
-    for port in other_health_ports() {
-        if let Some(other) = fetch_healthz_port(port, Duration::from_millis(300)) {
-            merge_listener(&mut raw, &other);
+/// Мост тихий: прошлое полное окно было тихим и в текущем уже набежало
+/// меньше порога (поток, начавшийся только что, не пропустим).
+pub fn window_quiet(w: &BridgeWindow) -> bool {
+    match (w.last_quiet, w.base, w.latest) {
+        (Some(true), Some((_, c0)), Some(c)) => span_quiet(c0, c),
+        _ => false,
+    }
+}
+
+static BRIDGE: Mutex<BridgeWindow> = Mutex::new(BridgeWindow { base: None, last_quiet: None, latest: None });
+
+/// Счётчики входов Claude из /healthz. Не ответил (моста нет) - ноль:
+/// нечего обрывать.
+fn read_counters() -> Counters {
+    use crate::monitor::fetch_healthz_port;
+    let mut c = Counters { has_bytes: true, ..Counters::default() };
+    for port in [crate::shim::LISTEN_PORT, crate::claude_desktop::PROXY_PORT] {
+        let Some(raw) = fetch_healthz_port(port, Duration::from_millis(500)) else { continue };
+        if raw["service"] != "clod-bridge" {
+            continue;
+        }
+        c.total += raw["total"].as_u64().unwrap_or(0);
+        match raw["bytes"].as_u64() {
+            Some(b) => c.bytes += b,
+            None => c.has_bytes = false,
         }
     }
-    note_bridge(&raw);
+    c
 }
 
-/// Сколько секунд назад рос счётчик трафика (None - с запуска не видели).
-fn bridge_quiet_secs() -> Option<u64> {
-    BRIDGE.lock().ok().and_then(|b| b.busy_at).map(|t| t.elapsed().as_secs())
+/// Снять замер и вернуть, тихо ли сейчас (блокирующий вызов).
+fn sample_bridge() -> bool {
+    let c = read_counters();
+    let Ok(mut w) = BRIDGE.lock() else { return false };
+    window_step(&mut w, now_secs(), c);
+    window_quiet(&w)
 }
 
 // ---------------------------------------------------------------- простой
@@ -202,12 +248,6 @@ pub fn user_idle(idle_secs: Option<u64>) -> bool {
     idle_secs.is_some_and(|s| s >= MIN_IDLE_SECS)
 }
 
-/// Счётчики трафика моста не росли BRIDGE_QUIET_SECS. Открытые соединения
-/// не мешают. `quiet_for` - сколько секунд мост молчит (None - не видели).
-pub fn bridge_quiet(quiet_for: Option<u64>) -> bool {
-    quiet_for.is_none_or(|q| q >= BRIDGE_QUIET_SECS)
-}
-
 #[derive(Debug, PartialEq, Eq)]
 pub enum FailGate {
     Ok,
@@ -241,7 +281,11 @@ pub struct Facts {
     pub now: u64,
     pub window_hidden: bool,
     pub idle_secs: Option<u64>,
-    pub bridge_quiet_secs: Option<u64>,
+    /// Мост тихий (см. window_quiet).
+    pub bridge_quiet: bool,
+    /// В настройках есть неразобранная отметка прошлой установки: итог ещё
+    /// не вынесен (on_start), неудача могла бы не засчитаться.
+    pub unsettled: bool,
     pub busy: bool,
     /// Установка (ручная или тихая) уже идёт.
     pub installing: bool,
@@ -275,6 +319,9 @@ pub fn decide(f: &Facts) -> Verdict {
         return Wait("автообновление выключено");
     }
     let Some(u) = &f.update else { return Wait("обновления нет") };
+    if f.unsettled {
+        return Wait("итог прошлой установки ещё не разобран");
+    }
     if u.manual_only {
         return Wait("эта установка обновляется вручную");
     }
@@ -292,7 +339,7 @@ pub fn decide(f: &Facts) -> Verdict {
     if !user_idle(f.idle_secs) {
         return Wait("человек за компьютером");
     }
-    if !bridge_quiet(f.bridge_quiet_secs) {
+    if !f.bridge_quiet {
         return Wait("через мост идёт трафик");
     }
     if f.busy {
@@ -314,6 +361,60 @@ pub fn handles_silently(s: &Settings, info: &UpdateInfo, now: u64) -> bool {
         && !info.manual_only
         && rollout_passes(info.rollout, rollout_number_for(s))
         && failure_gate(s.update_failures.as_ref(), &info.version, now) != FailGate::Exhausted
+        && !patience_over(s.update_seen.as_ref(), &info.version, now)
+}
+
+/// Тихая установка ждёт эту версию дольше PATIENCE_SECS: пора показать
+/// обычное уведомление с кнопкой.
+pub fn patience_over(seen: Option<&UpdateSeen>, version: &str, now: u64) -> bool {
+    seen.filter(|s| s.version == version).is_some_and(|s| now.saturating_sub(s.at) >= PATIENCE_SECS)
+}
+
+/// Запомнить, когда тихая установка впервые взялась за версию.
+fn note_seen(version: &str, now: u64) {
+    let _ = settings::with_settings_strict(|s| {
+        if s.update_seen.as_ref().is_none_or(|x| x.version != version) {
+            s.update_seen = Some(UpdateSeen { version: version.to_string(), at: now });
+        }
+        Ok(())
+    });
+}
+
+/// Перед самым запуском установщика: окно всё ещё скрыто, человек всё ещё
+/// не за компьютером. Нет - установку откладываем без записи неудачи.
+pub fn still_quiet(app: &AppHandle) -> bool {
+    main_hidden(app) && user_idle(idle_secs())
+}
+
+fn main_hidden(app: &AppHandle) -> bool {
+    app.get_webview_window("main")
+        .map(|w| window_hidden(w.is_visible().unwrap_or(true), w.is_minimized().unwrap_or(false)))
+        .unwrap_or(true)
+}
+
+/// Какие ошибки установки стоит отправлять в отчёт при тихой установке:
+/// файл не сошёлся по сумме или установщик не запустился. Сеть и диск - нет.
+pub fn report_worthy(err: &str) -> bool {
+    err.contains("контрольная сумма") || err.contains("Не удалось запустить установщик") || err.contains("Не удалось записать скрипт обновления")
+}
+
+static REPORTED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Первый ли это отчёт об этой версии (не чаще одного раза на версию).
+fn first_report(version: &str) -> bool {
+    let Ok(mut r) = REPORTED.lock() else { return false };
+    if r.iter().any(|v| v == version) {
+        return false;
+    }
+    r.push(version.to_string());
+    true
+}
+
+/// Отчёт об ошибке тихой установки: только достойные и раз на версию.
+pub fn report_auto_error(version: &str, err: &str) {
+    if report_worthy(err) && first_report(version) {
+        crate::telemetry::report_update(err);
+    }
 }
 
 fn rollout_number_for(s: &Settings) -> u8 {
@@ -442,45 +543,47 @@ pub fn bell_items(s: &Settings, now: u64) -> Vec<crate::notices::NoticeItem> {
     }]
 }
 
+/// Разобрать отметку установки (если есть) и сообщить об итоге.
+async fn settle_once(app: &AppHandle) -> Settled {
+    let current = env!("CARGO_PKG_VERSION");
+    let res = tokio::task::spawn_blocking(move || {
+        let mut out = Settled::Nothing;
+        let r = settings::with_settings_strict(|s| {
+            out = settle_on_start(s, current, now_secs());
+            Ok(())
+        });
+        (r.is_ok(), out)
+    })
+    .await;
+    let out = match res {
+        Ok((true, o)) => o,
+        _ => Settled::Nothing,
+    };
+    match &out {
+        Settled::Nothing | Settled::Pending { .. } => {}
+        Settled::Succeeded { version, how } => {
+            tracing::info!("обновление до {version} установлено ({how})");
+            let _ = app.emit("notices:changed", crate::notices::unread());
+        }
+        Settled::Failed { version, how, count } => {
+            tracing::warn!("установка {version} не завершилась ({how}), неудач подряд: {count}");
+            crate::telemetry::set_pending_how(None);
+            if first_report(version) {
+                crate::telemetry::report_update(&format!("установка {version} не завершилась"));
+            }
+            let _ = app.emit("notices:changed", crate::notices::unread());
+        }
+    }
+    out
+}
+
 /// При запуске: удалась ли установка, начатая прошлой копией программы.
 pub fn on_start(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        let mut again = true;
-        while again {
-            again = false;
-            let current = env!("CARGO_PKG_VERSION");
-            let mut out = Settled::Nothing;
-            let res = tokio::task::spawn_blocking(move || {
-                let mut out = Settled::Nothing;
-                let r = settings::with_settings_strict(|s| {
-                    out = settle_on_start(s, current, now_secs());
-                    Ok(())
-                });
-                (r.is_ok(), out)
-            })
-            .await;
-            if let Ok((true, o)) = res {
-                out = o;
-            }
-            match out {
-                Settled::Nothing => {}
-                Settled::Pending { wait_secs } => {
-                    // Установщик, возможно, ещё работает: посмотрим позже.
-                    tokio::time::sleep(Duration::from_secs(wait_secs + 1)).await;
-                    again = true;
-                }
-                Settled::Succeeded { version, how } => {
-                    tracing::info!("обновление до {version} установлено ({how})");
-                    let _ = app.emit("notices:changed", crate::notices::unread());
-                }
-                Settled::Failed { version, how, count } => {
-                    tracing::warn!("установка {version} не завершилась ({how}), неудач подряд: {count}");
-                    crate::telemetry::set_pending_how(None);
-                    crate::telemetry::report_update(&format!("установка {version} не завершилась"));
-                    let _ = app.emit("notices:changed", crate::notices::unread());
-                }
-            }
+        while let Settled::Pending { wait_secs } = settle_once(&app).await {
+            // Установщик, возможно, ещё работает: посмотрим позже.
+            tokio::time::sleep(Duration::from_secs(wait_secs + 1)).await;
         }
     });
 }
@@ -501,6 +604,13 @@ static RETRY_AFTER: AtomicU64 = AtomicU64::new(0);
 
 pub fn spawn(app: AppHandle) {
     on_start(&app);
+    // Счётчики моста: окно в 5 минут набирается по замерам раз в 30 секунд.
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let _ = tokio::task::spawn_blocking(sample_bridge).await;
+            tokio::time::sleep(SAMPLE_EVERY).await;
+        }
+    });
     tauri::async_runtime::spawn(async move {
         loop {
             tokio::time::sleep(TICK).await;
@@ -525,12 +635,24 @@ async fn tick(app: &AppHandle) {
 }
 
 async fn tick_inner(app: &AppHandle) {
-    let s = settings::load();
+    let mut s = settings::load();
     if s.auto_update != Some(true) {
         return;
     }
+    // Итог прошлой установки - раньше всего остального: иначе неудача могла
+    // бы не засчитаться, а новая попытка пошла бы поверх.
+    if s.update_attempt.is_some() {
+        settle_once(app).await;
+        s = settings::load();
+    }
     let Some(info) = crate::update_notify::latest() else { return };
     let now = now_secs();
+    note_seen(&info.version, now);
+    s.update_seen.get_or_insert(UpdateSeen { version: info.version.clone(), at: now });
+    if patience_over(s.update_seen.as_ref(), &info.version, now) {
+        // Ждали больше 48 часов: дальше - обычное уведомление с кнопкой.
+        return;
+    }
     if info.manual_only
         || !rollout_passes(info.rollout, rollout_number_for(&s))
         || failure_gate(s.update_failures.as_ref(), &info.version, now) != FailGate::Ok
@@ -572,13 +694,10 @@ async fn tick_inner(app: &AppHandle) {
         return;
     }
     // Факты о системе (простой, мост) - вне async-потока.
-    let probe = tokio::task::spawn_blocking(|| { sample_bridge(); (idle_secs(), bridge_quiet_secs()) })
+    let probe = tokio::task::spawn_blocking(|| (idle_secs(), sample_bridge()))
         .await
-        .unwrap_or((None, Some(0)));
-    let hidden = app
-        .get_webview_window("main")
-        .map(|w| window_hidden(w.is_visible().unwrap_or(true), w.is_minimized().unwrap_or(false)))
-        .unwrap_or(true);
+        .unwrap_or((None, false));
+    let hidden = main_hidden(app);
     let facts = Facts {
         enabled: true,
         update: Some(UpdateView::from(&info)),
@@ -587,7 +706,8 @@ async fn tick_inner(app: &AppHandle) {
         now,
         window_hidden: hidden,
         idle_secs: probe.0,
-        bridge_quiet_secs: probe.1,
+        bridge_quiet: probe.1,
+        unsettled: s.update_attempt.is_some(),
         busy: is_busy(),
         installing: crate::updater::is_installing(),
         downloaded: true,
@@ -598,7 +718,7 @@ async fn tick_inner(app: &AppHandle) {
             tracing::info!("тихая установка {}", info.version);
             match crate::commands::install_update(app.clone(), info, "auto").await {
                 Ok(()) => {}
-                Err(e) if e == crate::updater::ALREADY => {}
+                Err(e) if e == crate::updater::ALREADY || e == crate::updater::POSTPONED => {}
                 Err(e) => {
                     tracing::warn!("тихая установка не удалась: {e}");
                     RETRY_AFTER.store(now_secs() + PREFETCH_RETRY.as_secs(), Ordering::SeqCst);
@@ -621,7 +741,8 @@ mod tests {
             now: 1_800_000_000,
             window_hidden: true,
             idle_secs: Some(MIN_IDLE_SECS),
-            bridge_quiet_secs: Some(BRIDGE_QUIET_SECS),
+            bridge_quiet: true,
+            unsettled: false,
             busy: false,
             installing: false,
             downloaded: true,
@@ -652,7 +773,8 @@ mod tests {
             ("окно", Box::new(|f| f.window_hidden = false)),
             ("за компьютером", Box::new(|f| f.idle_secs = Some(MIN_IDLE_SECS - 1))),
             ("за компьютером", Box::new(|f| f.idle_secs = None)),
-            ("трафик", Box::new(|f| f.bridge_quiet_secs = Some(BRIDGE_QUIET_SECS - 1))),
+            ("трафик", Box::new(|f| f.bridge_quiet = false)),
+            ("не разобран", Box::new(|f| f.unsettled = true)),
             ("занята", Box::new(|f| f.busy = true)),
             ("устанавливается", Box::new(|f| f.installing = true)),
             ("скачивается", Box::new(|f| f.downloaded = false)),
@@ -717,30 +839,72 @@ mod tests {
         assert!(window_hidden(false, false));
         assert!(window_hidden(true, true));
         assert!(!window_hidden(true, false));
-        assert!(!bridge_quiet(Some(BRIDGE_QUIET_SECS - 1)));
-        assert!(bridge_quiet(Some(BRIDGE_QUIET_SECS)));
-        assert!(bridge_quiet(None), "трафика не видели");
+    }
+
+    fn c(bytes: u64, total: u64) -> Counters {
+        Counters { bytes, total, has_bytes: true }
     }
 
     #[test]
-    fn bridge_traffic_is_remembered_from_healthz() {
-        // Общий статик: тест единственный, кто его трогает.
-        *BRIDGE.lock().unwrap() = BridgeSeen::default();
-        note_bridge(&serde_json::json!({"active": 0, "total": 10}));
-        assert_eq!(bridge_quiet_secs(), None, "первый замер: трафика не видно");
-        note_bridge(&serde_json::json!({"active": 0, "total": 10}));
-        assert_eq!(bridge_quiet_secs(), None);
-        note_bridge(&serde_json::json!({"active": 0, "total": 12}));
-        assert_eq!(bridge_quiet_secs(), Some(0), "счётчик вырос: был трафик");
-        *BRIDGE.lock().unwrap() = BridgeSeen::default();
-        note_bridge(&serde_json::json!({"active": 2, "total": 5}));
-        note_bridge(&serde_json::json!({"active": 2, "total": 5}));
-        assert_eq!(bridge_quiet_secs(), None, "открытые соединения трафиком не считаются");
-        *BRIDGE.lock().unwrap() = BridgeSeen::default();
-        note_bridge(&serde_json::json!({"total": 5, "bytes": 100}));
-        note_bridge(&serde_json::json!({"total": 5, "bytes": 900}));
-        assert_eq!(bridge_quiet_secs(), Some(0), "байты растут при том же total");
-        *BRIDGE.lock().unwrap() = BridgeSeen::default();
+    fn bridge_is_quiet_only_after_a_quiet_window_and_without_a_fresh_stream() {
+        let mut w = BridgeWindow::default();
+        assert!(!window_quiet(&w), "замеров нет - не тихо");
+        window_step(&mut w, 0, c(1000, 5));
+        assert!(!window_quiet(&w), "окно ещё не закрыто");
+        // Пинги Telegram сюда не попадают; здесь мелочь меньше порога.
+        window_step(&mut w, 150, c(1000 + 10_000, 6));
+        assert!(!window_quiet(&w));
+        window_step(&mut w, QUIET_WINDOW_SECS, c(1000 + 20_000, 7));
+        assert!(window_quiet(&w), "20 КБ за 5 минут - тихо");
+        // Поток начался уже в новом окне: не пропускаем, не дожидаясь его конца.
+        window_step(&mut w, QUIET_WINDOW_SECS + 30, c(1000 + 20_000 + QUIET_BYTES, 7));
+        assert!(!window_quiet(&w), "идёт ответ");
+        // Закрылось шумное окно - не тихо; следующее тихое - тихо.
+        window_step(&mut w, 2 * QUIET_WINDOW_SECS, c(1000 + 20_000 + QUIET_BYTES + 5, 7));
+        assert!(!window_quiet(&w));
+        window_step(&mut w, 3 * QUIET_WINDOW_SECS, c(1000 + 20_000 + QUIET_BYTES + 9, 7));
+        assert!(window_quiet(&w));
+        // Порог: ровно QUIET_BYTES - уже не тихо.
+        let mut w = BridgeWindow::default();
+        window_step(&mut w, 0, c(0, 0));
+        window_step(&mut w, QUIET_WINDOW_SECS, c(QUIET_BYTES, 0));
+        assert!(!window_quiet(&w));
+        // Мост перезапустился: счётчик упал - считаем с нуля, не паникуем.
+        let mut w = BridgeWindow::default();
+        window_step(&mut w, 0, c(9_000_000, 90));
+        window_step(&mut w, QUIET_WINDOW_SECS, c(100, 1));
+        assert!(window_quiet(&w));
+    }
+
+    #[test]
+    fn old_bridge_without_bytes_falls_back_to_connections() {
+        let old = |total| Counters { bytes: 0, total, has_bytes: false };
+        let mut w = BridgeWindow::default();
+        window_step(&mut w, 0, old(10));
+        window_step(&mut w, QUIET_WINDOW_SECS, old(10));
+        assert!(window_quiet(&w), "новых соединений нет");
+        window_step(&mut w, QUIET_WINDOW_SECS + 30, old(11));
+        assert!(!window_quiet(&w), "новое соединение");
+    }
+
+    #[test]
+    fn patience_runs_out_after_48_hours_for_the_same_version() {
+        let seen = UpdateSeen { version: "0.9.0".into(), at: 1000 };
+        assert!(!patience_over(None, "0.9.0", 10_000_000));
+        assert!(!patience_over(Some(&seen), "0.9.0", 1000 + PATIENCE_SECS - 1));
+        assert!(patience_over(Some(&seen), "0.9.0", 1000 + PATIENCE_SECS));
+        assert!(!patience_over(Some(&seen), "0.9.1", 1000 + PATIENCE_SECS * 3), "другая версия - счёт заново");
+    }
+
+    #[test]
+    fn only_real_install_failures_are_reported_once_per_version() {
+        assert!(report_worthy("Файл обновления повреждён (контрольная сумма не совпала) - не ставлю"));
+        assert!(report_worthy("Не удалось запустить установщик: отказано в доступе"));
+        assert!(!report_worthy("Загрузка: нет сети"));
+        assert!(!report_worthy("Не удалось проверить обновления: таймаут"));
+        assert!(first_report("9.9.1"));
+        assert!(!first_report("9.9.1"));
+        assert!(first_report("9.9.2"));
     }
 
     #[test]
@@ -843,6 +1007,7 @@ mod tests {
             manual_only,
             page: String::new(),
             rollout,
+            handles_silently: false,
         };
         let on = Settings { auto_update: Some(true), update_rollout: Some(5), ..Settings::default() };
         let now = 1_000_000;
@@ -853,5 +1018,7 @@ mod tests {
         assert!(!handles_silently(&on, &info(false, 5), now), "не дошло по раскатке");
         let spent = Settings { update_failures: Some(UpdateFailures { version: "0.9.0".into(), count: 3, last_at: now }), ..on.clone() };
         assert!(!handles_silently(&spent, &info(false, 100), now), "после трёх неудач - обычное уведомление");
+        let waited = Settings { update_seen: Some(UpdateSeen { version: "0.9.0".into(), at: now - PATIENCE_SECS }), ..on.clone() };
+        assert!(!handles_silently(&waited, &info(false, 100), now), "ждём больше 48 часов - обычное уведомление");
     }
 }

@@ -13,10 +13,19 @@ async function open(page: Page, query: string) {
 
 test("обновление: автообновление включено - честный текст про свёрнутую программу", async ({ page }) => {
   const errors = await open(page, "still");
-  await expect(page.getByText("Поставится само, когда программа будет свёрнута")).toBeVisible();
+  await expect(page.getByText("Поставится само, когда программа свёрнута и вы отойдёте от компьютера")).toBeVisible();
   await page.getByRole("button", { name: "Обновить", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Обновление Clod Helper" });
-  await expect(dialog.getByTestId("update-auto-note")).toContainText("поставится само");
+  await expect(dialog.getByTestId("update-auto-note")).toContainText("Поставится само, когда программа свёрнута и вы отойдёте от компьютера");
+  expect(errors).toEqual([]);
+});
+
+test("обновление: автообновление включено, но бэкенд не берёт установку на себя - обещания нет", async ({ page }) => {
+  const errors = await open(page, "still&nosilent");
+  await expect(page.getByText("обновление в один клик")).toBeVisible();
+  await expect(page.getByText("Поставится само")).toHaveCount(0);
+  await page.getByRole("button", { name: "Обновить", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Обновление Clod Helper" }).getByTestId("update-auto-note")).toHaveCount(0);
   expect(errors).toEqual([]);
 });
 
@@ -48,7 +57,7 @@ test("обновление: уже идёт - без «Повторить» и �
   await page.getByRole("button", { name: "Обновить", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Обновление Clod Helper" });
   await dialog.getByRole("button", { name: "Обновить", exact: true }).click();
-  await expect(dialog.getByText("Обновление уже идёт")).toBeVisible();
+  await expect(dialog.getByText("Обновление уже ставится в фоне")).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Повторить" })).toHaveCount(0);
   await expect(dialog.getByText("Не получилось обновить")).toHaveCount(0);
   await dialog.getByRole("button", { name: "Закрыть", exact: true }).first().click();

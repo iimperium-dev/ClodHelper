@@ -27,9 +27,16 @@
 //                      для ОС пусто (--no-force - снять)
 //   --min-version X    установки старше X не ставят сами, им показывается
 //                      ручная установка (none - снять)
-// Флаги можно применить и к уже опубликованному релизу, например
-// `node scripts/publish-release.mjs v0.9.0 --paused`: манифест подписывается
-// заново, поля без флага остаются как были.
+// Эти четыре поля берутся ТОЛЬКО из флагов командной строки: что лежит в
+// черновике, игнорируется. Плюс подписанное поле seq (время подписи):
+// программа хранит последнее принятое и отвергает меньшее (откат к старому
+// манифесту невозможен).
+//
+// Сменить управляющие поля уже опубликованного релиза без сверки с CI:
+//   node scripts/publish-release.mjs v0.9.0 --controls-only --paused
+// Работает, только если у релиза есть latest.json.sig и он проверяется вашим
+// ключом; меняются только эти поля и seq, остальной манифест как был, поля
+// без флага остаются прежними.
 // Аварийно остановить все установки сразу: удалить у последнего релиза
 // ассет latest.json.sig (программа без подписи ничего не ставит).
 //
@@ -45,15 +52,18 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { applyControls, hasControls, parseArgs } from "./lib/controls.mjs";
+import { applyControls, hasControls, onlyControlsChanged, parseArgs, stripControls, withSeq } from "./lib/controls.mjs";
 import { KEY_PATH, loadSigningKey, rawPublic } from "./lib/keys.mjs";
 import { askHidden } from "./lib/prompt.mjs";
-import { assetName, parseSums, pickRun, sumsArtifacts, verifySums } from "./lib/release-checks.mjs";
+import { WORKFLOW_PATH, parseSums, pickRun, sameCommit, sumsArtifacts, verifySums } from "./lib/release-checks.mjs";
 import { readZip } from "./lib/zip-lite.mjs";
 
 const REPO = "iimperium-dev/ClodHelper";
 const API = `https://api.github.com/repos/${REPO}`;
 const MANIFEST = "latest.json";
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+const git = (...args) => execFileSync("git", args, { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
 const die = (msg) => {
   console.error(`ОШИБКА: ${msg}`);
@@ -112,9 +122,41 @@ async function tagCommit(tok, tag) {
   return obj.sha;
 }
 
+/**
+ * Коммит тега по API GitHub должен совпасть с локальным клоном, а workflow на
+ * нём - с тем release.yml, который лежит у вас в HEAD. Сверка именно с HEAD,
+ * а не с файлом на коммите тега: файл на коммите тега - это то, что запустил
+ * сам GitHub, и подменить его вместе с тегом проще всего; HEAD - ваша
+ * просмотренная копия. Не совпало - остановка (обновите клон: git fetch
+ * --tags; поменяли workflow после выпуска - выпускайте с актуального HEAD).
+ */
+async function checkTagLocally(tok, tag) {
+  const apiSha = await tagCommit(tok, tag);
+  let local;
+  try {
+    local = git("rev-parse", `${tag}^{commit}`);
+  } catch {
+    die(`тега ${tag} нет в локальном клоне: выполните git fetch --tags`);
+  }
+  if (!sameCommit(apiSha, local)) {
+    die(`тег ${tag}: на GitHub коммит ${apiSha.slice(0, 10)}, в локальном клоне ${local.slice(0, 10)}. Тег переставили? Разберитесь, прежде чем подписывать`);
+  }
+  let atTag, atHead;
+  try {
+    atTag = git("rev-parse", `${apiSha}:${WORKFLOW_PATH}`);
+    atHead = git("rev-parse", `HEAD:${WORKFLOW_PATH}`);
+  } catch (e) {
+    die(`не удалось сверить ${WORKFLOW_PATH}: ${e.message.split("\n")[0]}`);
+  }
+  if (atTag !== atHead) {
+    die(`${WORKFLOW_PATH} на коммите тега не совпадает с вашим HEAD: CI собрал по чужому workflow. Проверьте git diff ${tag} HEAD -- ${WORKFLOW_PATH}`);
+  }
+  console.log(`✓ коммит тега совпал с локальным клоном, workflow как в HEAD`);
+  return apiSha;
+}
+
 /** Суммы, посчитанные самой сборкой CI (Map имя -> sha). */
-async function builtSums(tok, tag) {
-  const sha = await tagCommit(tok, tag);
+async function builtSums(tok, tag, sha) {
   const runs = (await (await gh(tok, `/actions/runs?head_sha=${sha}&per_page=50`)).json()).workflow_runs;
   let run;
   try {
@@ -158,15 +200,48 @@ async function publish(tag, opts) {
   const byName = (n) => rel.assets.find((a) => a.name === n);
   const mAsset = byName(MANIFEST);
   if (!mAsset) die(`в релизе нет ${MANIFEST}`);
-  if (!rel.draft && !hasControls(opts)) die(`${tag} уже опубликован; переподписать можно только с флагами управления (--rollout, --paused ...)`);
+  if (opts.controlsOnly && !hasControls(opts)) die("--controls-only нужны флаги: --rollout, --paused, --force или --min-version");
+  if (!rel.draft && !opts.controlsOnly && !hasControls(opts)) {
+    die(`${tag} уже опубликован; сменить управляющие поля: --controls-only --paused (и т.п.)`);
+  }
 
   const body = await asset(tok, mAsset);
   const m = JSON.parse(body.toString("utf8"));
   if (m.tag !== tag || `v${m.version}` !== tag) die(`манифест про ${m.tag}/${m.version}, а релиз ${tag}`);
 
-  // Подписываем только то, что собрал CI: суммы сборки, черновика и манифеста
-  // должны совпасть.
-  const built = await builtSums(tok, tag);
+  const upload = (name, type, data) =>
+    gh(tok, rel.upload_url.replace(/\{.*\}$/, "") + `?name=${name}`, { method: "POST", headers: { "Content-Type": type }, body: data });
+  const replaceAsset = async (name, type, data, old) => {
+    if (old) await gh(tok, `/releases/assets/${old.id}`, { method: "DELETE" });
+    await upload(name, type, data);
+  };
+
+  if (opts.controlsOnly) {
+    // Только управляющие поля уже подписанного вами манифеста: CI не трогаем.
+    const sigAsset = byName(`${MANIFEST}.sig`);
+    if (!sigAsset) die(`у ${tag} нет ${MANIFEST}.sig: переподписать только управляющие поля нельзя (полный путь без --controls-only)`);
+    const oldSig = Buffer.from((await asset(tok, sigAsset)).toString("utf8").trim(), "base64");
+    if (!verify(null, body, createPublicKey(key), oldSig)) die(`текущая подпись ${tag} не проверяется вашим ключом: переподписать только управляющие поля нельзя`);
+    let next;
+    try {
+      next = withSeq(applyControls(m, opts));
+    } catch (e) {
+      die(e.message);
+    }
+    if (!onlyControlsChanged(m, next)) die("внутренняя ошибка: изменилось не только управляющее поле");
+    const out = Buffer.from(JSON.stringify(next, null, 2) + "\n");
+    const sig = sign(null, out, key);
+    if (!verify(null, out, createPublicKey(key), sig)) die("подпись не проверилась");
+    await replaceAsset(MANIFEST, "application/json", out, mAsset);
+    await replaceAsset(`${MANIFEST}.sig`, "text/plain", sig.toString("base64"), sigAsset);
+    console.log(`✓ ${tag}: управляющие поля обновлены, seq=${next.seq}: rollout=${next.rollout ?? 100} paused=${!!next.paused} force=${!!next.force} min_version=${next.min_version ?? "-"}`);
+    return;
+  }
+
+  // Подписываем только то, что собрал CI: коммит тега, суммы сборки,
+  // черновика и манифеста должны совпасть.
+  const commit = await checkTagLocally(tok, tag);
+  const built = await builtSums(tok, tag, commit);
   const assets = new Map();
   for (const a of rel.assets) {
     if (/\.(exe|dmg)$/i.test(a.name)) assets.set(a.name, sha256(await asset(tok, a)));
@@ -179,29 +254,22 @@ async function publish(tag, opts) {
     die(e.message);
   }
 
-  let outManifest = m;
+  // Управляющие поля - только из флагов (из черновика не берутся), плюс seq.
+  let outManifest;
   try {
-    outManifest = applyControls(m, opts);
+    outManifest = withSeq(applyControls(stripControls(m), opts));
   } catch (e) {
     die(e.message);
   }
-  const changed = JSON.stringify(outManifest) !== JSON.stringify(m);
-  const out = changed ? Buffer.from(JSON.stringify(outManifest, null, 2) + "\n") : body;
+  const out = Buffer.from(JSON.stringify(outManifest, null, 2) + "\n");
 
   const sig = sign(null, out, key);
   if (!verify(null, out, createPublicKey(key), sig)) die("подпись не проверилась");
   const sigText = sig.toString("base64");
 
-  const upload = (name, type, data) =>
-    gh(tok, rel.upload_url.replace(/\{.*\}$/, "") + `?name=${name}`, { method: "POST", headers: { "Content-Type": type }, body: data });
-  if (changed) {
-    await gh(tok, `/releases/assets/${mAsset.id}`, { method: "DELETE" });
-    await upload(MANIFEST, "application/json", out);
-    console.log(`✓ ${MANIFEST} обновлён: rollout=${outManifest.rollout ?? 100} paused=${!!outManifest.paused} force=${!!outManifest.force} min_version=${outManifest.min_version ?? "-"}`);
-  }
-  const old = byName(`${MANIFEST}.sig`);
-  if (old) await gh(tok, `/releases/assets/${old.id}`, { method: "DELETE" });
-  await upload(`${MANIFEST}.sig`, "text/plain", sigText);
+  await replaceAsset(MANIFEST, "application/json", out, mAsset);
+  console.log(`✓ ${MANIFEST} обновлён: seq=${outManifest.seq} rollout=${outManifest.rollout ?? 100} paused=${!!outManifest.paused} force=${!!outManifest.force} min_version=${outManifest.min_version ?? "-"}`);
+  await replaceAsset(`${MANIFEST}.sig`, "text/plain", sigText, byName(`${MANIFEST}.sig`));
   console.log(`✓ подпись ${MANIFEST}.sig (ключ ${rawPublic(key).slice(0, 12)}…)`);
 
   if (rel.draft) {

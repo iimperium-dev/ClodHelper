@@ -176,12 +176,26 @@ pub(crate) async fn install_update(app: AppHandle, info: crate::updater::UpdateI
     // Установщик может стартовать и тут же закрыть программу: как запущено -
     // записываем заранее, при ошибке снимаем.
     crate::telemetry::set_pending_how(Some(how));
-    if let Err(e) = crate::updater::install(&info, &progress, how).await {
+    // Тихая установка перед запуском установщика ещё раз смотрит, что окно
+    // скрыто, а человек не за компьютером.
+    let watcher = app.clone();
+    let silent = how == "auto";
+    let ready = move || !silent || crate::auto_update::still_quiet(&watcher);
+    if let Err(e) = crate::updater::install(&info, &progress, how, &ready).await {
         if e == crate::updater::ALREADY {
             return Err(e);
         }
         crate::telemetry::set_pending_how(None);
-        crate::telemetry::report_update(&e);
+        if e == crate::updater::POSTPONED {
+            return Err(e);
+        }
+        // Тихая установка шлёт отчёт только о сумме и запуске установщика и
+        // раз на версию: сетевые ошибки и откладывание в отчёты не идут.
+        if silent {
+            crate::auto_update::report_auto_error(&info.version, &e);
+        } else {
+            crate::telemetry::report_update(&e);
+        }
         return Err(e);
     }
     crate::update_notify::close_toast(&app);

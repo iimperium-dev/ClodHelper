@@ -3,9 +3,10 @@ import assert from "node:assert/strict";
 import { createPrivateKey, generateKeyPairSync } from "node:crypto";
 import { deflateRawSync } from "node:zlib";
 import { test } from "node:test";
-import { applyControls, parseArgs } from "./lib/controls.mjs";
+import { readFileSync } from "node:fs";
+import { applyControls, hasControls, onlyControlsChanged, parseArgs, stripControls, withSeq } from "./lib/controls.mjs";
 import { decryptPem, encryptPem, rawPublic } from "./lib/keys.mjs";
-import { assetName, parseSums, pickRun, sumsArtifacts, verifySums } from "./lib/release-checks.mjs";
+import { assetName, parseSums, pickRun, sameCommit, sumsArtifacts, verifySums } from "./lib/release-checks.mjs";
 import { readZip } from "./lib/zip-lite.mjs";
 
 const A = "a".repeat(64);
@@ -181,4 +182,77 @@ test("шифрование ключа паролем", () => {
   assert.throws(() => decryptPem(text, "wrong password"), /неверный пароль/);
   // Другая соль и вектор при каждом шифровании.
   assert.notEqual(text, encryptPem(pem, "correct horse battery", fast));
+});
+
+test("строка сумм из CI: имя с пробелом доезжает целиком", () => {
+  // Ровно то, что печатает шаг macOS в release.yml:
+  //   printf '%s  %s\n' "$h" "$(basename "$f")"
+  const line = `${B}  Clod Helper_0.9.0_universal.dmg\n`;
+  const built = parseSums(line);
+  assert.equal(built.get(DMG), B, "имя не обрезано по пробелу");
+  const g = good();
+  g.built = new Map([...parseSums(`${A}  Clod Helper_0.9.0_x64-setup.exe\n`), ...built]);
+  assert.equal(verifySums(g).length, 2);
+  // Страж: в workflow суммы пишутся циклом с basename, а не через awk по пробелам.
+  const yml = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
+  assert.match(yml, /basename "\$f"/);
+  assert.doesNotMatch(yml, /awk '\{ n=\$2/);
+});
+
+test("платформа и тип файла: windows - .exe, darwin - .dmg", () => {
+  const swapped = good();
+  swapped.manifest.platforms["windows-x86_64"].file = DMG;
+  swapped.built.set(DMG, A);
+  swapped.assets.set(DMG, A);
+  assert.throws(() => verifySums(swapped), /не того типа/);
+  const mac = good();
+  mac.manifest.platforms["darwin-universal"].file = WIN;
+  assert.throws(() => verifySums(mac), /не того типа/);
+  const odd = good();
+  odd.manifest.platforms["linux-x86_64"] = { file: "x.AppImage", sha256: A };
+  assert.throws(() => verifySums(odd), /неизвестная платформа/);
+});
+
+test("управляющие поля: только из флагов, из черновика не берутся", () => {
+  const draft = { ...manifest(), rollout: 5, paused: true, force: true, min_version: "0.1.0" };
+  const out = applyControls(stripControls(draft), { rollout: "40" });
+  assert.equal(out.rollout, 40);
+  assert.equal(out.paused, undefined);
+  assert.equal(out.force, undefined);
+  assert.equal(out.min_version, undefined);
+  // Без флагов - чистый манифест.
+  assert.deepEqual(applyControls(stripControls(draft), {}), manifest());
+});
+
+test("seq: время подписи, всегда больше прежнего", () => {
+  assert.equal(withSeq(manifest(), 1_790_000_000_500).seq, 1_790_000_000);
+  assert.equal(withSeq({ ...manifest(), seq: 1_790_000_000 }, 1_790_000_000_500).seq, 1_790_000_001, "часы не ушли вперёд");
+  assert.equal(withSeq({ ...manifest(), seq: 5 }, 1_790_000_000_000).seq, 1_790_000_000);
+});
+
+test("только управляющие поля: чистая проверка для --controls-only", () => {
+  const m = { ...manifest(), seq: 1 };
+  const next = withSeq(applyControls(m, { paused: true, rollout: "10", minVersion: "0.8.0", force: true }), 2_000_000);
+  assert.ok(onlyControlsChanged(m, next));
+  // Тронули сумму, платформу или версию - нельзя.
+  const bad = structuredClone(next);
+  bad.platforms["windows-x86_64"].sha256 = B;
+  assert.ok(!onlyControlsChanged(m, bad));
+  assert.ok(!onlyControlsChanged(m, { ...next, version: "0.9.1" }));
+  assert.ok(!onlyControlsChanged(m, { ...next, evil: 1 }));
+  // Порядок ключей не важен.
+  assert.ok(onlyControlsChanged({ a: 1, b: 2 }, { b: 2, a: 1, paused: true }));
+  // Флаг --controls-only сам по себе не управляющее поле.
+  const p = parseArgs(["v0.9.0", "--controls-only", "--paused"]);
+  assert.equal(p.opts.controlsOnly, true);
+  assert.ok(hasControls(p.opts));
+  assert.ok(!hasControls(parseArgs(["v0.9.0", "--controls-only"]).opts));
+});
+
+test("коммит тега: полный sha, без учёта регистра", () => {
+  const a = "a".repeat(40);
+  assert.ok(sameCommit(a, a.toUpperCase()));
+  assert.ok(!sameCommit(a, "b".repeat(40)));
+  assert.ok(!sameCommit("abc", "abc"), "короткие не сравниваем");
+  assert.ok(!sameCommit(undefined, undefined));
 });

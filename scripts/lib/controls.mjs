@@ -12,6 +12,29 @@
 
 const VER = /^\d+\.\d+\.\d+$/;
 
+/** Управляющие поля манифеста (всё, что можно менять без пересборки). */
+export const CONTROL_KEYS = ["rollout", "paused", "min_version", "force"];
+
+/** Манифест без управляющих полей: из черновика они не берутся, только из флагов. */
+export function stripControls(manifest) {
+  const out = { ...manifest };
+  for (const k of CONTROL_KEYS) delete out[k];
+  return out;
+}
+
+/** Подписанное поле `seq`: время подписи в секундах, всегда больше прежнего. */
+export function withSeq(manifest, nowMs = Date.now()) {
+  const prev = Number.isInteger(manifest.seq) ? manifest.seq : 0;
+  return { ...manifest, seq: Math.max(Math.floor(nowMs / 1000), prev + 1) };
+}
+
+/** Различаются ли манифесты только управляющими полями и `seq`. */
+export function onlyControlsChanged(a, b) {
+  const skip = new Set([...CONTROL_KEYS, "seq"]);
+  const rest = (m) => JSON.stringify(Object.entries(m).filter(([k]) => !skip.has(k)).sort(([x], [y]) => (x < y ? -1 : 1)));
+  return rest(a) === rest(b);
+}
+
 /** Применить параметры к манифесту; вернуть новый объект. undefined - не трогать. */
 export function applyControls(manifest, o = {}) {
   const out = { ...manifest };
@@ -52,6 +75,7 @@ export function parseArgs(argv) {
       else opts.minVersion = v;
     } else if (a === "--paused") opts.paused = true;
     else if (a === "--no-paused") opts.paused = false;
+    else if (a === "--controls-only") opts.controlsOnly = true;
     else if (a === "--force") opts.force = true;
     else if (a === "--no-force") opts.force = false;
     else if (a.startsWith("--")) throw new Error(`неизвестный флаг ${a}`);
@@ -60,4 +84,4 @@ export function parseArgs(argv) {
   return { positional, tag: positional[0], opts };
 }
 
-export const hasControls = (opts) => Object.keys(opts).length > 0;
+export const hasControls = (opts) => ["rollout", "paused", "force", "minVersion"].some((k) => opts[k] !== undefined);

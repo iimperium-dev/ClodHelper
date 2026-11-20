@@ -120,6 +120,13 @@ pub struct Settings {
     /// (auto_update.rs). Создаётся один раз и никуда не отправляется.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub update_rollout: Option<u8>,
+    /// Последний принятый `seq` подписанного манифеста: меньший отвергается.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_seq: Option<u64>,
+    /// С какого времени тихая установка ждёт эту версию (для запасного пути:
+    /// ждём больше 48 часов - обычное уведомление с кнопкой).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_seen: Option<UpdateSeen>,
     /// Отметка «запустил установку версии X»: на следующем запуске по ней
     /// видно, получилось ли.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -204,6 +211,13 @@ pub struct UpdateFailures {
     pub version: String,
     pub count: u32,
     pub last_at: u64,
+}
+
+/// Когда тихая установка впервые взялась за версию.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UpdateSeen {
+    pub version: String,
+    pub at: u64,
 }
 
 /// Итог установки для колокольчика: `ok` - обновились (тихо), иначе - не
@@ -785,6 +799,16 @@ pub fn set_system_pac(enabled: bool) -> Result<Settings, String> {
 pub fn set_system_pac_saved(conf: Option<crate::system_pac::ProxyConf>) -> Result<Settings, String> {
     with_settings(|s| {
         s.system_pac_saved = conf;
+        Ok(())
+    })
+}
+
+/// Запомнить `seq` принятого манифеста (только вперёд).
+pub fn set_update_seq(seq: u64) -> Result<Settings, String> {
+    with_settings_strict(|s| {
+        if s.update_seq.is_none_or(|old| seq > old) {
+            s.update_seq = Some(seq);
+        }
         Ok(())
     })
 }

@@ -418,6 +418,8 @@ export interface UpdateInfo {
   page?: string;
   /** Доля установок, которым предложена версия. */
   rollout?: number;
+  /** Бэкенд: обновление поставится само (автообновление включено и условия позволяют). */
+  handles_silently?: boolean;
 }
 
 /** Автообновление (settings.auto_update). */

@@ -609,6 +609,8 @@ struct State {
     seen: Option<Mutex<std::collections::HashMap<String, SeenHost>>>,
     upstreams: Arc<Vec<Upstream>>,
     total: AtomicU64,
+    /// Байты через туннели этого входа (см. tunnel).
+    bytes: AtomicU64,
     active: AtomicU64,
     via_upstream: AtomicU64,
     via_direct: AtomicU64,
@@ -1743,30 +1745,31 @@ async fn connect_chain(
 
 // ─── счётчик байт ────────────────────────────────────────────────
 
-/// Всего байт, прошедших через туннели (в обе стороны). Растёт по ходу
-/// передачи, а не в конце соединения: по нему программа видит, что идёт
-/// долгий ответ в уже открытом соединении (/healthz, поле "bytes").
-static BYTES: AtomicU64 = AtomicU64::new(0);
+/// Байты, прошедшие через туннели одного входа (в обе стороны), считаются в
+/// `State::bytes`. Растут по ходу передачи, а не в конце соединения: по ним
+/// программа видит долгий ответ в уже открытом соединении (/healthz, поле
+/// "bytes"). Счётчик у каждого входа свой: вход Telegram с его пингами не
+/// должен мешать судить о трафике Claude.
 
 /// Обёртка клиентского сокета: считает всё прочитанное и записанное.
-struct Counted<S>(S);
+struct Counted<'a, S>(S, &'a AtomicU64);
 
-impl<S: AsyncRead + Unpin> AsyncRead for Counted<S> {
+impl<S: AsyncRead + Unpin> AsyncRead for Counted<'_, S> {
     fn poll_read(mut self: IoPin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<std::io::Result<()>> {
         let before = buf.filled().len();
         let r = IoPin::new(&mut self.0).poll_read(cx, buf);
         if let Poll::Ready(Ok(())) = &r {
-            BYTES.fetch_add((buf.filled().len() - before) as u64, Ordering::Relaxed);
+            self.1.fetch_add((buf.filled().len() - before) as u64, Ordering::Relaxed);
         }
         r
     }
 }
 
-impl<S: AsyncWrite + Unpin> AsyncWrite for Counted<S> {
+impl<S: AsyncWrite + Unpin> AsyncWrite for Counted<'_, S> {
     fn poll_write(mut self: IoPin<&mut Self>, cx: &mut Context<'_>, data: &[u8]) -> Poll<std::io::Result<usize>> {
         let r = IoPin::new(&mut self.0).poll_write(cx, data);
         if let Poll::Ready(Ok(n)) = &r {
-            BYTES.fetch_add(*n as u64, Ordering::Relaxed);
+            self.1.fetch_add(*n as u64, Ordering::Relaxed);
         }
         r
     }
@@ -1779,12 +1782,12 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for Counted<S> {
 }
 
 /// Слепой туннель клиент <-> сервер с подсчётом байт.
-async fn tunnel<A, B>(client: &mut A, server: &mut B)
+async fn tunnel<A, B>(client: &mut A, server: &mut B, bytes: &AtomicU64)
 where
     A: AsyncRead + AsyncWrite + Unpin,
     B: AsyncRead + AsyncWrite + Unpin + ?Sized,
 {
-    let mut counted = Counted(client);
+    let mut counted = Counted(client, bytes);
     let _ = tokio::io::copy_bidirectional(&mut counted, server).await;
 }
 
@@ -1836,7 +1839,7 @@ fn healthz_json(state: &State) -> String {
         "strict_failover_allowed": false,
         "active": state.active.load(Ordering::Relaxed),
         "total": state.total.load(Ordering::Relaxed),
-        "bytes": BYTES.load(Ordering::Relaxed),
+        "bytes": state.bytes.load(Ordering::Relaxed),
         "via_upstream": state.via_upstream.load(Ordering::Relaxed),
         "via_direct": state.via_direct.load(Ordering::Relaxed),
         "errors": state.errors.load(Ordering::Relaxed),
@@ -2195,7 +2198,7 @@ async fn handle(mut client: TcpStream, state: Arc<State>, sem: Arc<Semaphore>) {
         }
     }
 
-    tunnel(&mut client, &mut server).await;
+    tunnel(&mut client, &mut server, &state.bytes).await;
 }
 
 // ─── SOCKS5 (Telegram) ───────────────────────────────────────────
@@ -2326,7 +2329,7 @@ async fn handle_socks(mut client: TcpStream, state: Arc<State>, sem: Arc<Semapho
         }
     }
     enable_keepalive(&client);
-    tunnel(&mut client, &mut server).await;
+    tunnel(&mut client, &mut server, &state.bytes).await;
 }
 
 async fn serve_socks_listener(listener: TcpListener, state: Arc<State>, sem: Arc<Semaphore>) {
@@ -2624,6 +2627,7 @@ async fn main() {
         seen: None,
         upstreams: Arc::new(upstreams),
         total: AtomicU64::new(0),
+        bytes: AtomicU64::new(0),
         active: AtomicU64::new(0),
         via_upstream: AtomicU64::new(0),
         via_direct: AtomicU64::new(0),
@@ -2645,6 +2649,7 @@ async fn main() {
         seen: None,
         upstreams: state.upstreams.clone(),
         total: AtomicU64::new(0),
+        bytes: AtomicU64::new(0),
         active: AtomicU64::new(0),
         via_upstream: AtomicU64::new(0),
         via_direct: AtomicU64::new(0),
@@ -2666,6 +2671,7 @@ async fn main() {
         seen: None,
         upstreams: state.upstreams.clone(),
         total: AtomicU64::new(0),
+        bytes: AtomicU64::new(0),
         active: AtomicU64::new(0),
         via_upstream: AtomicU64::new(0),
         via_direct: AtomicU64::new(0),
@@ -2720,6 +2726,7 @@ async fn main() {
         seen: None,
         upstreams: state.upstreams.clone(),
             total: AtomicU64::new(0),
+        bytes: AtomicU64::new(0),
             active: AtomicU64::new(0),
             via_upstream: AtomicU64::new(0),
             via_direct: AtomicU64::new(0),
@@ -2760,6 +2767,7 @@ async fn main() {
             seen: Some(Mutex::new(std::collections::HashMap::new())),
             upstreams: state.upstreams.clone(),
             total: AtomicU64::new(0),
+        bytes: AtomicU64::new(0),
             active: AtomicU64::new(0),
             via_upstream: AtomicU64::new(0),
             via_direct: AtomicU64::new(0),
@@ -2889,6 +2897,7 @@ mod tests {
             seen: None,
             upstreams: Arc::new(upstreams),
             total: AtomicU64::new(0),
+        bytes: AtomicU64::new(0),
             active: AtomicU64::new(0),
             via_upstream: AtomicU64::new(0),
             via_direct: AtomicU64::new(0),
@@ -3963,17 +3972,17 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let (mut client_app, mut client_side) = tokio::io::duplex(1024);
         let (mut server_app, mut server_side) = tokio::io::duplex(1024);
-        let before = BYTES.load(Ordering::Relaxed);
-        let task = tokio::spawn(async move { tunnel(&mut client_side, &mut server_side).await });
+        let bytes = std::sync::Arc::new(AtomicU64::new(0));
+        let counter = bytes.clone();
+        let task = tokio::spawn(async move { tunnel(&mut client_side, &mut server_side, &counter).await });
         client_app.write_all(b"hello").await.unwrap();
         let mut buf = [0u8; 5];
         server_app.read_exact(&mut buf).await.unwrap();
         server_app.write_all(b"world!!").await.unwrap();
         let mut buf2 = [0u8; 7];
         client_app.read_exact(&mut buf2).await.unwrap();
-        // Соединение ещё открыто, а счётчик уже вырос (параллельные тесты
-        // могли добавить своё, поэтому не меньше).
-        assert!(BYTES.load(Ordering::Relaxed) - before >= 12, "{}", BYTES.load(Ordering::Relaxed) - before);
+        // Соединение ещё открыто, а счётчик уже вырос.
+        assert_eq!(bytes.load(Ordering::Relaxed), 12);
         assert!(!task.is_finished());
         drop(client_app);
         drop(server_app);

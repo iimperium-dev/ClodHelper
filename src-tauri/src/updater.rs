@@ -92,6 +92,11 @@ pub struct UpdateInfo {
     /// Доля установок, которым предложена версия (манифест `rollout`).
     #[serde(default = "full_rollout")]
     pub rollout: u32,
+    /// Обновление поставится само (автообновление включено и условия не
+    /// исключают тихую установку): по этому полю интерфейс обещает «поставится
+    /// само». Считает бэкенд (auto_update::handles_silently).
+    #[serde(default)]
+    pub handles_silently: bool,
 }
 
 /// Ход установки для UI: событие `update:progress`.
@@ -112,6 +117,10 @@ struct Manifest {
     /// ISO-дата сборки; старше MAX_MANIFEST_AGE_SECS - манифест не берём.
     #[serde(default)]
     pub_date: Option<String>,
+    /// Время подписи (unix-секунды), ставит publish-release.mjs. Программа
+    /// хранит последний принятый и отвергает меньший (откат к старому манифесту).
+    #[serde(default)]
+    seq: Option<u64>,
     /// Доля установок 0-100; нет поля - 100.
     #[serde(default)]
     rollout: Option<u32>,
@@ -137,7 +146,7 @@ struct ManifestFile {
     /// «Что нового» именно для этой ОС (manifest ≥0.8.11). Пустой список —
     /// в релизе для этой ОС ничего нового: обновление не предлагаем (если нет
     /// `force`), люди не получают уведомление о версии, которая им ничего не
-    /// даёт. Нет поля — старый манифест: берём общий список.
+    /// даёт. Нет поля - старый манифест: берём общий список.
     #[serde(default)]
     highlights: Option<Vec<String>>,
 }
@@ -216,7 +225,7 @@ async fn get_small(bridge: &str, url: &str) -> Result<Vec<u8>, FetchErr> {
 
 // ---------------------------------------------------------------- манифест
 
-/// Есть ли версия новее текущей. None — уже последняя (или остановлена,
+/// Есть ли версия новее текущей. None - уже последняя (или остановлена,
 /// или ещё не дошла до этой установки по раскатке).
 pub async fn check(mode: Mode) -> Result<Option<UpdateInfo>, String> {
     #[cfg(debug_assertions)]
@@ -224,8 +233,19 @@ pub async fn check(mode: Mode) -> Result<Option<UpdateInfo>, String> {
         return Ok(Some(info));
     }
     let m = fetch_manifest().await.map_err(|e| format!("Не удалось проверить обновления: {e}"))?;
+    let stored = crate::settings::load().update_seq;
+    if !seq_ok(m.seq, stored) {
+        return Err("Не удалось проверить обновления: сервер отдал устаревший манифест, попробуйте позже".into());
+    }
+    if let Some(n) = m.seq {
+        let _ = crate::settings::set_update_seq(n);
+    }
     let ctx = Ctx { mode, number: crate::auto_update::rollout_number(), now: crate::auto_update::now_secs() };
-    Ok(update_from(m, env!("CARGO_PKG_VERSION"), PLATFORM, &ctx))
+    let mut found = update_from(m, env!("CARGO_PKG_VERSION"), PLATFORM, &ctx);
+    if let Some(info) = found.as_mut() {
+        info.handles_silently = crate::auto_update::handles_silently(&crate::settings::load(), info, ctx.now);
+    }
+    Ok(found)
 }
 
 /// Только отладочная сборка: «обновление» с локального сервера для живой
@@ -246,6 +266,7 @@ fn debug_override() -> Option<UpdateInfo> {
         manual_only: false,
         page: format!("https://github.com/{REPO}/releases/tag/v{version}"),
         rollout: 100,
+        handles_silently: false,
     })
 }
 
@@ -304,12 +325,22 @@ async fn fetch_manifest_from(bridge: &str, base: &str, keys: &[&str]) -> Result<
     Ok(m)
 }
 
+/// Монотонность манифеста: `seq` не меньше сохранённого. Манифест без `seq`
+/// принимается, только пока ничего не сохранено (совместимость со старыми).
+fn seq_ok(seq: Option<u64>, stored: Option<u64>) -> bool {
+    match (seq, stored) {
+        (Some(n), Some(s)) => n >= s,
+        (None, Some(_)) => false,
+        _ => true,
+    }
+}
+
 /// Подпись манифеста (base64 64 байт ed25519) — одним из наших ключей.
 fn verify_manifest(body: &[u8], sig: &[u8], keys: &[&str]) -> Result<(), String> {
     use base64::Engine;
     use ed25519_dalek::{Signature, VerifyingKey};
     let b64 = base64::engine::general_purpose::STANDARD;
-    let bad = || "Подпись обновления не сошлась — не ставлю (файлы релиза могли подменить)".to_string();
+    let bad = || "Подпись обновления не сошлась - не ставлю (файлы релиза могли подменить)".to_string();
     let sig = b64.decode(String::from_utf8_lossy(sig).trim()).map_err(|_| bad())?;
     let sig = Signature::from_slice(&sig).map_err(|_| bad())?;
     let ok = keys.iter().any(|k| {
@@ -419,6 +450,7 @@ fn update_from(m: Manifest, current: &str, platform: &str, ctx: &Ctx) -> Option<
         force: m.force,
         manual_only: offer == Offer::ManualOnly,
         rollout: m.rollout.unwrap_or(100).min(100),
+        handles_silently: false,
     })
 }
 
@@ -607,7 +639,7 @@ async fn attempt(
     progress(received, total.max(received));
     if format!("{:x}", hasher.finalize()) != want {
         let _ = std::fs::remove_file(part);
-        let msg = "Файл обновления повреждён (контрольная сумма не совпала) — не ставлю".to_string();
+        let msg = "Файл обновления повреждён (контрольная сумма не совпала) - не ставлю".to_string();
         // После докачки мог испортиться старый кусок: один раз с нуля.
         return if resumed { Attempt::Retry(msg) } else { Attempt::Fatal(msg) };
     }
@@ -711,7 +743,7 @@ fn copy_verified(src: &Path, dst: &Path, want: &str) -> Result<(), String> {
     drop(w);
     if format!("{:x}", h.finalize()) != want {
         let _ = std::fs::remove_file(dst);
-        return Err("Файл обновления повреждён (контрольная сумма не совпала) — не ставлю".into());
+        return Err("Файл обновления повреждён (контрольная сумма не совпала) - не ставлю".into());
     }
     Ok(())
 }
@@ -751,7 +783,7 @@ async fn trusted_for(info: &UpdateInfo, mode: Mode) -> Result<UpdateInfo, String
     check(mode)
         .await?
         .filter(|t| t.version == info.version)
-        .ok_or_else(|| "Обновление на сервере изменилось — проверьте ещё раз".to_string())
+        .ok_or_else(|| "Обновление на сервере изменилось - проверьте ещё раз".to_string())
 }
 
 /// Скачать установщик (если ещё не скачан) в кэш и проверить его SHA-256.
@@ -820,6 +852,9 @@ impl Drop for InstallLock {
 }
 
 pub const ALREADY: &str = "Обновление уже устанавливается";
+/// Тихая установка отложена: перед самым запуском человек вернулся к
+/// компьютеру или открыл окно. Это не сбой: неудача не записывается.
+pub const POSTPONED: &str = "Установка отложена";
 
 pub fn is_installing() -> bool {
     INSTALLING.load(Ordering::SeqCst)
@@ -828,13 +863,14 @@ pub fn is_installing() -> bool {
 // ---------------------------------------------------------------- установка
 
 /// Скачать, проверить, поставить и перезапуститься (после вызова приложение
-/// должно завершиться — новую версию запустит фоновый скрипт). `how` -
+/// должно завершиться - новую версию запустит фоновый скрипт). `how` -
 /// "manual" | "auto": тихая установка без окон и заставки, новая версия
 /// стартует в трее.
 pub async fn install(
     info: &UpdateInfo,
     progress: &(dyn Fn(UpdateProgress) + Send + Sync),
     how: &str,
+    ready: &(dyn Fn() -> bool + Send + Sync),
 ) -> Result<(), String> {
     let lock = InstallLock::acquire()?;
     let silent = how == "auto";
@@ -847,6 +883,11 @@ pub async fn install(
     let name = cached.file_name().map(|n| n.to_os_string()).unwrap_or_default();
     let staged = run.join(name);
     copy_verified(&cached, &staged, &trusted.sha256)?;
+    // Тихая установка: условия могли измениться, пока шли проверки и копия.
+    if silent && !ready() {
+        let _ = std::fs::remove_dir_all(&run);
+        return Err(POSTPONED.into());
+    }
     platform_install(&run, &staged, &trusted, silent, how)?;
     // Установка пошла: блокировка остаётся до выхода приложения, чтобы за
     // паузу перед выходом не запустилась вторая.
@@ -968,8 +1009,8 @@ fn platform_install(run: &Path, dmg: &Path, info: &UpdateInfo, silent: bool, how
         return Err("Не удалось распаковать обновление".into());
     }
 
-    // Замена после выхода: старую — в резервную копию (одну последнюю),
-    // новую — на место.
+    // Замена после выхода: старую - в резервную копию (одну последнюю),
+    // новую - на место.
     let backup_dir = dirs::data_dir().ok_or("Нет папки данных")?.join("ClodHelper-backup");
     let _ = std::fs::create_dir_all(&backup_dir);
     prune_backups(&backup_dir, 0);
@@ -1024,27 +1065,37 @@ const NSIS_SILENT_ARGS: [&str; 2] = ["/S", "/UPDATE"];
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 const SILENT_BAT: &str = "@echo off\r\nrem Clod Helper: silent update. %1 = installer, %2 = app exe\r\nstart \"\" /wait \"%~1\" /S /UPDATE\r\nstart \"\" \"%~2\" --tray\r\n";
 
+/// Полный путь к cmd.exe из %SystemRoot%\System32 (не по PATH: туда мог
+/// попасть чужой cmd.exe). Нет переменной - обычное имя.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn system_cmd(root: Option<std::ffi::OsString>) -> PathBuf {
+    match root.filter(|r| !r.is_empty()) {
+        Some(r) => PathBuf::from(r).join("System32").join("cmd.exe"),
+        None => PathBuf::from("cmd.exe"),
+    }
+}
+
 /// Командная строка для `cmd.exe /d /s /c`: внешние кавычки снимает /s.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn silent_cmdline(bat: &Path, setup: &Path, exe: &Path) -> String {
     format!("/d /s /c \"\"{}\" \"{}\" \"{}\"\"", bat.display(), setup.display(), exe.display())
 }
 
-/// Windows: установка в профиль пользователя (currentUser) — без UAC.
+/// Windows: установка в профиль пользователя (currentUser) - без UAC.
 /// Приложение сразу после этого выходит (update_install); установщик
-/// дождётся выхода — запущенную копию он и сам закрывает. Мост работает из
+/// дождётся выхода - запущенную копию он и сам закрывает. Мост работает из
 /// своей папки и обновится при первом старте новой версии.
 #[cfg(target_os = "windows")]
 fn platform_install(run: &Path, setup: &Path, info: &UpdateInfo, silent: bool, how: &str) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
     /// Без окна консоли.
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    crate::auto_update::mark_attempt(&info.version, how);
     let spawned = if silent {
         let exe = restart_exe()?;
         let bat = run.join("update.cmd");
         std::fs::write(&bat, SILENT_BAT).map_err(|e| format!("Не удалось записать скрипт обновления: {e}"))?;
-        std::process::Command::new("cmd.exe")
+        crate::auto_update::mark_attempt(&info.version, how);
+        std::process::Command::new(system_cmd(std::env::var_os("SystemRoot")))
             .raw_arg(silent_cmdline(&bat, setup, &exe))
             .creation_flags(CREATE_NO_WINDOW)
             .stdin(std::process::Stdio::null())
@@ -1052,6 +1103,7 @@ fn platform_install(run: &Path, setup: &Path, info: &UpdateInfo, silent: bool, h
             .stderr(std::process::Stdio::null())
             .spawn()
     } else {
+        crate::auto_update::mark_attempt(&info.version, how);
         std::process::Command::new(setup).args(NSIS_UPDATE_ARGS).spawn()
     };
     let child = match spawned {
@@ -1062,7 +1114,7 @@ fn platform_install(run: &Path, setup: &Path, info: &UpdateInfo, silent: bool, h
         }
     };
     if !silent {
-        // Заставка — украшение: не запустилась, обновление всё равно идёт.
+        // Заставка - украшение: не запустилась, обновление всё равно идёт.
         if let Err(e) = crate::update_splash::spawn(run, child.id(), &info.version) {
             tracing::warn!("{e}");
         }
@@ -1148,6 +1200,28 @@ mod tests {
         });
         v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
         serde_json::from_value(v).unwrap()
+    }
+
+    #[test]
+    fn cmd_comes_from_system32() {
+        assert_eq!(system_cmd(Some("C:\\Windows".into())), PathBuf::from("C:\\Windows").join("System32").join("cmd.exe"));
+        assert_eq!(system_cmd(None), PathBuf::from("cmd.exe"));
+        assert_eq!(system_cmd(Some("".into())), PathBuf::from("cmd.exe"));
+    }
+
+    #[test]
+    fn manifest_seq_never_goes_back() {
+        // Больше или равно сохранённому - берём, меньше - откат, отвергаем.
+        assert!(seq_ok(Some(100), Some(100)));
+        assert!(seq_ok(Some(101), Some(100)));
+        assert!(!seq_ok(Some(99), Some(100)));
+        // Без seq: можно, только пока ничего не сохранено.
+        assert!(seq_ok(None, None));
+        assert!(!seq_ok(None, Some(100)));
+        assert!(seq_ok(Some(5), None));
+        // Поле читается из подписанного манифеста.
+        assert_eq!(manifest_with(serde_json::json!({"seq": 1_790_000_000u64})).seq, Some(1_790_000_000));
+        assert_eq!(manifest_with(serde_json::json!({})).seq, None);
     }
 
     #[test]
@@ -1754,7 +1828,7 @@ mod tests {
     async fn live_silent_install() {
         let info = debug_override().expect("нужны CLOD_UPDATE_URL и CLOD_UPDATE_SHA");
         println!("ставлю {} из {}", info.version, info.url);
-        install(&info, &|p| println!("{} {}/{}", p.stage, p.received, p.total), "auto")
+        install(&info, &|p| println!("{} {}/{}", p.stage, p.received, p.total), "auto", &|| true)
             .await
             .expect("установка не запустилась");
         println!("установщик запущен; смотрите update_attempt в settings.json и процесс clod-helper.exe --tray");

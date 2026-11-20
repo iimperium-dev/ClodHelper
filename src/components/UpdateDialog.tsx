@@ -186,12 +186,12 @@ export function UpdateDialog() {
                       Эта версия сильно новее установленной. Скачайте её со страницы релиза и поставьте вручную.
                     </p>
                   ) : (
-                    auto && (
+                    auto && info.handles_silently && (
                       <p
                         data-testid="update-auto-note"
                         className="mx-5 mt-3 text-[12px] leading-snug text-vb-silver-faint"
                       >
-                        Обновление поставится само, когда программа будет свёрнута, а вы отойдёте от компьютера.
+                        Поставится само, когда программа свёрнута и вы отойдёте от компьютера.
                       </p>
                     )
                   )}
@@ -229,7 +229,7 @@ export function UpdateDialog() {
                 >
                   <ProgressRing progress={progress} failed={phase === "error"} />
                   <h2 className="mt-5 text-[16px] font-semibold text-vb-fg">
-                    {phase === "error" ? (already ? "Обновление уже идёт" : "Не получилось обновить") : `Обновляю до ${info.version}`}
+                    {phase === "error" ? (already ? "Обновление уже ставится в фоне" : "Не получилось обновить") : `Обновляю до ${info.version}`}
                   </h2>
                   <p className="mt-1 min-h-[18px] text-center text-[12px] text-vb-silver-faint">
                     {phase === "error"
