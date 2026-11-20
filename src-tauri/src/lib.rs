@@ -134,6 +134,8 @@ pub fn run() {
             commands::update_toast_open,
             commands::update_toast_close,
             commands::whats_new_take,
+            commands::auto_update_get,
+            commands::auto_update_set,
             commands::play_chime,
             commands::diagnostics_report,
             commands::notices_list,

@@ -97,6 +97,11 @@ pub struct Settings {
     /// «Что нового». None — сборки до этого поля (или первый запуск).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_version_seen: Option<String>,
+    /// Автообновление: новые версии ставятся сами. None — человека ещё не
+    /// спрашивали (установка до этой функции): после «Что нового» ему
+    /// один раз предлагают включить. Мастер первого запуска пишет явно.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_update: Option<bool>,
     /// Рассылки разработчика (последний скачанный notices.json) — колокольчик
     /// виден и без сети.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -587,6 +592,33 @@ pub fn take_whats_new(current: &str) -> Result<Option<String>, String> {
     Ok(news)
 }
 
+/// Состояние автообновления для интерфейса.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct AutoUpdateState {
+    /// Включено ли автообновление сейчас.
+    pub enabled: bool,
+    /// Предложить включить (окно после «Что нового»): программа уже была
+    /// настроена до этой функции, а человека ещё не спрашивали.
+    pub offer: bool,
+}
+
+pub fn auto_update_state(s: &Settings) -> AutoUpdateState {
+    let configured = s.proxy_url.is_some() || !s.proxies.is_empty();
+    AutoUpdateState {
+        enabled: s.auto_update == Some(true),
+        offer: s.auto_update.is_none() && configured,
+    }
+}
+
+/// Включить/выключить автообновление (мастер, окно-предложение, Настройки).
+/// Любой ответ — и «не сейчас» тоже — снимает предложение навсегда.
+pub fn set_auto_update(enabled: bool) -> Result<Settings, String> {
+    with_settings(|s| {
+        s.auto_update = Some(enabled);
+        Ok(())
+    })
+}
+
 fn just_updated(seen: Option<&str>, configured: bool, current: &str) -> bool {
     match seen {
         Some(seen) => matches!(
@@ -641,6 +673,21 @@ mod tests {
         assert_eq!(bridge_upstreams(&s), vec!["a", "a2", "x"]);
         assert!(!s.proxy_backups.contains_key("b"));
         assert!(!s.proxy_labels.contains_key("y"), "имя ушедшего резерва убрано");
+    }
+
+    #[test]
+    fn auto_update_is_offered_once_to_existing_installs() {
+        let fresh = Settings::default();
+        assert_eq!(auto_update_state(&fresh), AutoUpdateState { enabled: false, offer: false }, "до мастера не предлагаем");
+        let old = Settings { proxy_url: Some("http://1.2.3.4:80".into()), ..Settings::default() };
+        assert_eq!(auto_update_state(&old), AutoUpdateState { enabled: false, offer: true });
+        let declined = Settings { auto_update: Some(false), ..old.clone() };
+        assert_eq!(auto_update_state(&declined), AutoUpdateState { enabled: false, offer: false });
+        let on = Settings { auto_update: Some(true), ..old };
+        assert_eq!(auto_update_state(&on), AutoUpdateState { enabled: true, offer: false });
+        // Старый settings.json без поля читается как «не спрашивали».
+        let s: Settings = serde_json::from_str(r#"{"proxy_url":"http://1.2.3.4:80"}"#).unwrap();
+        assert_eq!(s.auto_update, None);
     }
 
     #[test]

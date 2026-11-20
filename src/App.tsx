@@ -16,10 +16,11 @@ import { UpdateToast } from "./pages/UpdateToast";
 import { UpdateSplash } from "./pages/UpdateSplash";
 import { UpdateDialog } from "./components/UpdateDialog";
 import { WhatsNewModal } from "./components/WhatsNewModal";
+import { AutoUpdateOffer } from "./components/AutoUpdateOffer";
 import { StatusProvider } from "./lib/status";
 import { Button } from "./components/Button";
 import { AlertTriangle } from "lucide-react";
-import { settingsGet, shimScriptPath, shimStatus, whatsNewTake } from "./lib/api";
+import { autoUpdateGet, autoUpdateSet, settingsGet, shimScriptPath, shimStatus, whatsNewTake } from "./lib/api";
 import type { AppView, WizardInstallResult, WizardStep } from "./lib/types";
 
 /** Окно трей-попапа рендерит тот же bundle с ?view=tray. */
@@ -46,12 +47,23 @@ function App() {
   const [direction, setDirection] = useState(1);
   // Версия для окна «Что нового» (приложение только что обновилось).
   const [whatsNew, setWhatsNew] = useState<string | null>(null);
+  // Ответ «Что нового» получен (окно показано или его не будет).
+  const [whatsNewTaken, setWhatsNewTaken] = useState(false);
+  // Предложение автообновления: для установок до этой функции, один раз,
+  // после окна «Что нового» (или сразу, если его нет в этот запуск).
+  const [offerAuto, setOfferAuto] = useState(false);
 
   useEffect(() => {
     if (IS_TRAY || IS_TOAST || IS_SPLASH) return;
     // До выбора мастер/Обзор: первый запуск после установки ещё без прокси —
     // это не обновление, «Что нового» не нужно.
-    void whatsNewTake().then(setWhatsNew).catch(() => {});
+    void whatsNewTake()
+      .then(setWhatsNew)
+      .catch(() => {})
+      .finally(() => setWhatsNewTaken(true));
+    void autoUpdateGet()
+      .then((s) => setOfferAuto(s.offer))
+      .catch(() => {});
     void (async () => {
       try {
         // 3 признака что мост уже установлен (хватит любого):
@@ -72,6 +84,10 @@ function App() {
   }, []);
 
   const closeWhatsNew = useCallback(() => setWhatsNew(null), []);
+  const answerAutoUpdate = useCallback(async (enabled: boolean) => {
+    await autoUpdateSet(enabled).catch(() => {});
+    setOfferAuto(false);
+  }, []);
 
   const navigate = (next: AppView) => {
     const nextIdx = NAV_ORDER.indexOf(next);
@@ -83,6 +99,9 @@ function App() {
 
   // ─── Wizard state: 3 шага (прокси → установка → готово) ──────
   const [step, setStep] = useState<WizardStep>("proxy");
+  // Автообновление в мастере: включено по умолчанию, пишется в настройки
+  // при старте установки и при каждом переключении на шаге «Готово».
+  const [wizAutoUpdate, setWizAutoUpdate] = useState(true);
   const [wizProxyUrl, setWizProxyUrl] = useState<string | null>(null);
   const [wizResult, setWizResult] = useState<WizardInstallResult | null>(null);
   // Мастер пропущен кнопкой «Сначала очистка»: программа открыта без прокси,
@@ -121,6 +140,7 @@ function App() {
                   onNext={(url) => {
                     setWizProxyUrl(url);
                     setStep("install");
+                    void autoUpdateSet(wizAutoUpdate).catch(() => {});
                   }}
                 />
               )}
@@ -137,8 +157,14 @@ function App() {
               {step === "done" && wizResult && (
                 <StepDone
                   result={wizResult}
+                  autoUpdate={wizAutoUpdate}
+                  onAutoUpdate={(on) => {
+                    setWizAutoUpdate(on);
+                    void autoUpdateSet(on).catch(() => {});
+                  }}
                   onFinish={() => {
                     setNoProxy(false);
+                    setOfferAuto(false);
                     setView("overview");
                   }}
                 />
@@ -201,6 +227,10 @@ function App() {
       </div>
       <UpdateDialog />
       <WhatsNewModal version={view !== null ? whatsNew : null} onClose={closeWhatsNew} />
+      <AutoUpdateOffer
+        open={view !== null && whatsNewTaken && !whatsNew && offerAuto}
+        onAnswer={answerAutoUpdate}
+      />
     </StatusProvider>
   );
 }

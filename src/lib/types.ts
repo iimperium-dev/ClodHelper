@@ -412,6 +412,13 @@ export interface UpdateInfo {
   highlights?: string[];
 }
 
+/** Автообновление (settings.auto_update). */
+export interface AutoUpdateState {
+  enabled: boolean;
+  /** Один раз предложить включить (установка до этой функции). */
+  offer: boolean;
+}
+
 /** Элемент колокольчика: обновление или рассылка разработчика (notices.rs). */
 export interface NoticeItem {
   id: string;

@@ -16,6 +16,7 @@ import type {
   FoundApp,
   PrivacyReport,
   UpdateInfo,
+  AutoUpdateState,
   BrowserPolicyStatus,
   LeakGuardStatus,
   AutostartState,
@@ -528,6 +529,16 @@ export function updateToastClose(): Promise<void> {
 /** Версия для окна «Что нового», если приложение только что обновилось. */
 export function whatsNewTake(): Promise<string | null> {
   return invoke<string | null>("whats_new_take");
+}
+
+/** Автообновление: включено ли и надо ли один раз предложить его включить. */
+export function autoUpdateGet(): Promise<AutoUpdateState> {
+  return invoke<AutoUpdateState>("auto_update_get");
+}
+
+/** Включить/выключить автообновление (любой ответ снимает предложение). */
+export function autoUpdateSet(enabled: boolean): Promise<AutoUpdateState> {
+  return invoke<AutoUpdateState>("auto_update_set", { enabled });
 }
 
 export function playChime(): Promise<void> {

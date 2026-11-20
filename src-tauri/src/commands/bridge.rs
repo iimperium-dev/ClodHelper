@@ -225,6 +225,18 @@ pub fn whats_new_take() -> Result<Option<String>, String> {
     settings::take_whats_new(env!("CARGO_PKG_VERSION"))
 }
 
+/// Автообновление: включено ли и надо ли предложить его включить.
+#[tauri::command]
+pub fn auto_update_get() -> settings::AutoUpdateState {
+    settings::auto_update_state(&settings::load())
+}
+
+/// Включить/выключить автообновление. Ответ на предложение — тоже сюда.
+#[tauri::command]
+pub fn auto_update_set(enabled: bool) -> Result<settings::AutoUpdateState, String> {
+    Ok(settings::auto_update_state(&settings::set_auto_update(enabled)?))
+}
+
 /// Фирменный звук уведомления.
 #[tauri::command]
 pub fn play_chime() {
