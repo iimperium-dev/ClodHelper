@@ -268,21 +268,10 @@ pub async fn install(
         return Err("Не удалось распаковать обновление".into());
     }
 
-    // Замена после выхода: старую — в резервные копии, новую — на место.
     let backup_dir = dirs::data_dir()
         .ok_or("Нет папки данных")?
         .join("ClodHelper-backup");
-    let q = |p: &std::path::Path| crate::macos::sh_quote(&p.to_string_lossy());
-    let script = format!(
-        "pid={pid}\nwhile kill -0 $pid 2>/dev/null; do sleep 0.3; done\n\
-         mkdir -p {bdir}\nrm -rf {bold}\nmv {app} {bold} && mv {new} {app} || mv {bold} {app}\n\
-         xattr -dr com.apple.quarantine {app} 2>/dev/null\nopen {app}\n",
-        pid = std::process::id(),
-        bdir = q(&backup_dir),
-        bold = q(&backup_dir.join(format!("Clod Helper ({}).app", env!("CARGO_PKG_VERSION")))),
-        app = q(&bundle),
-        new = q(&staged),
-    );
+    let script = swap_script(std::process::id(), &backup_dir, &bundle, &staged, env!("CARGO_PKG_VERSION"));
     let sh = work.join("swap.sh");
     std::fs::write(&sh, script).map_err(|e| e.to_string())?;
     std::process::Command::new("/usr/bin/nohup")
@@ -294,6 +283,38 @@ pub async fn install(
         .spawn()
         .map_err(|e| format!("Не удалось запустить установку: {e}"))?;
     Ok(())
+}
+
+/// macOS: скрипт замены после выхода программы (pid). Старая версия уходит
+/// в резервную копию, новая встаёт на место; не вышло - старая
+/// возвращается. В резерве остаётся только последняя прежняя версия:
+/// раньше копии копились с каждым обновлением (сотни мегабайт).
+#[cfg(any(not(target_os = "windows"), test))]
+#[cfg_attr(target_os = "windows", allow(dead_code))]
+fn swap_script(
+    pid: u32,
+    backup_dir: &std::path::Path,
+    bundle: &std::path::Path,
+    staged: &std::path::Path,
+    version: &str,
+) -> String {
+    let q = |p: &std::path::Path| crate::macos::sh_quote(&p.to_string_lossy());
+    format!(
+        "pid={pid}\nwhile kill -0 $pid 2>/dev/null; do sleep 0.3; done\n\
+         mkdir -p {bdir}\nrm -rf {bold}\n\
+         if mv {app} {bold}; then\n\
+         \x20 if mv {new} {app}; then\n\
+         \x20   for f in {bdir}/*.app; do [ \"$f\" = {bold} ] || rm -rf \"$f\"; done\n\
+         \x20 else\n\
+         \x20   mv {bold} {app}\n\
+         \x20 fi\n\
+         fi\n\
+         xattr -dr com.apple.quarantine {app} 2>/dev/null\nopen {app}\n",
+        bdir = q(backup_dir),
+        bold = q(&backup_dir.join(format!("Clod Helper ({version}).app"))),
+        app = q(bundle),
+        new = q(staged),
+    )
 }
 
 /// Ключи NSIS-установщика Tauri (как у его штатного апдейтера): /S — без
@@ -441,5 +462,36 @@ mod tests {
     #[ignore]
     async fn live_update_check() {
         println!("update → {:?}", check().await);
+    }
+
+    /// Живой прогон скрипта замены в sh на временных папках.
+    #[cfg(unix)]
+    #[test]
+    fn swap_keeps_only_previous_backup() {
+        let root = std::env::temp_dir().join(format!("clod-swap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let backup = root.join("backup dir");
+        let app = root.join("Apps/Clod Helper.app");
+        let staged = root.join("Apps/Clod Helper.app.new");
+        for (dir, mark) in [(&app, "old"), (&staged, "new")] {
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::write(dir.join("v"), mark).unwrap();
+        }
+        let stale = backup.join("Clod Helper (0.0.1).app");
+        std::fs::create_dir_all(&stale).unwrap();
+        // pid уже завершившегося процесса: ждать нечего.
+        let mut done = std::process::Command::new("true").spawn().unwrap();
+        let pid = done.id();
+        done.wait().unwrap();
+        let script = swap_script(pid, &backup, &app, &staged, "9.9.9")
+            .replace("\nopen ", "\n: open ");
+        let ok = std::process::Command::new("/bin/sh").arg("-c").arg(&script).status().unwrap();
+        assert!(ok.success());
+        assert_eq!(std::fs::read_to_string(app.join("v")).unwrap(), "new");
+        let prev = backup.join("Clod Helper (9.9.9).app");
+        assert_eq!(std::fs::read_to_string(prev.join("v")).unwrap(), "old");
+        assert!(!stale.exists(), "старые копии должны удаляться");
+        assert!(!staged.exists());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
