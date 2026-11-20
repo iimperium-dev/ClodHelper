@@ -1,17 +1,17 @@
 import { motion, useReducedMotion } from "framer-motion";
-import { AppWindow, ArrowRight, Check, Globe, Monitor, Power, RefreshCw } from "lucide-react";
+import { AppWindow, ArrowRight, Check, Globe, Monitor, Power } from "lucide-react";
 import { Button } from "../components/Button";
-import { Toggle } from "../components/Toggle";
+import { PrivacySwitches } from "../components/PrivacySwitches";
 import { WizardFooter, WizardTitle } from "../components/WizardShell";
-import type { WizardInstallResult } from "../lib/types";
+import type { PrivacyKey, WizardInstallResult } from "../lib/types";
 import { cn } from "../lib/cn";
-import { isMac, osName } from "../lib/platform";
+import { osName } from "../lib/platform";
 
 interface Props {
   result: WizardInstallResult;
-  /** Автообновление: по умолчанию включено, человек может снять. */
-  autoUpdate: boolean;
-  onAutoUpdate: (next: boolean) => void;
+  /** Автообновление, отчёты и статистика: по умолчанию включены, человек может снять. */
+  privacy: Record<PrivacyKey, boolean>;
+  onPrivacy: (key: PrivacyKey, on: boolean) => void;
   onFinish: () => void;
 }
 
@@ -19,9 +19,9 @@ interface Props {
   Шаг 3: честный итог. Маршрут «компьютер → мост → внешний IP» — из
   РЕАЛЬНОГО shim-теста (запрос через мост), а не из выбранных галочек: если
   проверка не прошла, говорим прямо и ведём в программу чинить.
-  Здесь же — переключатель автообновления (включён по умолчанию).
+  Здесь же - три переключателя (автообновление, отчёты, статистика), все включены.
 */
-export function StepDone({ result, autoUpdate, onAutoUpdate, onFinish }: Props) {
+export function StepDone({ result, privacy, onPrivacy, onFinish }: Props) {
   const ok = result.test.ok;
   const reduce = useReducedMotion();
 
@@ -30,15 +30,15 @@ export function StepDone({ result, autoUpdate, onAutoUpdate, onFinish }: Props) 
       <WizardTitle
         sub={
           ok
-            ? "Соединение проверено настоящим запросом через мост."
-            : `${result.test.error ?? "Запрос через мост не прошёл."} Чаще всего прокси не отвечает — его можно сменить в разделе «Прокси».`
+            ? undefined // успех виден по маршруту ниже; место нужно переключателям
+            : `${result.test.error ?? "Запрос через мост не прошёл."} Чаще всего прокси не отвечает. Его можно сменить в разделе «Прокси».`
         }
       >
         {ok ? "Всё работает" : "Мост установлен, но проверка не прошла"}
       </WizardTitle>
 
       {/* Маршрут: этот компьютер → мост → выход в интернет. */}
-      <div className="mt-5 flex items-center gap-2 rounded-xl border border-vb-border bg-vb-surface px-4 py-3">
+      <div className="mt-4 flex items-center gap-2 rounded-xl border border-vb-border bg-vb-surface px-4 py-2.5">
         <RouteNode icon={<Monitor className="h-3.5 w-3.5" aria-hidden />} label="Этот компьютер" />
         <RouteLine ok reduce={!!reduce} delay={0.1} />
         <RouteNode icon={<Power className="h-3.5 w-3.5" aria-hidden />} label="Мост" />
@@ -59,7 +59,7 @@ export function StepDone({ result, autoUpdate, onAutoUpdate, onFinish }: Props) 
         </div>
       </div>
 
-      <ul className="mt-3 space-y-1">
+      <ul className="mt-2">
         <Row icon={<Check className="h-4 w-4 text-vb-emerald" aria-hidden />}>
           Мост запускается сам при входе в {osName}
         </Row>
@@ -69,26 +69,16 @@ export function StepDone({ result, autoUpdate, onAutoUpdate, onFinish }: Props) 
           </Row>
         ) : (
           <Row icon={<Globe className="h-4 w-4 text-vb-warn" aria-hidden />}>
-            Терминал пока идёт напрямую — включается в «Приложениях» → Claude Desktop → шестерёнка
+            Терминал пока идёт напрямую. Включить его можно в «Приложениях», в настройках Claude Desktop (шестерёнка)
           </Row>
         )}
         <Row icon={<AppWindow className="h-4 w-4 text-vb-silver-dim" aria-hidden />}>
-          {isMac
-            ? "Claude Desktop, браузер и другие программы — в разделе «Приложения»"
-            : "Дальше: «Приложения» → Claude Desktop → «Подключить»"}
+          Claude Desktop подключается в разделе «Приложения»
         </Row>
       </ul>
 
-      {/* Автообновление: включено по умолчанию. Вся строка — подпись тумблера. */}
-      <div className="mt-4 flex items-center gap-3 rounded-xl border border-vb-border bg-vb-surface px-4 py-3">
-        <RefreshCw className="h-4 w-4 shrink-0 text-vb-silver-dim" aria-hidden />
-        <label htmlFor="wizard-auto-update" className="min-w-0 flex-1 cursor-pointer">
-          <span className="block text-[13px] text-vb-fg">Обновлять автоматически</span>
-          <span className="block text-[12px] leading-snug text-vb-silver-dim">
-            Новые версии ставятся сами, когда программа свёрнута
-          </span>
-        </label>
-        <Toggle id="wizard-auto-update" checked={autoUpdate} onChange={onAutoUpdate} />
+      <div className="mt-2 border-t border-vb-border/60 pt-3">
+        <PrivacySwitches dense idPrefix="wizard" values={privacy} onChange={onPrivacy} />
       </div>
 
       <WizardFooter>
@@ -133,7 +123,7 @@ function RouteLine({ ok, reduce, delay }: { ok: boolean; reduce: boolean; delay:
 
 function Row({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
   return (
-    <li className="flex items-start gap-2.5 px-1 py-1.5 text-[13px] leading-snug text-vb-silver">
+    <li className="flex items-start gap-2.5 px-1 py-1 text-[13px] leading-snug text-vb-silver">
       <span className="mt-px shrink-0">{icon}</span>
       <span>{children}</span>
     </li>

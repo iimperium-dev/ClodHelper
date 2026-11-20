@@ -9,6 +9,8 @@ interface Props {
   tone?: "emerald" | "loss";
   label?: string;
   id?: string;
+  /** id элемента с пояснением (aria-describedby). */
+  describedBy?: string;
 }
 
 /*
@@ -25,6 +27,7 @@ export function Toggle({
   tone = "emerald",
   label,
   id,
+  describedBy,
 }: Props) {
   const reduce = useReducedMotion();
   const onColor = tone === "loss" ? "bg-vb-loss" : "bg-vb-emerald";
@@ -36,6 +39,7 @@ export function Toggle({
       id={id}
       aria-checked={checked}
       aria-label={label}
+      aria-describedby={describedBy}
       disabled={disabled}
       onClick={() => !disabled && onChange(!checked)}
       className={cn(

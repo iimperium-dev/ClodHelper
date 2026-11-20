@@ -159,7 +159,7 @@ fn refresh_process_table(sys: &mut System) {
 
 /// Мост слушает свой порт? Дешёвый TCP-connect вместо скана процессов —
 /// основной сигнал для watchdog'а.
-fn port_alive() -> bool {
+pub(crate) fn port_alive() -> bool {
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], LISTEN_PORT));
     std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok()
 }
@@ -440,9 +440,11 @@ pub fn spawn_watchdog() {
                             "watchdog: шим был мёртв — поднял (попытка #{})",
                             consecutive_revivals
                         );
+                        crate::telemetry::report_bridge("Мост не отвечал, поднят заново", "watchdog:revived");
                     }
                     Err(e) => {
                         tracing::error!("watchdog: не смог поднять шим: {e}");
+                        crate::telemetry::report_bridge(&format!("Мост не отвечал, поднять не вышло: {e}"), "watchdog:start_failed");
                     }
                 }
                 // анти-флаппинг: если шим падает раз за разом (битый конфиг/порт),

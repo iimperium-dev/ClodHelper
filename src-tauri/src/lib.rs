@@ -9,6 +9,8 @@ mod claude_wipe;
 mod commands;
 mod diagnostics;
 mod notices;
+mod telemetry;
+mod telemetry_scrub;
 #[cfg(target_os = "windows")]
 mod elevate;
 mod env_proxy;
@@ -75,6 +77,10 @@ pub fn run() {
         )
         .init();
 
+    // Сбои Rust: запись на диск до аварийного выхода, отправка при старте.
+    telemetry::install_panic_hook();
+    telemetry::mark_legacy();
+
     // Из Dock/Finder приложение получает PATH без Homebrew/nvm — node, npm и
     // claude не нашлись бы. Чиним до любых спавнов.
     #[cfg(not(target_os = "windows"))]
@@ -136,6 +142,10 @@ pub fn run() {
             commands::whats_new_take,
             commands::auto_update_get,
             commands::auto_update_set,
+            commands::privacy_get,
+            commands::privacy_set,
+            commands::telemetry_ui_error,
+            commands::telemetry_report,
             commands::play_chime,
             commands::diagnostics_report,
             commands::notices_list,
@@ -276,6 +286,9 @@ pub fn run() {
             // Фоновая проверка обновлений: новая версия — уведомление в углу
             // экрана со звуком (одно на версию).
             update_notify::spawn_watcher(app.handle().clone());
+
+            // Статистика (раз в сутки) и отчёт о сбое прошлого запуска.
+            telemetry::spawn();
 
             // macOS: агент переменных старого формата (`/bin/sh -c`, виден в
             // «Объектах входа» как безымянный «sh») → `clod-helper --apply-env`.

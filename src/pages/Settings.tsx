@@ -3,9 +3,10 @@ import { motion } from "framer-motion";
 import { Loader2 } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
 import { Toggle } from "../components/Toggle";
+import { PrivacyCard } from "../components/PrivacyCard";
 import { UpdateBanner } from "../components/UpdateBanner";
 import { useStatus } from "../lib/status";
-import { autoUpdateGet, autoUpdateSet, autostartGet, autostartSet } from "../lib/api";
+import { autostartGet, autostartSet } from "../lib/api";
 import { fadeInUp, staggerContainer } from "../lib/motion";
 import { isMac } from "../lib/platform";
 import { cn } from "../lib/cn";
@@ -23,14 +24,12 @@ export function Settings() {
   const [autostartBusy, setAutostartBusy] = useState(false);
   const [autostartError, setAutostartError] = useState<string | null>(null);
   const [appVersion, setAppVersion] = useState<string>("");
-  const [autoUpdate, setAutoUpdate] = useState<boolean | null>(null);
 
   const load = useCallback(async () => {
     const st = await autostartGet().catch(() => null);
     setAutostart(st?.enabled ?? false);
     setNeedsApproval(st?.needs_approval ?? false);
     setAppVersion(await getVersion().catch(() => ""));
-    setAutoUpdate((await autoUpdateGet().catch(() => null))?.enabled ?? false);
   }, []);
 
   useEffect(() => {
@@ -98,31 +97,10 @@ export function Settings() {
         )}
       </motion.section>
 
-      {/* ── Обновления ── */}
-      <motion.section variants={fadeInUp} className="surface-card mt-4 p-4">
-        <div className="flex items-center justify-between gap-4">
-          <label htmlFor="settings-auto-update" className="min-w-0 cursor-pointer">
-            <div className="text-[14px] font-medium text-vb-fg">Обновлять автоматически</div>
-            <div className="text-[12px] text-vb-silver-faint">
-              Новые версии ставятся сами, когда программа свёрнута
-            </div>
-          </label>
-          {autoUpdate === null ? (
-            <Loader2 className="h-4 w-4 shrink-0 animate-spin text-vb-silver-dim" />
-          ) : (
-            <Toggle
-              id="settings-auto-update"
-              checked={autoUpdate}
-              onChange={(on) => {
-                setAutoUpdate(on);
-                void autoUpdateSet(on)
-                  .then((st) => setAutoUpdate(st.enabled))
-                  .catch(() => setAutoUpdate(!on));
-              }}
-            />
-          )}
-        </div>
-      </motion.section>
+      {/* ── Обновления и отчёты ── */}
+      <motion.div variants={fadeInUp}>
+        <PrivacyCard />
+      </motion.div>
 
       <motion.section variants={fadeInUp} className="mt-4">
         <UpdateBanner />

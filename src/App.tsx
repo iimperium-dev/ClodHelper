@@ -20,8 +20,8 @@ import { AutoUpdateOffer } from "./components/AutoUpdateOffer";
 import { StatusProvider } from "./lib/status";
 import { Button } from "./components/Button";
 import { AlertTriangle } from "lucide-react";
-import { autoUpdateGet, autoUpdateSet, settingsGet, shimScriptPath, shimStatus, whatsNewTake } from "./lib/api";
-import type { AppView, WizardInstallResult, WizardStep } from "./lib/types";
+import { autoUpdateGet, autoUpdateSet, privacySet, settingsGet, shimScriptPath, shimStatus, whatsNewTake } from "./lib/api";
+import type { AppView, PrivacyKey, WizardInstallResult, WizardStep } from "./lib/types";
 
 /** Окно трей-попапа рендерит тот же bundle с ?view=tray. */
 const IS_TRAY = new URLSearchParams(window.location.search).get("view") === "tray";
@@ -101,7 +101,11 @@ function App() {
   const [step, setStep] = useState<WizardStep>("proxy");
   // Автообновление в мастере: включено по умолчанию, пишется в настройки
   // при старте установки и при каждом переключении на шаге «Готово».
-  const [wizAutoUpdate, setWizAutoUpdate] = useState(true);
+  const [wizPrivacy, setWizPrivacy] = useState<Record<PrivacyKey, boolean>>({
+    auto_update: true,
+    crash_reports: true,
+    usage_stats: true,
+  });
   const [wizProxyUrl, setWizProxyUrl] = useState<string | null>(null);
   const [wizResult, setWizResult] = useState<WizardInstallResult | null>(null);
   // Мастер пропущен кнопкой «Сначала очистка»: программа открыта без прокси,
@@ -140,7 +144,7 @@ function App() {
                   onNext={(url) => {
                     setWizProxyUrl(url);
                     setStep("install");
-                    void autoUpdateSet(wizAutoUpdate).catch(() => {});
+                    for (const k of Object.keys(wizPrivacy) as PrivacyKey[]) void privacySet(k, wizPrivacy[k]).catch(() => {});
                   }}
                 />
               )}
@@ -157,10 +161,10 @@ function App() {
               {step === "done" && wizResult && (
                 <StepDone
                   result={wizResult}
-                  autoUpdate={wizAutoUpdate}
-                  onAutoUpdate={(on) => {
-                    setWizAutoUpdate(on);
-                    void autoUpdateSet(on).catch(() => {});
+                  privacy={wizPrivacy}
+                  onPrivacy={(key, on) => {
+                    setWizPrivacy((p) => ({ ...p, [key]: on }));
+                    void privacySet(key, on).catch(() => {});
                   }}
                   onFinish={() => {
                     setNoProxy(false);
@@ -230,6 +234,7 @@ function App() {
       <AutoUpdateOffer
         open={view !== null && whatsNewTaken && !whatsNew && offerAuto}
         onAnswer={answerAutoUpdate}
+        onOpenSettings={() => navigate("settings")}
       />
     </StatusProvider>
   );

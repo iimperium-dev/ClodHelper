@@ -2,13 +2,16 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Check, Loader2 } from "lucide-react";
-import { LogoTile } from "./UpdateDialog";
+import { CycleMark } from "./CycleMark";
+import { OfferPrivacyBlock, OfferPrivacyNote, offerVariant } from "./OfferPrivacy";
 import { cn } from "../lib/cn";
 
 interface Props {
   open: boolean;
   /** Ответ человека: true — включить, false — «Не сейчас» (Esc тоже). */
   onAnswer: (enabled: boolean) => Promise<void> | void;
+  /** Вариант b: «в настройках» - как «Не сейчас» и открыть вкладку «Настройки». */
+  onOpenSettings?: () => void;
 }
 
 /*
@@ -20,7 +23,8 @@ interface Props {
   ширину, в фокусе с открытия (Enter = да); отказ — маленькая серая ссылка
   под ней. Щелчок мимо окна ничего не решает — окно ждёт ответа.
 */
-export function AutoUpdateOffer({ open, onAnswer }: Props) {
+export function AutoUpdateOffer({ open, onAnswer, onOpenSettings }: Props) {
+  const variant = offerVariant();
   const reduce = useReducedMotion();
   const [busy, setBusy] = useState<null | boolean>(null);
   const [accepted, setAccepted] = useState(false);
@@ -94,23 +98,24 @@ export function AutoUpdateOffer({ open, onAnswer }: Props) {
             aria-modal="true"
             aria-labelledby="auto-update-title"
             aria-describedby="auto-update-desc"
-            className="relative flex max-h-full w-full max-w-[380px] flex-col overflow-y-auto rounded-2xl border border-vb-border bg-vb-surface px-6 pb-5 pt-7 text-center shadow-[0_24px_64px_rgba(0,0,0,0.6)]"
+            className={cn(
+              "relative flex max-h-full w-full flex-col overflow-y-auto rounded-2xl border border-vb-border bg-vb-surface px-6 pb-5 text-center shadow-[0_24px_64px_rgba(0,0,0,0.6)]",
+              // Вариант a: шире и ниже, чтобы с двумя переключателями влезть в 700x580.
+              variant === "a" ? "max-w-[520px] pt-4" : "max-w-[380px] pt-5",
+            )}
           >
-            <CycleMark accepted={accepted} reduce={!!reduce} />
+            <CycleMark accepted={accepted} reduce={!!reduce} compact />
 
-            <span className="mx-auto mt-4 rounded-full border border-vb-border px-2 py-0.5 text-[11px] text-vb-silver-dim">
-              Новая функция
-            </span>
-            <h2 id="auto-update-title" className="mt-2 text-[20px] font-semibold tracking-[-0.01em] text-vb-fg">
+            <h2 id="auto-update-title" className={cn("mt-3 text-[20px] font-semibold tracking-[-0.01em] text-vb-fg")}>
               Автообновление. Включить?
             </h2>
-            <p id="auto-update-desc" className="mx-auto mt-2 max-w-[30ch] text-[13px] leading-relaxed text-vb-silver-dim">
-              Clod Helper будет сам ставить новые версии — с исправлениями и новыми возможностями.
+            <p id="auto-update-desc" className={cn("mx-auto mt-2 text-[13px] leading-relaxed text-vb-silver-dim", variant === "a" ? "max-w-[60ch]" : "max-w-[30ch]")}>
+              Clod Helper будет сам ставить новые версии, с исправлениями и новыми возможностями.
             </p>
 
-            <ul className="mx-auto mt-4 w-full max-w-[290px] space-y-1.5 text-left">
+            <ul className={cn("mx-auto mt-4 w-full space-y-1.5 text-left", variant === "a" ? "max-w-[440px]" : "max-w-[290px]")}>
               {[
-                "Без окон и кнопок — когда программа свёрнута",
+                "Без окон и кнопок, когда программа свёрнута",
                 "Только проверенные файлы с подписью разработчика",
                 "Выключается в Настройках в один щелчок",
               ].map((t) => (
@@ -121,13 +126,15 @@ export function AutoUpdateOffer({ open, onAnswer }: Props) {
               ))}
             </ul>
 
+            {variant === "a" && <OfferPrivacyBlock open={open} />}
+
             <button
               ref={yesRef}
               type="button"
               onClick={() => void answer(true)}
               disabled={busy !== null}
               className={cn(
-                "mt-6 inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl text-[15px] font-semibold",
+                "mt-4 inline-flex h-12 w-full shrink-0 items-center justify-center gap-2 rounded-xl text-[15px] font-semibold",
                 "bg-vb-emerald text-black shadow-[0_4px_20px_var(--color-vb-emerald-glow)]",
                 "transition-[transform,background-color] duration-150 ease-[cubic-bezier(0.22,1,0.36,1)]",
                 "hover:bg-vb-emerald-bright active:scale-[0.98] disabled:cursor-default",
@@ -153,59 +160,17 @@ export function AutoUpdateOffer({ open, onAnswer }: Props) {
             >
               Не сейчас
             </button>
+            {variant === "b" && (
+              <OfferPrivacyNote
+                onSettings={() => {
+                  void answer(false).then(() => onOpenSettings?.());
+                }}
+              />
+            )}
           </motion.div>
         </motion.div>
       )}
     </AnimatePresence>,
     document.body,
-  );
-}
-
-/*
-  Знак: логотип внутри кольца-цикла. Стрелка кольца делает один оборот при
-  появлении (не в цикле); на «Включить» кольцо замыкается в зелёный круг.
-*/
-function CycleMark({ accepted, reduce }: { accepted: boolean; reduce: boolean }) {
-  const R = 34;
-  const C = 2 * Math.PI * R;
-  return (
-    <div className="relative mx-auto grid h-[84px] w-[84px] place-items-center">
-      <motion.svg
-        viewBox="0 0 84 84"
-        className="absolute inset-0"
-        aria-hidden
-        initial={reduce ? false : { rotate: -120 }}
-        animate={{ rotate: 0 }}
-        transition={{ duration: 0.9, ease: [0.22, 1, 0.36, 1] }}
-      >
-        <circle cx="42" cy="42" r={R} fill="none" stroke="var(--color-vb-border)" strokeWidth="2" />
-        <motion.circle
-          cx="42"
-          cy="42"
-          r={R}
-          fill="none"
-          stroke="var(--color-vb-emerald)"
-          strokeWidth="2.5"
-          strokeLinecap="round"
-          strokeDasharray={C}
-          initial={false}
-          animate={{ strokeDashoffset: accepted ? 0 : C * 0.3 }}
-          transition={{ duration: reduce ? 0 : 0.45, ease: [0.22, 1, 0.36, 1] }}
-          transform="rotate(-90 42 42)"
-        />
-        {/* Наконечник стрелки на конце дуги (в покое). */}
-        {!accepted && (
-          <path
-            d="M 9.6 29.5 L 8.6 35.6 L 14.4 33.6"
-            fill="none"
-            stroke="var(--color-vb-emerald)"
-            strokeWidth="2.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        )}
-      </motion.svg>
-      <LogoTile size={48} />
-    </div>
   );
 }

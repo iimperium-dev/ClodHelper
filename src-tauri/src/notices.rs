@@ -106,19 +106,63 @@ pub async fn fetch() -> Result<Vec<Notice>, String> {
     }
     // raw.githubusercontent.com у части провайдеров в России заблокирован:
     // не достали напрямую — берём через свой прокси (строгий вход моста).
+    // Два источника: файл на GitHub и сервер рассылок. Один упал — берём
+    // другой; ошибка — только если упали оба.
+    let current = env!("CARGO_PKG_VERSION");
+    let (github, server) = tokio::join!(fetch_github(current), fetch_server(current));
+    let list = match (github, server) {
+        (Err(a), Err(b)) => return Err(format!("рассылки: GitHub — {a}; сервер — {b}")),
+        (a, b) => {
+            // Один источник лежит: прежний кэш - третьим, самым младшим,
+            // чтобы его записи не пропадали из колокольчика.
+            let partial = a.is_err() || b.is_err();
+            let mut lists = vec![a.unwrap_or_default(), b.unwrap_or_default()];
+            if partial {
+                lists.push(crate::settings::load().notices_cache);
+            }
+            merge(lists)
+        }
+    };
+    let s = crate::settings::set_notices_cache(list)?;
+    Ok(s.notices_cache.iter().filter(|n| !s.notices_toasted.contains(&n.id)).cloned().collect())
+}
+
+/// Файл рассылок на GitHub: напрямую, не вышло — через мост. 404 — пусто.
+async fn fetch_github(current: &str) -> Result<Vec<Notice>, String> {
     let text = match download(None).await {
         Ok(t) => t,
         Err(direct) => download(Some(&format!("http://127.0.0.1:{}", crate::claude_desktop::PROXY_PORT)))
             .await
-            .map_err(|via| format!("рассылки: напрямую — {direct}; через мост — {via}"))?,
+            .map_err(|via| format!("напрямую — {direct}; через мост — {via}"))?,
     };
-    // Файла нет (404) — рассылок нет, это нормально.
-    let list = match text {
-        Some(t) => parse(&t, env!("CARGO_PKG_VERSION"))?,
-        None => Vec::new(),
-    };
-    let s = crate::settings::set_notices_cache(list)?;
-    Ok(s.notices_cache.iter().filter(|n| !s.notices_toasted.contains(&n.id)).cloned().collect())
+    match text {
+        Some(t) => parse(&t, current),
+        None => Ok(Vec::new()),
+    }
+}
+
+/// Рассылки с сервера: `GET /v1/notices?v=&os=`. 404 — пусто.
+async fn fetch_server(current: &str) -> Result<Vec<Notice>, String> {
+    let os = if cfg!(target_os = "windows") { "windows" } else { "macos" };
+    match crate::telemetry::get(&format!("/v1/notices?v={current}&os={os}")).await? {
+        Some(t) => parse_server(&t, current),
+        None => Ok(Vec::new()),
+    }
+}
+
+/// Ответ сервера: `{"notices":[...]}`, записи — как в notices.json.
+/// Отдельная функция: формат могут уточнить.
+fn parse_server(text: &str, current: &str) -> Result<Vec<Notice>, String> {
+    parse(text, current).map_err(|e| e.replace("notices.json", "ответ сервера"))
+}
+
+/// Слить списки по id (первый источник главнее), новые сверху.
+fn merge(lists: Vec<Vec<Notice>>) -> Vec<Notice> {
+    let mut seen = std::collections::HashSet::new();
+    let mut v: Vec<Notice> = lists.into_iter().flatten().filter(|n| seen.insert(n.id.clone())).collect();
+    v.sort_by(|a, b| b.date.cmp(&a.date).then_with(|| a.id.cmp(&b.id)));
+    v.truncate(50);
+    v
 }
 
 /// Скачать notices.json (через прокси, если задан). None — файла нет (404).
@@ -229,6 +273,41 @@ mod tests {
         assert_eq!(v[0].link.as_deref(), Some("https://t.me/x"));
         assert!(parse("{}", "0.8.3").unwrap().is_empty());
         assert!(parse("{bad", "0.8.3").is_err());
+    }
+
+    #[test]
+    fn merge_dedups_by_id_and_sorts() {
+        let n = |id: &str, date: &str, title: &str| Notice {
+            id: id.into(),
+            date: date.into(),
+            title: title.into(),
+            body: String::new(),
+            link: None,
+            platforms: vec![],
+            min_version: None,
+            max_version: None,
+        };
+        let gh = vec![n("a", "2026-11-01", "из GitHub"), n("b", "2026-11-03", "b")];
+        let srv = vec![n("a", "2026-11-01", "с сервера"), n("c", "2026-11-05", "c")];
+        let m = merge(vec![gh, srv]);
+        let ids: Vec<&str> = m.iter().map(|x| x.id.as_str()).collect();
+        assert_eq!(ids, vec!["c", "b", "a"]);
+        assert_eq!(m.iter().find(|x| x.id == "a").unwrap().title, "из GitHub", "дубль: первый источник");
+        assert!(merge(vec![vec![], vec![]]).is_empty());
+        let one = merge(vec![Vec::new(), vec![n("z", "2026-11-01", "z")]]);
+        assert_eq!(one.len(), 1, "пустой источник не мешает другому");
+        // Прежний кэш - младший источник: живёт, пока источник лежит.
+        let cache = vec![n("old", "2026-10-01", "из кэша"), n("a", "2026-11-01", "устаревший a")];
+        let m = merge(vec![vec![n("a", "2026-11-01", "свежий a")], Vec::new(), cache]);
+        assert_eq!(m.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(), vec!["a", "old"]);
+        assert_eq!(m[0].title, "свежий a");
+    }
+
+    #[test]
+    fn server_notices_use_same_format() {
+        let v = parse_server(r#"{"notices":[{"id":"s1","date":"2026-11-10","title":"С сервера","link":"https://x.y"}]}"#, "0.8.18").unwrap();
+        assert_eq!(v.len(), 1);
+        assert!(parse_server("{bad", "0.8.18").unwrap_err().contains("ответ сервера"));
     }
 
     #[test]

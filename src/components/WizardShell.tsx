@@ -77,7 +77,7 @@ export function WizardShell({ step, children }: Props) {
                 >
                   {done && <Check className="h-3 w-3 text-vb-emerald-dim" aria-hidden />}
                   {s.label}
-                  {done && <span className="sr-only"> — готово</span>}
+                  {done && <span className="sr-only">, готово</span>}
                 </div>
               </li>
             );

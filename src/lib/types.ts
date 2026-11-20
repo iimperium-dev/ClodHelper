@@ -419,6 +419,16 @@ export interface AutoUpdateState {
   offer: boolean;
 }
 
+/** Приватность: три переключателя и «предложить автообновление» (privacy_get). */
+export interface PrivacyState {
+  auto_update: boolean;
+  crash_reports: boolean;
+  usage_stats: boolean;
+  offer: boolean;
+}
+
+export type PrivacyKey = "auto_update" | "crash_reports" | "usage_stats";
+
 /** Элемент колокольчика: обновление или рассылка разработчика (notices.rs). */
 export interface NoticeItem {
   id: string;

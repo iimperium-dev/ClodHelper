@@ -102,6 +102,16 @@ pub struct Settings {
     /// один раз предлагают включить. Мастер первого запуска пишет явно.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_update: Option<bool>,
+    /// Отчёты о сбоях (без личных данных). None — включено: так и для
+    /// старых установок, они включаются с выпуском этой функции.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crash_reports: Option<bool>,
+    /// Анонимная статистика запусков (раз в сутки). None — включено.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_stats: Option<bool>,
+    /// Что уже отправлено в статистику (см. telemetry.rs).
+    #[serde(default)]
+    pub telemetry: TelemetryState,
     /// Рассылки разработчика (последний скачанный notices.json) — колокольчик
     /// виден и без сети.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -134,6 +144,87 @@ pub struct Settings {
     /// bridge-sites.json на лету, без перезапуска.
     #[serde(default)]
     pub sites: Vec<SiteEntry>,
+}
+
+/// Состояние пинга статистики: что уже отправлено. Флаги пишутся только
+/// после ответа сервера 2xx.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TelemetryState {
+    pub first_sent: bool,
+    /// "YYYY-MM-DD" (UTC) последней отправки.
+    pub last_day: Option<String>,
+    /// День последнего пинга с w=1 ("YYYY-MM-DD"). Старые значения других
+    /// форматов при разборе отбрасываются.
+    pub last_w_day: Option<String>,
+    /// День последнего пинга с m=1.
+    pub last_m_day: Option<String>,
+    /// ISO-неделя первой отметки (ставится один раз).
+    pub install_week: Option<String>,
+    /// День, когда прокси реально работал.
+    pub used_day: Option<String>,
+    /// "auto" | "manual": как запущено обновление (пишет установщик).
+    pub pending_how: Option<String>,
+    /// Версия, для которой "how" уже отправлен.
+    pub how_version: Option<String>,
+    /// Обновились со старой версии (до статистики): не новая установка,
+    /// первый пинг идёт без first/iw/how.
+    pub legacy: bool,
+}
+
+pub fn crash_reports_on(s: &Settings) -> bool {
+    s.crash_reports != Some(false)
+}
+
+pub fn usage_stats_on(s: &Settings) -> bool {
+    s.usage_stats != Some(false)
+}
+
+pub fn set_crash_reports(on: bool) -> Result<Settings, String> {
+    with_settings(|s| {
+        s.crash_reports = Some(on);
+        Ok(())
+    })
+}
+
+pub fn set_usage_stats(on: bool) -> Result<Settings, String> {
+    with_settings(|s| {
+        s.usage_stats = Some(on);
+        Ok(())
+    })
+}
+
+/// Изменить состояние пинга под общей блокировкой.
+pub fn update_telemetry<F: FnOnce(&mut TelemetryState)>(f: F) -> Result<Settings, String> {
+    with_settings(|s| {
+        f(&mut s.telemetry);
+        Ok(())
+    })
+}
+
+/// Переключатели приватности для интерфейса.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct PrivacyState {
+    pub auto_update: bool,
+    pub crash_reports: bool,
+    pub usage_stats: bool,
+    /// Предложить автообновление (как в AutoUpdateState).
+    pub offer: bool,
+}
+
+pub fn privacy_state(s: &Settings) -> PrivacyState {
+    let a = auto_update_state(s);
+    PrivacyState {
+        auto_update: a.enabled,
+        crash_reports: crash_reports_on(s),
+        usage_stats: usage_stats_on(s),
+        offer: a.offer,
+    }
+}
+
+/// Папка данных программы (рядом с settings.json).
+pub fn data_dir() -> Option<PathBuf> {
+    settings_path().ok()?.parent().map(|p| p.to_path_buf())
 }
 
 /// Сайт пользователя: имя, его домены (с поддоменами) и прокси.
@@ -688,6 +779,20 @@ mod tests {
         // Старый settings.json без поля читается как «не спрашивали».
         let s: Settings = serde_json::from_str(r#"{"proxy_url":"http://1.2.3.4:80"}"#).unwrap();
         assert_eq!(s.auto_update, None);
+    }
+
+    #[test]
+    fn privacy_switches_default_to_on() {
+        let s = Settings::default();
+        assert_eq!(s.crash_reports, None);
+        assert!(crash_reports_on(&s) && usage_stats_on(&s));
+        let old: Settings = serde_json::from_str(r#"{"proxy_url":"http://1.2.3.4:80"}"#).unwrap();
+        assert!(crash_reports_on(&old) && usage_stats_on(&old));
+        assert_eq!(old.telemetry, TelemetryState::default());
+        let off = Settings { crash_reports: Some(false), usage_stats: Some(false), ..old };
+        assert!(!crash_reports_on(&off) && !usage_stats_on(&off));
+        let p = privacy_state(&off);
+        assert!(!p.crash_reports && !p.usage_stats && !p.auto_update && p.offer);
     }
 
     #[test]

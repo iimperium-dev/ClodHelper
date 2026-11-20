@@ -157,11 +157,24 @@ pub fn update_latest() -> Option<crate::updater::UpdateInfo> {
 /// событиями `update:progress` (окно обновления рисует по ним прогресс).
 #[tauri::command]
 pub async fn update_install(app: AppHandle, info: crate::updater::UpdateInfo) -> Result<(), String> {
+    install_update(app, info, "manual").await
+}
+
+/// Установка обновления; `how` ("manual" | "auto") уходит в статистику.
+/// Тихий путь автообновления передаст "auto".
+pub(crate) async fn install_update(app: AppHandle, info: crate::updater::UpdateInfo, how: &str) -> Result<(), String> {
     let emitter = app.clone();
     let progress = move |p: crate::updater::UpdateProgress| {
         let _ = emitter.emit("update:progress", p);
     };
-    crate::updater::install(&info, &progress).await?;
+    // Установщик может стартовать и тут же закрыть программу: как запущено -
+    // записываем заранее, при ошибке снимаем.
+    crate::telemetry::set_pending_how(Some(how));
+    if let Err(e) = crate::updater::install(&info, &progress).await {
+        crate::telemetry::set_pending_how(None);
+        crate::telemetry::report_update(&e);
+        return Err(e);
+    }
     crate::update_notify::close_toast(&app);
     progress(crate::updater::UpdateProgress { stage: "restart", received: 0, total: 0 });
     // Пауза, чтобы «Перезапускаю…» успело показаться: иначе окно исчезает
@@ -235,6 +248,38 @@ pub fn auto_update_get() -> settings::AutoUpdateState {
 #[tauri::command]
 pub fn auto_update_set(enabled: bool) -> Result<settings::AutoUpdateState, String> {
     Ok(settings::auto_update_state(&settings::set_auto_update(enabled)?))
+}
+
+/// Приватность: автообновление, отчёты о сбоях, статистика; offer - предложить
+/// автообновление (окно после «Что нового»).
+#[tauri::command]
+pub fn privacy_get() -> settings::PrivacyState {
+    settings::privacy_state(&settings::load())
+}
+
+/// Переключатель приватности: key = "auto_update" | "crash_reports" | "usage_stats".
+#[tauri::command]
+pub fn privacy_set(key: String, on: bool) -> Result<settings::PrivacyState, String> {
+    let s = match key.as_str() {
+        "auto_update" => settings::set_auto_update(on)?,
+        "crash_reports" => settings::set_crash_reports(on)?,
+        "usage_stats" => settings::set_usage_stats(on)?,
+        _ => return Err("Неизвестная настройка".into()),
+    };
+    Ok(settings::privacy_state(&s))
+}
+
+/// Ошибка интерфейса (window.onerror и т.п.): уходит в отчёты о сбоях, если
+/// они включены. Не больше 5 за запуск.
+#[tauri::command]
+pub fn telemetry_ui_error(msg: String, stack: String) {
+    crate::telemetry::report_ui(&msg, &stack);
+}
+
+/// Отчёт, который человек отправил сам. Шлётся всегда.
+#[tauri::command]
+pub async fn telemetry_report(text: String, contact: Option<String>) -> Result<(), String> {
+    crate::telemetry::send_report(text, contact).await
 }
 
 /// Фирменный звук уведомления.

@@ -19,9 +19,10 @@ async function openWizard(page: Page, query = "") {
   await expect(page.getByRole("heading", { name: "Вставьте прокси" })).toBeVisible({ timeout: 20_000 });
 }
 
+const privacy = (page: Page) => page.evaluate(() => (window as unknown as { __privacy: () => Record<string, boolean> }).__privacy());
 const autoUpdate = (page: Page) => page.evaluate(() => (window as unknown as { __autoUpdate: () => boolean | null }).__autoUpdate());
 
-test("мастер: прокси → настройка → готово, автообновление включено по умолчанию", async ({ page }) => {
+test("мастер: прокси → настройка → готово, три переключателя включены по умолчанию", async ({ page }) => {
   const errors = collectErrors(page);
   await openWizard(page);
   await expect(page.getByText("Шаг 1 из 3")).toBeVisible();
@@ -53,6 +54,14 @@ test("мастер: прокси → настройка → готово, авт
   await sw.click();
   await expect(sw).toHaveAttribute("aria-checked", "false");
   expect(await autoUpdate(page)).toBe(false);
+  // Отчёты и статистика: включены и записаны, снятие тоже пишется.
+  const crash = page.getByRole("switch", { name: "Отправлять отчёты об ошибках" });
+  const stats = page.getByRole("switch", { name: "Отправлять анонимную статистику" });
+  await expect(crash).toHaveAttribute("aria-checked", "true");
+  await expect(stats).toHaveAttribute("aria-checked", "true");
+  await stats.click();
+  await expect(stats).toHaveAttribute("aria-checked", "false");
+  expect(await privacy(page)).toEqual({ auto_update: false, crash_reports: true, usage_stats: false });
 
   await open.click();
   await expect(page.getByRole("heading", { name: "Вставьте прокси" })).toHaveCount(0);

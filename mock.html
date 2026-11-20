@@ -15,6 +15,8 @@
   установка падает на проверке, ?wizslow — фазы идут медленно).
   ?whatsnew — окно «Что нового» после обновления; ?autooffer — затем
   предложение включить автообновление (установка до этой функции).
+  ?variant=a|b - вариант окна предложения; ?reportfail - отправка отчёта
+  падает; window.__privacy(), __reports, __uiErrors - для тестов.
   Используется тестами tests/ui (Playwright).
 -->
 <script>
@@ -149,6 +151,12 @@
   // Автообновление: ?autooffer — установка до этой функции, ещё не спрашивали.
   let autoUpdate = params.has("autooffer") ? null : true;
   window.__autoUpdate = () => autoUpdate;
+  // Отчёты об ошибках и статистика: включены по умолчанию (None = включено).
+  let privacy = { crash_reports: true, usage_stats: true };
+  const privacyState = () => ({ auto_update: autoUpdate === true, ...privacy, offer: autoUpdate === null && !params.has("fresh") });
+  window.__privacy = () => ({ auto_update: autoUpdate === true, ...privacy });
+  window.__reports = [];
+  window.__uiErrors = [];
   window.__R = R; // тесты меняют ответы на лету (например, растущие ошибки прокси)
   let cbId = 1;
   // События Tauri: listen() регистрирует колбэк, window.__emit(имя, данные)
@@ -277,6 +285,23 @@
       }
       if (cmd.startsWith("plugin:event|")) return 1;
       if (cmd === "auto_update_get") return { enabled: autoUpdate === true, offer: autoUpdate === null && !params.has("fresh") };
+      if (cmd === "privacy_get") return privacyState();
+      if (cmd === "privacy_set") {
+        if (args.key === "auto_update") autoUpdate = !!args.on;
+        else if (args.key in privacy) privacy[args.key] = !!args.on;
+        else throw "Неизвестная настройка";
+        return privacyState();
+      }
+      if (cmd === "telemetry_report") {
+        await wait(600);
+        if (params.has("reportfail")) throw "Не получилось отправить. Проверьте интернет и попробуйте ещё раз";
+        window.__reports.push({ text: args.text, contact: args.contact });
+        return null;
+      }
+      if (cmd === "telemetry_ui_error") {
+        window.__uiErrors.push({ msg: args.msg, stack: args.stack });
+        return null;
+      }
       if (cmd === "auto_update_set") {
         autoUpdate = !!args.enabled;
         return { enabled: autoUpdate, offer: false };
