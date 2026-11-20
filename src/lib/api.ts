@@ -562,6 +562,16 @@ export function telemetryUiError(msg: string, stack: string): Promise<void> {
   return invoke<void>("telemetry_ui_error", { msg, stack });
 }
 
+/** Человек увидел переключатели или строку про отчёты: после этого отчёты и статистика могут уходить. */
+export function privacyNoticeSeen(): Promise<void> {
+  return invoke<void>("privacy_notice_seen");
+}
+
+/** Тело ручного отчёта так, как оно уйдёт на сервер: очищенное, JSON с отступами. */
+export function telemetryReportPreview(text: string, contact: string | null): Promise<string> {
+  return invoke<string>("telemetry_report_preview", { text, contact });
+}
+
 /** Отчёт, который человек отправил сам. Ошибка - готовый текст по-русски. */
 export function telemetryReport(text: string, contact: string | null): Promise<void> {
   return invoke<void>("telemetry_report", { text, contact });

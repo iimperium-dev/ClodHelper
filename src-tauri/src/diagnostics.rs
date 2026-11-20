@@ -35,7 +35,7 @@ pub fn report_for_server() -> String {
 }
 
 /// Домен из встроенного списка сервисов (не личный, полезен для разбора).
-fn is_service_domain(host: &str) -> bool {
+pub(crate) fn is_service_domain(host: &str) -> bool {
     let h = host.trim_end_matches('.').to_lowercase();
     crate::tasks::SERVICE_GROUPS
         .iter()

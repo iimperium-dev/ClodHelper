@@ -281,6 +281,22 @@ pub fn privacy_set(key: String, on: bool) -> Result<settings::PrivacyState, Stri
     Ok(settings::privacy_state(&s))
 }
 
+/// Человек увидел переключатели или строку про отчёты: с этого момента
+/// отчёты и статистика могут уходить (если включены).
+#[tauri::command]
+pub async fn privacy_notice_seen() -> Result<(), String> {
+    tokio::task::spawn_blocking(settings::set_privacy_notice_seen)
+        .await
+        .map_err(|e| e.to_string())?
+        .map(|_| ())
+}
+
+/// Тело ручного отчёта так, как оно уйдёт на сервер (очищенное, JSON с отступами).
+#[tauri::command]
+pub async fn telemetry_report_preview(text: String, contact: Option<String>) -> String {
+    crate::telemetry::report_preview(text, contact).await
+}
+
 /// Ошибка интерфейса (window.onerror и т.п.): уходит в отчёты о сбоях, если
 /// они включены. Не больше 5 за запуск.
 #[tauri::command]

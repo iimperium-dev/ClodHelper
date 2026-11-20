@@ -15,6 +15,8 @@
   установка падает на проверке, ?wizslow — фазы идут медленно).
   ?whatsnew — окно «Что нового» после обновления; ?autooffer — затем
   предложение включить автообновление (установка до этой функции).
+  ?noticebanner - обычная установка, автообновление уже отвечено, переключатели ещё не показывали
+  (плашка про отчёты); window.__noticeSeen() - флаг privacy_notice_seen.
   ?reportfail - отправка отчёта падает; window.__privacy(), __reports, __uiErrors - для тестов.
   Используется тестами tests/ui (Playwright).
 -->
@@ -155,7 +157,14 @@
   window.__autoUpdate = () => autoUpdate;
   // Отчёты об ошибках и статистика: включены по умолчанию (None = включено).
   let privacy = { crash_reports: true, usage_stats: true };
-  const privacyState = () => ({ auto_update: autoUpdate === true, ...privacy, offer: autoUpdate === null && !params.has("fresh") });
+  // Флаг privacy_notice_seen: до показа переключателей ничего не уходит.
+  // По умолчанию в стенде «уже показаны»; мастер, окно предложения и ?noticebanner начинают с false.
+  // Между перезагрузками страницы флаг держится в sessionStorage (как настройки на диске).
+  let noticeSeen = !(params.has("noticebanner") || params.has("autooffer") || params.has("fresh"));
+  try { if (sessionStorage.getItem("mockNoticeSeen") === "1") noticeSeen = true; } catch {}
+  window.__noticeSeen = () => noticeSeen;
+  window.__privacyWrites = [];
+  const privacyState = () => ({ auto_update: autoUpdate === true, ...privacy, offer: autoUpdate === null && !params.has("fresh"), notice_seen: noticeSeen });
   window.__privacy = () => ({ auto_update: autoUpdate === true, ...privacy });
   window.__reports = [];
   window.__uiErrors = [];
@@ -293,7 +302,16 @@
       }
       if (cmd === "auto_update_get") return { enabled: autoUpdate === true, offer: autoUpdate === null && !params.has("fresh") };
       if (cmd === "privacy_get") return privacyState();
+      if (cmd === "privacy_notice_seen") {
+        noticeSeen = true;
+        try { sessionStorage.setItem("mockNoticeSeen", "1"); } catch {}
+        return null;
+      }
+      if (cmd === "telemetry_report_preview") {
+        return JSON.stringify({ v: "0.9.1", os: win ? "windows" : "macos", nonce: "0123456789abcdef0123456789abcdef", text: args.text, diag: "Версия: 0.9.1\nПрокси: <proxy>", ...(args.contact ? { contact: args.contact } : {}) }, null, 2);
+      }
       if (cmd === "privacy_set") {
+        window.__privacyWrites.push({ key: args.key, on: !!args.on });
         if (args.key === "auto_update") autoUpdate = !!args.on;
         else if (args.key in privacy) privacy[args.key] = !!args.on;
         else throw "Неизвестная настройка";

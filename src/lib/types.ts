@@ -433,6 +433,8 @@ export interface PrivacyState {
   crash_reports: boolean;
   usage_stats: boolean;
   offer: boolean;
+  /** Переключатели или строка про отчёты уже были показаны. */
+  notice_seen: boolean;
 }
 
 export type PrivacyKey = "auto_update" | "crash_reports" | "usage_stats";

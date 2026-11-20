@@ -143,6 +143,10 @@ pub struct Settings {
     /// Анонимная статистика запусков (раз в сутки). None — включено.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage_stats: Option<bool>,
+    /// Человек увидел переключатели или строку про отчёты (мастер, окно
+    /// предложения или плашка). Пока false, ничего автоматически не уходит.
+    #[serde(default)]
+    pub privacy_notice_seen: bool,
     /// Что уже отправлено в статистику (см. telemetry.rs).
     #[serde(default)]
     pub telemetry: TelemetryState,
@@ -259,6 +263,15 @@ pub fn set_usage_stats(on: bool) -> Result<Settings, String> {
     })
 }
 
+/// Отметить, что человек увидел переключатели. Строгая запись: при битом
+/// файле флаг не ставится, и ничего не уходит.
+pub fn set_privacy_notice_seen() -> Result<Settings, String> {
+    with_settings_strict(|s| {
+        s.privacy_notice_seen = true;
+        Ok(())
+    })
+}
+
 /// Изменить состояние пинга под общей блокировкой.
 pub fn update_telemetry<F: FnOnce(&mut TelemetryState)>(f: F) -> Result<Settings, String> {
     with_settings_strict(|s| {
@@ -275,6 +288,8 @@ pub struct PrivacyState {
     pub usage_stats: bool,
     /// Предложить автообновление (как в AutoUpdateState).
     pub offer: bool,
+    /// Переключатели или строка про отчёты уже были показаны.
+    pub notice_seen: bool,
 }
 
 pub fn privacy_state(s: &Settings) -> PrivacyState {
@@ -284,6 +299,7 @@ pub fn privacy_state(s: &Settings) -> PrivacyState {
         crash_reports: crash_reports_on(s),
         usage_stats: usage_stats_on(s),
         offer: a.offer,
+        notice_seen: s.privacy_notice_seen,
     }
 }
 
@@ -729,7 +745,7 @@ where
 }
 
 pub fn mark_notices_read(ids: &[String]) -> Result<Settings, String> {
-    with_settings(|s| {
+    with_settings_strict(|s| {
         for id in ids {
             if !s.notices_read.contains(id) {
                 s.notices_read.push(id.clone());
@@ -746,7 +762,7 @@ pub fn mark_notices_read(ids: &[String]) -> Result<Settings, String> {
 }
 
 pub fn mark_notices_toasted(ids: &[String]) -> Result<Settings, String> {
-    with_settings(|s| {
+    with_settings_strict(|s| {
         for id in ids {
             if !s.notices_toasted.contains(id) {
                 s.notices_toasted.push(id.clone());
@@ -771,7 +787,7 @@ pub fn set_system_pac_saved(conf: Option<crate::system_pac::ProxyConf>) -> Resul
 }
 
 pub fn set_update_notified(version: &str) -> Result<Settings, String> {
-    with_settings(|s| {
+    with_settings_strict(|s| {
         s.update_notified = Some(version.to_string());
         Ok(())
     })
@@ -783,7 +799,7 @@ pub fn set_update_notified(version: &str) -> Result<Settings, String> {
 /// считается уже настроенная установка; первый запуск — нет.
 pub fn take_whats_new(current: &str) -> Result<Option<String>, String> {
     let mut news = None;
-    with_settings(|s| {
+    with_settings_strict(|s| {
         let configured = s.proxy_url.is_some() || !s.proxies.is_empty();
         if just_updated(s.last_version_seen.as_deref(), configured, current) {
             news = Some(current.to_string());

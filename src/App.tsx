@@ -19,8 +19,18 @@ import { WhatsNewModal } from "./components/WhatsNewModal";
 import { AutoUpdateOffer } from "./components/AutoUpdateOffer";
 import { StatusProvider } from "./lib/status";
 import { Button } from "./components/Button";
-import { AlertTriangle } from "lucide-react";
-import { autoUpdateGet, autoUpdateSet, privacySet, settingsGet, shimScriptPath, shimStatus, whatsNewTake } from "./lib/api";
+import { AlertTriangle, Info } from "lucide-react";
+import {
+  autoUpdateGet,
+  autoUpdateSet,
+  privacyGet,
+  privacyNoticeSeen,
+  privacySet,
+  settingsGet,
+  shimScriptPath,
+  shimStatus,
+  whatsNewTake,
+} from "./lib/api";
 import type { AppView, PrivacyKey, WizardInstallResult, WizardStep } from "./lib/types";
 
 /** Окно трей-попапа рендерит тот же bundle с ?view=tray. */
@@ -52,6 +62,12 @@ function App() {
   // Предложение автообновления: для установок до этой функции, один раз,
   // после окна «Что нового» (или сразу, если его нет в этот запуск).
   const [offerAuto, setOfferAuto] = useState(false);
+  // Ответ про автообновление получен (окно предложения будет или нет).
+  const [offerLoaded, setOfferLoaded] = useState(false);
+  // Человек уже видел переключатели или строку про отчёты (null - ещё не знаем).
+  const [noticeSeen, setNoticeSeen] = useState<boolean | null>(null);
+  // Плашка «отчёты и статистика» в главном окне.
+  const [noticeBanner, setNoticeBanner] = useState(false);
 
   useEffect(() => {
     if (IS_TRAY || IS_TOAST || IS_SPLASH) return;
@@ -63,7 +79,12 @@ function App() {
       .finally(() => setWhatsNewTaken(true));
     void autoUpdateGet()
       .then((s) => setOfferAuto(s.offer))
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setOfferLoaded(true));
+    // Не удалось спросить - считаем, что видел: лишней плашки не нужно.
+    void privacyGet()
+      .then((s) => setNoticeSeen(s.notice_seen))
+      .catch(() => setNoticeSeen(true));
     void (async () => {
       try {
         // 3 признака что мост уже установлен (хватит любого):
@@ -112,6 +133,41 @@ function App() {
   // сверху полоса «Прокси ещё не добавлен» с возвратом в мастер.
   const [noProxy, setNoProxy] = useState(false);
 
+  // Окно предложения автообновления показано: там есть строка про отчёты.
+  const offerOpen = view !== null && view !== "wizard" && whatsNewTaken && !whatsNew && offerAuto;
+  useEffect(() => {
+    if (!offerOpen) return;
+    setNoticeSeen(true);
+    void privacyNoticeSeen().catch(() => {});
+  }, [offerOpen]);
+
+  // Мастер показал «Готово»: записываем выбранные переключатели, потом флаг.
+  // До этого момента ничего не пишется и ничего не уходит.
+  const wizPrivacyRef = useRef(wizPrivacy);
+  wizPrivacyRef.current = wizPrivacy;
+  const wizDone = view === "wizard" && step === "done" && wizResult !== null;
+  useEffect(() => {
+    if (!wizDone) return;
+    setNoticeSeen(true);
+    void (async () => {
+      for (const k of Object.keys(wizPrivacyRef.current) as PrivacyKey[]) {
+        await privacySet(k, wizPrivacyRef.current[k]).catch(() => {});
+      }
+      await privacyNoticeSeen().catch(() => {});
+    })();
+  }, [wizDone]);
+
+  // Все остальные: главное окно без мастера и без окна предложения. Один раз
+  // тихая плашка, флаг ставится при показе.
+  const showNotice =
+    view !== null && view !== "wizard" && whatsNewTaken && offerLoaded && !whatsNew && !offerAuto && noticeSeen === false;
+  useEffect(() => {
+    if (!showNotice) return;
+    setNoticeBanner(true);
+    setNoticeSeen(true);
+    void privacyNoticeSeen().catch(() => {});
+  }, [showNotice]);
+
   if (IS_TOAST) return <UpdateToast />;
   if (IS_SPLASH) return <UpdateSplash />;
 
@@ -144,7 +200,6 @@ function App() {
                   onNext={(url) => {
                     setWizProxyUrl(url);
                     setStep("install");
-                    for (const k of Object.keys(wizPrivacy) as PrivacyKey[]) void privacySet(k, wizPrivacy[k]).catch(() => {});
                   }}
                 />
               )}
@@ -199,6 +254,31 @@ function App() {
               }}
             >
               Добавить прокси
+            </Button>
+          </div>
+        )}
+        {noticeBanner && (
+          <div
+            role="region"
+            aria-label="Отчёты и статистика"
+            className="flex items-center gap-3 border-b border-vb-border/60 bg-vb-surface px-5 py-2.5"
+          >
+            <Info className="h-4 w-4 shrink-0 text-vb-silver-dim" aria-hidden />
+            <span className="min-w-0 flex-1 text-[13px] text-vb-silver">
+              С этой версии программа отправляет отчёты об ошибках и анонимную статистику. Выключить можно в настройках
+            </span>
+            <Button variant="ghost" size="sm" onClick={() => setNoticeBanner(false)}>
+              Понятно
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                setNoticeBanner(false);
+                navigate("settings");
+              }}
+            >
+              Настройки
             </Button>
           </div>
         )}

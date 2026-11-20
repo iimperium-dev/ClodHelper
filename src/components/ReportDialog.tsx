@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Check, Loader2 } from "lucide-react";
 import { Button } from "./Button";
-import { telemetryReport } from "../lib/api";
+import { telemetryReport, telemetryReportPreview } from "../lib/api";
 import { cn } from "../lib/cn";
 
 interface Props {
@@ -35,6 +35,9 @@ export function ReportDialog({ open, onClose, returnFocusTo }: Props) {
   const [contact, setContact] = useState("");
   const [phase, setPhase] = useState<Phase>("edit");
   const [error, setError] = useState("");
+  // «Посмотреть, что уйдёт»: очищенное тело отчёта.
+  const [preview, setPreview] = useState<string | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
   const sending = useRef(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
@@ -48,6 +51,7 @@ export function ReportDialog({ open, onClose, returnFocusTo }: Props) {
       setContact("");
       setPhase("edit");
       setError("");
+      setPreview(null);
       sending.current = false;
       const t = window.setTimeout(() => textRef.current?.focus(), 60);
       return () => window.clearTimeout(t);
@@ -102,6 +106,21 @@ export function ReportDialog({ open, onClose, returnFocusTo }: Props) {
       setPhase("error");
     } finally {
       sending.current = false;
+    }
+  };
+
+  const togglePreview = async () => {
+    if (preview !== null) {
+      setPreview(null);
+      return;
+    }
+    setPreviewBusy(true);
+    try {
+      setPreview(await telemetryReportPreview(text.trim(), contact.trim() || null));
+    } catch {
+      setPreview("Не получилось подготовить показ");
+    } finally {
+      setPreviewBusy(false);
     }
   };
 
@@ -178,6 +197,24 @@ export function ReportDialog({ open, onClose, returnFocusTo }: Props) {
                 <p className="mt-3 text-[12px] leading-snug text-vb-silver-faint">
                   Вместе с текстом уйдёт состояние программы. Адреса и пароли прокси вырезаются
                 </p>
+                <button
+                  type="button"
+                  disabled={locked || previewBusy}
+                  aria-expanded={preview !== null}
+                  onClick={() => void togglePreview()}
+                  className="mt-2 self-start rounded text-[12px] text-vb-silver-dim underline decoration-vb-border-strong underline-offset-2 transition-colors hover:text-vb-silver disabled:opacity-60"
+                >
+                  {preview !== null ? "Скрыть" : previewBusy ? "Готовлю…" : "Посмотреть, что уйдёт"}
+                </button>
+                {preview !== null && (
+                  <pre
+                    tabIndex={0}
+                    aria-label="Что уйдёт на сервер"
+                    className="mt-2 max-h-44 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-vb-border bg-vb-bg p-2.5 font-mono text-[11px] leading-snug text-vb-silver-dim"
+                  >
+                    {preview}
+                  </pre>
+                )}
                 {phase === "error" && (
                   <p role="alert" className="mt-3 text-[12px] leading-snug text-vb-loss">
                     {error}
