@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Общая шапка и подвал портала (docs/). Вставляет разметку между метками
 // <!--sh-->…<!--/sh--> и <!--sf-->…<!--/sf--> во все страницы docs/**/index.html.
-// Ссылки относительные — сайт одинаково работает на github.io/ClodHelper/ и на своём домене.
+// Ссылки относительные - сайт работает и на своём домене clodhelper.com, и на старом адресе github.io.
 //   node scripts/site-chrome.mjs
 import { readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
@@ -98,8 +98,8 @@ function part(name, args, root) {
 // Превью ссылок в Telegram, VK и соцсетях: мессенджеры понимают только полные
 // адреса. На страницах og:image задан относительным путём, здесь он становится
 // полным, и рядом ставятся og:url, og:site_name, og:locale, twitter:card и
-// canonical. Переедет сайт на свой домен — поменять SITE.
-const SITE = "https://iimperium-dev.github.io/ClodHelper/";
+// canonical.
+const SITE = "https://clodhelper.com/";
 function meta(html, dir) {
   const url = SITE + dir;
   html = html.replace(/\n<meta property="og:(?:url|site_name|locale)"[^>]*>|\n<meta name="twitter:card"[^>]*>|\n<link rel="canonical"[^>]*>/g, "");

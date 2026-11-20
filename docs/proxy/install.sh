@@ -3,7 +3,7 @@
 # Installs 3proxy 0.9.4 (HTTP + SOCKS5 with login/password) on Ubuntu 22.04/24.04 or Debian 12.
 #
 # Usage (as root):
-#   curl -fsSL https://iimperium-dev.github.io/ClodHelper/proxy/install.sh | bash -s -- [LOGIN] [PASSWORD] [HTTP_PORT] [SOCKS_PORT]
+#   curl -fsSL https://clodhelper.com/proxy/install.sh | bash -s -- [LOGIN] [PASSWORD] [HTTP_PORT] [SOCKS_PORT]
 #
 # All arguments are optional. Missing values are taken from the previous run
 # (/etc/3proxy/install.state) or generated. Running it again is safe.
@@ -63,7 +63,7 @@ apt_repair() {
 }
 
 usage() {
-  say "Usage: curl -fsSL https://iimperium-dev.github.io/ClodHelper/proxy/install.sh | bash -s -- [LOGIN] [PASSWORD] [HTTP_PORT] [SOCKS_PORT]"
+  say "Usage: curl -fsSL https://clodhelper.com/proxy/install.sh | bash -s -- [LOGIN] [PASSWORD] [HTTP_PORT] [SOCKS_PORT]"
   say "All four values are optional. Missing ones are generated (or reused from the last run)."
   say "  LOGIN      3-32 chars: small latin letters and digits, starts with a letter"
   say "  PASSWORD   8-64 chars: latin letters and digits"
