@@ -234,7 +234,7 @@ fn scrub_user_paths(text: &str) -> String {
 /// окружения (иначе обычный текст превратится в заглушки).
 const COMMON_WORDS: &[&str] = &[
     "user", "users", "admin", "administrator", "root", "guest", "default", "public", "home", "localhost", "onedrive",
-    "owner", "computer", "desktop", "laptop", "windows", "system", "local", "test", "пользователь", "администратор",
+    "owner", "computer", "desktop", "laptop", "windows", "system", "local", "test", "пользователь", "администратор", "mac", "macbook", "pc", "dev",
 ];
 
 /// Значения из окружения, которые выдают человека: имя пользователя,
@@ -378,6 +378,11 @@ pub fn scrub_with(text: &str, secrets: &[(String, &'static str)]) -> String {
         .into_owned();
     for (v, tag) in secrets {
         // Без учёта регистра: Windows путает «Ivan» и «IVAN».
+        // Короткое имя (до 4 знаков) вне путей слишком часто совпадает с обычным
+        // словом (Mac, Mach-O): пути с ним уже очищены правилами путей выше.
+        if matches!(*tag, "<user>" | "<host>" | "<dir>") && v.chars().count() <= 4 {
+            continue;
+        }
         s = replace_secret(&s, v, tag);
     }
     s = r.email.replace_all(&s, "<email>").into_owned();
@@ -843,14 +848,25 @@ mod tests {
     #[test]
     fn known_secrets_match_whole_words_except_passwords() {
         let s = |v: &str, t: &'static str| vec![(v.to_string(), t)];
-        assert_eq!(scrub_with("ivan ivanov divan Ivan.", &s("ivan", "<user>")), "<user> ivanov divan <user>.");
-        assert_eq!(scrub_with("Иван Иванов Иванович", &s("Иван", "<user>")), "<user> Иванов Иванович");
-        assert_eq!(scrub_with("host1 myhost host", &s("host", "<host>")), "host1 myhost <host>");
+        assert_eq!(scrub_with("ivanov ivanovich divanov Ivanov.", &s("ivanov", "<user>")), "<user> ivanovich divanov <user>.");
+        assert_eq!(scrub_with("Иванов Ивановы Ивановский", &s("Иванов", "<user>")), "<user> Ивановы Ивановский");
+        assert_eq!(scrub_with("server1 myserver server", &s("server", "<host>")), "server1 myserver <host>");
         // Пароль - подстрока.
         assert_eq!(scrub_with("xS3cretx S3cret", &s("S3cret", "<pass>")), "x<pass>x <pass>");
         // Уже вставленные заглушки не ломаем.
-        assert_eq!(scrub_with("<user> user", &s("user", "<user>")), "<user> <user>");
+        assert_eq!(scrub_with("<usernm> usernm", &s("usernm", "<user>")), "<usernm> <user>");
         assert_eq!(scrub_with("a <pass> b", &s("pass", "<pass>")), "a <pass> b");
+    }
+
+    #[test]
+    fn short_user_name_is_replaced_only_inside_paths() {
+        let env = |k: &str| (k == "USERNAME").then(|| "Mac".to_string());
+        let sec = secrets_from_env(env);
+        let text = "macOS 15, Mach-O, machine, Mac mini, /Users/Mac/Library";
+        assert_eq!(scrub_with(text, &sec), "macOS 15, Mach-O, machine, Mac mini, /Users/<user>/Library");
+        // Длинное имя: отдельное слово чистится, часть другого слова нет.
+        let sec = vec![("Ivanov".to_string(), "<user>")];
+        assert_eq!(scrub_with("Ivanov, ivanovich, IVANOV", &sec), "<user>, ivanovich, <user>");
     }
 
     #[test]
