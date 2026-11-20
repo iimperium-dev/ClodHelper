@@ -143,6 +143,8 @@ pub fn run() {
             commands::auto_update_set,
             commands::privacy_get,
             commands::privacy_set,
+            commands::privacy_notice_seen,
+            commands::telemetry_report_preview,
             commands::telemetry_ui_error,
             commands::telemetry_report,
             commands::notice_event,

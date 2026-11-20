@@ -52,7 +52,7 @@ test("настройки: три переключателя с пояснени�
   await stats.click();
   await expect(stats).toHaveAttribute("aria-checked", "false");
   expect((await privacy(page)).usage_stats).toBe(false);
-  await expect(page.getByText("Версия и система раз в день. Без адресов и настроек прокси")).toBeVisible();
+  await expect(page.getByText("Раз в день: версия, система, работал ли прокси, как обновилась программа. Без адресов и настроек прокси")).toBeVisible();
 });
 
 test("отчёт: успех", async ({ page }) => {
@@ -167,4 +167,92 @@ test("колокольчик: подпись кнопки link_label, событ
   await link.click();
   const ev = await page.evaluate(() => (window as unknown as { __noticeEvents?: unknown[] }).__noticeEvents);
   expect(ev).toEqual([{ id: "whats-new-0-9-1", ev: "clicked" }]);
+});
+
+// ─── ничего не уходит до согласия (флаг privacy_notice_seen) ─────────────────
+
+type N = { __noticeSeen: () => boolean; __privacyWrites: { key: string; on: boolean }[] };
+const noticeSeen = (page: Page) => page.evaluate(() => (window as unknown as N).__noticeSeen());
+const writes = (page: Page) => page.evaluate(() => (window as unknown as N).__privacyWrites);
+
+test("мастер: первый шаг не пишет переключатели, «Готово» пишет их и ставит флаг", async ({ page }) => {
+  await page.goto("/mock.html?still&fresh&platform=win&wizslow");
+  await page.getByLabel("Строка прокси").fill("185.68.187.138:8000:user:pass");
+  await page.getByRole("button", { name: "Дальше" }).click();
+  await expect(page.getByRole("heading", { name: "Настраиваю всё сам" })).toBeVisible();
+  expect(await writes(page)).toEqual([]);
+  expect(await noticeSeen(page)).toBe(false);
+  await expect(page.getByRole("heading", { name: "Всё работает" })).toBeVisible({ timeout: 15_000 });
+  await expect.poll(() => noticeSeen(page)).toBe(true);
+  expect((await writes(page)).map((w) => w.key).sort()).toEqual(["auto_update", "crash_reports", "usage_stats"]);
+  // Выбор человека пишется при каждом щелчке.
+  await page.getByRole("switch", { name: "Отправлять анонимную статистику" }).click();
+  expect((await writes(page)).at(-1)).toEqual({ key: "usage_stats", on: false });
+});
+
+test("окно предложения для обновившихся ставит флаг", async ({ page }) => {
+  await page.goto("/mock.html?still&autooffer&platform=win");
+  expect(await noticeSeen(page)).toBe(false);
+  await expect(page.getByRole("dialog", { name: "Автообновление. Включить?" })).toBeVisible({ timeout: 20_000 });
+  await expect.poll(() => noticeSeen(page)).toBe(true);
+  // Плашки при этом нет: строка про отчёты уже была в окне.
+  await expect(page.getByRole("region", { name: "Отчёты и статистика" })).toHaveCount(0);
+});
+
+test("плашка: показ ставит флаг, «Понятно» закрывает, после перезагрузки её нет", async ({ page }) => {
+  await page.goto("/mock.html?still&noticebanner&platform=win");
+  const banner = page.getByRole("region", { name: "Отчёты и статистика" });
+  await expect(banner).toBeVisible({ timeout: 20_000 });
+  await expect(banner).toContainText("С этой версии программа отправляет отчёты об ошибках и анонимную статистику. Выключить можно в настройках");
+  await expect.poll(() => noticeSeen(page)).toBe(true);
+  await banner.getByRole("button", { name: "Понятно" }).click();
+  await expect(banner).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByText("Мост активен").first()).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("region", { name: "Отчёты и статистика" })).toHaveCount(0);
+});
+
+test("плашка: «Настройки» открывает настройки", async ({ page }) => {
+  await page.goto("/mock.html?still&noticebanner&platform=win");
+  const banner = page.getByRole("region", { name: "Отчёты и статистика" });
+  await banner.getByRole("button", { name: "Настройки" }).click();
+  await expect(banner).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Обновления и отчёты" })).toBeVisible();
+});
+
+test("плашки нет, если флаг уже стоит", async ({ page }) => {
+  await page.goto("/mock.html?still&platform=win");
+  await expect(page.getByText("Мост активен").first()).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("region", { name: "Отчёты и статистика" })).toHaveCount(0);
+});
+
+test("настройки: «Что именно отправляется» раскрывается и сворачивается", async ({ page }) => {
+  await openSettings(page);
+  const toggle = page.getByRole("button", { name: "Что именно отправляется" });
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByText("неделя установки (только в первый раз и раз в неделю)")).toHaveCount(0);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByText(/неделя установки \(только в первый раз и раз в неделю\)/)).toBeVisible();
+  await expect(page.getByText(/какой это сбой \(программа, окно, мост, обновление\)/)).toBeVisible();
+  await expect(page.getByText("показано, нажато, закрыто")).toBeVisible();
+  await expect(page.getByText(/спрашивает сервер объявлений/)).toBeVisible();
+  await toggle.click();
+  await expect(page.getByText("показано, нажато, закрыто")).toHaveCount(0);
+});
+
+test("отчёт: «Посмотреть, что уйдёт» показывает очищенное тело", async ({ page }) => {
+  const { dialog } = await openReport(page);
+  await dialog.getByLabel("Что случилось").fill("Не открывается окно");
+  await dialog.getByRole("button", { name: "Посмотреть, что уйдёт" }).click();
+  const pre = dialog.getByLabel("Что уйдёт на сервер");
+  await expect(pre).toBeVisible();
+  await expect(pre).toContainText('"text": "Не открывается окно"');
+  await expect(pre).toContainText('"nonce"');
+  expect(await pre.evaluate((el) => getComputedStyle(el).fontFamily.toLowerCase())).toContain("mono");
+  expect(await pre.evaluate((el) => getComputedStyle(el).overflowY)).toBe("auto");
+  // Отправка по-прежнему доступна, предпросмотр можно скрыть.
+  await dialog.getByRole("button", { name: "Скрыть" }).click();
+  await expect(pre).toHaveCount(0);
+  await expect(dialog.getByRole("button", { name: "Отправить" })).toBeEnabled();
 });
