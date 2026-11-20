@@ -2,8 +2,8 @@ import { expect, test, type Page } from "@playwright/test";
 
 /*
   Приватность и отчёты на стенде mock.html: три переключателя в мастере и
-  настройках, «Сообщить о проблеме», два варианта окна для обновившихся
-  (?variant=a|b), отправка ошибок интерфейса.
+  настройках, «Сообщить о проблеме», окно для обновившихся со ссылкой
+  «в настройках», отправка ошибок интерфейса.
 */
 
 type W = {
@@ -97,29 +97,25 @@ test("отчёт: двойной клик по «Отправить» - одна
   expect(await reports(page)).toHaveLength(1);
 });
 
-test("предложение, вариант a: переключатель статистики пишется", async ({ page }) => {
+test("предложение для обновившихся: строка про отчёты, ссылка ведёт в настройки без ответа", async ({ page }) => {
   await page.setViewportSize({ width: 700, height: 580 });
-  await page.goto("/mock.html?still&autooffer&variant=a&platform=win");
+  // Без параметров стенда: ?whatsnew&autooffer показывает строку со ссылкой.
+  await page.goto("/mock.html?still&whatsnew&autooffer&platform=win");
+  await expect(page.getByText("Clod Helper обновлён")).toBeVisible({ timeout: 20_000 });
+  await page.getByRole("button", { name: "Отлично" }).click();
   const dialog = page.getByRole("dialog", { name: "Автообновление. Включить?" });
   await expect(dialog).toBeVisible({ timeout: 20_000 });
-  await expect(dialog.getByText("Ещё с этой версии")).toBeVisible();
-  const stats = dialog.getByRole("switch", { name: "Отправлять анонимную статистику" });
-  await expect(stats).toHaveAttribute("aria-checked", "true");
-  await stats.click();
-  expect((await privacy(page)).usage_stats).toBe(false);
-  expect(await dialog.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(false);
-});
-
-test("предложение, вариант b: ссылка ведёт в настройки", async ({ page }) => {
-  await page.setViewportSize({ width: 700, height: 580 });
-  await page.goto("/mock.html?still&autooffer&variant=b&platform=win");
-  const dialog = page.getByRole("dialog", { name: "Автообновление. Включить?" });
-  await expect(dialog).toBeVisible({ timeout: 20_000 });
+  await expect(dialog.getByText(/отправляет отчёты об ошибках и анонимную статистику/)).toBeVisible();
   await expect(dialog.getByRole("switch")).toHaveCount(0);
   expect(await dialog.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(false);
   await dialog.getByRole("button", { name: "в настройках" }).click();
   await expect(dialog).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Обновления и отчёты" })).toBeVisible();
+  // Ответ не записан: auto_update остаётся пустым.
+  expect(await page.evaluate(() => (window as unknown as { __autoUpdate: () => boolean | null }).__autoUpdate())).toBeNull();
+  // Не трогал - при следующем запуске предложение снова показывается.
+  await page.goto("/mock.html?still&autooffer&platform=win");
+  await expect(page.getByRole("dialog", { name: "Автообновление. Включить?" })).toBeVisible({ timeout: 20_000 });
 });
 
 test("ошибка интерфейса уходит в отчёт", async ({ page }) => {

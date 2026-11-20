@@ -3,28 +3,28 @@ import { createPortal } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Check, Loader2 } from "lucide-react";
 import { CycleMark } from "./CycleMark";
-import { OfferPrivacyBlock, OfferPrivacyNote, offerVariant } from "./OfferPrivacy";
 import { cn } from "../lib/cn";
 
 interface Props {
   open: boolean;
   /** Ответ человека: true — включить, false — «Не сейчас» (Esc тоже). */
   onAnswer: (enabled: boolean) => Promise<void> | void;
-  /** Вариант b: «в настройках» - как «Не сейчас» и открыть вкладку «Настройки». */
-  onOpenSettings?: () => void;
+  /** «в настройках»: закрыть окно БЕЗ ответа и открыть вкладку «Настройки». */
+  onOpenSettings: () => void;
 }
 
 /*
   Предложение автообновления — для тех, у кого программа стояла до этой
   функции. Показывается один раз, сразу после «Что нового»: любой ответ
-  (и «Не сейчас», и Esc) записывается и больше окно не появляется.
+  (и «Не сейчас», и Esc) записывается и больше окно не появляется. Ссылка
+  «в настройках» ответа не пишет: человек решит там, а если не тронет -
+  предложение покажется при следующем запуске.
 
   Иерархия намеренно неравная: «Включить» — крупная зелёная кнопка во всю
   ширину, в фокусе с открытия (Enter = да); отказ — маленькая серая ссылка
   под ней. Щелчок мимо окна ничего не решает — окно ждёт ответа.
 */
 export function AutoUpdateOffer({ open, onAnswer, onOpenSettings }: Props) {
-  const variant = offerVariant();
   const reduce = useReducedMotion();
   const [busy, setBusy] = useState<null | boolean>(null);
   const [accepted, setAccepted] = useState(false);
@@ -98,22 +98,18 @@ export function AutoUpdateOffer({ open, onAnswer, onOpenSettings }: Props) {
             aria-modal="true"
             aria-labelledby="auto-update-title"
             aria-describedby="auto-update-desc"
-            className={cn(
-              "relative flex max-h-full w-full flex-col overflow-y-auto rounded-2xl border border-vb-border bg-vb-surface px-6 pb-5 text-center shadow-[0_24px_64px_rgba(0,0,0,0.6)]",
-              // Вариант a: шире и ниже, чтобы с двумя переключателями влезть в 700x580.
-              variant === "a" ? "max-w-[520px] pt-4" : "max-w-[380px] pt-5",
-            )}
+            className="relative flex max-h-full w-full max-w-[380px] flex-col overflow-y-auto rounded-2xl border border-vb-border bg-vb-surface px-6 pb-5 pt-5 text-center shadow-[0_24px_64px_rgba(0,0,0,0.6)]"
           >
             <CycleMark accepted={accepted} reduce={!!reduce} compact />
 
-            <h2 id="auto-update-title" className={cn("mt-3 text-[20px] font-semibold tracking-[-0.01em] text-vb-fg")}>
+            <h2 id="auto-update-title" className="mt-3 text-[20px] font-semibold tracking-[-0.01em] text-vb-fg">
               Автообновление. Включить?
             </h2>
-            <p id="auto-update-desc" className={cn("mx-auto mt-2 text-[13px] leading-relaxed text-vb-silver-dim", variant === "a" ? "max-w-[60ch]" : "max-w-[30ch]")}>
+            <p id="auto-update-desc" className="mx-auto mt-2 max-w-[30ch] text-[13px] leading-relaxed text-vb-silver-dim">
               Clod Helper будет сам ставить новые версии, с исправлениями и новыми возможностями.
             </p>
 
-            <ul className={cn("mx-auto mt-4 w-full space-y-1.5 text-left", variant === "a" ? "max-w-[440px]" : "max-w-[290px]")}>
+            <ul className="mx-auto mt-4 w-full max-w-[290px] space-y-1.5 text-left">
               {[
                 "Без окон и кнопок, когда программа свёрнута",
                 "Только проверенные файлы с подписью разработчика",
@@ -125,8 +121,6 @@ export function AutoUpdateOffer({ open, onAnswer, onOpenSettings }: Props) {
                 </li>
               ))}
             </ul>
-
-            {variant === "a" && <OfferPrivacyBlock open={open} />}
 
             <button
               ref={yesRef}
@@ -160,13 +154,17 @@ export function AutoUpdateOffer({ open, onAnswer, onOpenSettings }: Props) {
             >
               Не сейчас
             </button>
-            {variant === "b" && (
-              <OfferPrivacyNote
-                onSettings={() => {
-                  void answer(false).then(() => onOpenSettings?.());
-                }}
-              />
-            )}
+            <p className="mx-auto mt-3 max-w-[300px] text-[11px] leading-snug text-vb-silver-faint">
+              С этой версии программа также отправляет отчёты об ошибках и анонимную статистику. Выключить можно{" "}
+              <button
+                type="button"
+                onClick={onOpenSettings}
+                disabled={busy !== null}
+                className="rounded-sm text-vb-silver-dim underline underline-offset-2 transition-colors hover:text-vb-silver disabled:opacity-50"
+              >
+                в настройках
+              </button>
+            </p>
           </motion.div>
         </motion.div>
       )}

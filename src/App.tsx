@@ -234,7 +234,11 @@ function App() {
       <AutoUpdateOffer
         open={view !== null && whatsNewTaken && !whatsNew && offerAuto}
         onAnswer={answerAutoUpdate}
-        onOpenSettings={() => navigate("settings")}
+        onOpenSettings={() => {
+          // Без ответа: auto_update остаётся пустым, предложение вернётся при следующем запуске.
+          setOfferAuto(false);
+          navigate("settings");
+        }}
       />
     </StatusProvider>
   );
