@@ -185,6 +185,8 @@ pub fn show_toast(app: &AppHandle, id: &str) {
         }
     }
     crate::sound::chime();
+    // Статистика рассылок: уведомление всплыло (для обновления - нет записи, пропускается).
+    crate::telemetry::report_notice_event(id, "shown");
 }
 
 /// Левый верхний угол окна уведомления (логические px) на основном мониторе.

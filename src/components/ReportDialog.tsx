@@ -15,6 +15,10 @@ interface Props {
 
 type Phase = "edit" | "sending" | "done" | "error";
 
+/** Сервер берёт до 4 КБ текста: 2000 букв кириллицей это 4000 байт. */
+const TEXT_MAX = 2000;
+const TEXT_WARN_AT = 1600;
+
 const FIELD =
   "w-full rounded-lg border border-vb-border bg-vb-bg px-3 py-2 text-[13px] text-vb-fg placeholder:text-vb-silver-faint " +
   "focus-visible:border-vb-emerald/60 focus-visible:outline-none disabled:opacity-60";
@@ -151,9 +155,15 @@ export function ReportDialog({ open, onClose, returnFocusTo }: Props) {
                   rows={5}
                   value={text}
                   disabled={locked}
+                  maxLength={TEXT_MAX}
                   onChange={(e) => setText(e.target.value)}
                   className={cn(FIELD, "mt-1 resize-none")}
                 />
+                {text.length > TEXT_WARN_AT && (
+                  <p aria-live="off" className="tnum mt-1 text-right text-[11px] text-vb-silver-faint">
+                    {text.length} из {TEXT_MAX}
+                  </p>
+                )}
                 <label htmlFor={`${uid}-contact`} className="mt-3 block text-[12px] text-vb-silver-dim">
                   Как с вами связаться <span className="text-vb-silver-faint">(необязательно)</span>
                 </label>

@@ -277,6 +277,13 @@ pub async fn telemetry_ui_error(msg: String, stack: String) {
     let _ = tokio::task::spawn_blocking(move || crate::telemetry::report_ui(&msg, &stack)).await;
 }
 
+/// Событие уведомления для статистики рассылок: shown | clicked | dismissed.
+/// Уходит только при включённой статистике, один раз на событие.
+#[tauri::command]
+pub fn notice_event(id: String, ev: String) {
+    crate::telemetry::report_notice_event(&id, &ev);
+}
+
 /// Отчёт, который человек отправил сам. Шлётся всегда.
 #[tauri::command]
 pub async fn telemetry_report(text: String, contact: Option<String>) -> Result<(), String> {

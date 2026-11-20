@@ -26,6 +26,9 @@ pub struct Notice {
     /// Кнопка «Подробнее» — только https.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<String>,
+    /// Подпись кнопки со ссылкой; нет - «Подробнее».
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_label: Option<String>,
     /// "windows" / "macos"; пусто — всем.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub platforms: Vec<String>,
@@ -52,6 +55,7 @@ pub struct NoticeItem {
     pub title: String,
     pub body: String,
     pub link: Option<String>,
+    pub link_label: Option<String>,
     pub read: bool,
 }
 
@@ -86,6 +90,11 @@ fn parse(text: &str, current: &str) -> Result<Vec<Notice>, String> {
         .map(|mut n| {
             // Ссылка только https — никаких file:/javascript: из файла.
             n.link = n.link.filter(|l| l.starts_with("https://"));
+            // Подпись кнопки: без пробелов по краям, не длиннее 40 символов.
+            n.link_label = n
+                .link_label
+                .map(|l| l.trim().chars().take(40).collect::<String>())
+                .filter(|l| !l.is_empty() && n.link.is_some());
             n
         })
         .collect();
@@ -110,14 +119,15 @@ pub async fn fetch() -> Result<Vec<Notice>, String> {
     // другой; ошибка — только если не получилось ничего. Сервер статистики
     // спрашиваем только при включённой статистике.
     let current = env!("CARGO_PKG_VERSION");
-    let server_on = tokio::task::spawn_blocking(|| {
-        crate::settings::load_checked().is_ok_and(|s| crate::settings::usage_stats_on(&s))
+    let (server_on, au) = tokio::task::spawn_blocking(|| match crate::settings::load_checked() {
+        Ok(s) => (crate::settings::usage_stats_on(&s), crate::settings::auto_update_state(&s).enabled),
+        Err(_) => (false, false),
     })
     .await
-    .unwrap_or(false);
+    .unwrap_or((false, false));
     let server_fut = async {
         if server_on {
-            Some(fetch_server(current).await)
+            Some(fetch_server(current, au).await)
         } else {
             None
         }
@@ -176,12 +186,17 @@ async fn fetch_github(current: &str) -> Result<Vec<Notice>, String> {
 }
 
 /// Рассылки с сервера: `GET /v1/notices?v=&os=`. 404 — пусто.
-async fn fetch_server(current: &str) -> Result<Vec<Notice>, String> {
-    let os = if cfg!(target_os = "windows") { "windows" } else { "macos" };
-    match crate::telemetry::get(&format!("/v1/notices?v={current}&os={os}")).await? {
+async fn fetch_server(current: &str, au: bool) -> Result<Vec<Notice>, String> {
+    match crate::telemetry::get(&server_notices_query(current, au)).await? {
         Some(t) => parse_server(&t, current),
         None => Ok(Vec::new()),
     }
+}
+
+/// Запрос рассылок сервера: версия, система и режим автообновления (au=1|0).
+fn server_notices_query(current: &str, au: bool) -> String {
+    let os = if cfg!(target_os = "windows") { "windows" } else { "macos" };
+    format!("/v1/notices?v={current}&os={os}&au={}", u8::from(au))
 }
 
 /// Ответ сервера: `{"notices":[...]}`, записи — как в notices.json.
@@ -264,6 +279,7 @@ pub fn list() -> Vec<NoticeItem> {
             title: format!("Доступна версия {}", u.version),
             body: u.highlights.first().cloned().unwrap_or_else(|| "Исправления и улучшения".into()),
             link: None,
+            link_label: None,
         });
     }
     for n in &cached(&s) {
@@ -274,6 +290,7 @@ pub fn list() -> Vec<NoticeItem> {
             title: n.title.clone(),
             body: n.body.clone(),
             link: n.link.clone(),
+            link_label: n.link_label.clone(),
             read: s.notices_read.contains(&n.id),
         });
     }
@@ -317,6 +334,7 @@ mod tests {
             title: title.into(),
             body: String::new(),
             link: None,
+            link_label: None,
             platforms: vec![],
             min_version: None,
             max_version: None,
@@ -345,6 +363,7 @@ mod tests {
             title: id.into(),
             body: String::new(),
             link: None,
+            link_label: None,
             platforms: vec![],
             min_version: None,
             max_version: max.map(str::to_string),
@@ -369,6 +388,32 @@ mod tests {
     }
 
     #[test]
+    fn link_label_is_optional_and_trimmed() {
+        let v = parse(
+            r#"{"notices":[
+            {"id":"a","date":"2026-11-01","title":"A","link":"https://x.y","link_label":"  Что нового  "},
+            {"id":"b","date":"2026-11-02","title":"B","link":"https://x.y"},
+            {"id":"c","date":"2026-11-03","title":"C","link_label":"без ссылки"},
+            {"id":"d","date":"2026-11-04","title":"D","link":"https://x.y","link_label":"   ","level":"info"}
+        ]}"#,
+            "0.8.3",
+        )
+        .unwrap();
+        let get = |id: &str| v.iter().find(|n| n.id == id).unwrap().link_label.clone();
+        assert_eq!(get("a").as_deref(), Some("Что нового"));
+        assert_eq!(get("b"), None);
+        assert_eq!(get("c"), None, "подпись без ссылки не нужна");
+        assert_eq!(get("d"), None);
+    }
+
+    #[test]
+    fn server_query_carries_auto_update_flag() {
+        assert!(server_notices_query("0.9.1", true).ends_with("&au=1"));
+        assert!(server_notices_query("0.9.1", false).ends_with("&au=0"));
+        assert!(server_notices_query("0.9.1", true).starts_with("/v1/notices?v=0.9.1&os="));
+    }
+
+    #[test]
     fn server_notices_use_same_format() {
         let v = parse_server(r#"{"notices":[{"id":"s1","date":"2026-11-10","title":"С сервера","link":"https://x.y"}]}"#, "0.8.18").unwrap();
         assert_eq!(v.len(), 1);
@@ -383,6 +428,7 @@ mod tests {
             title: "t".into(),
             body: String::new(),
             link: None,
+            link_label: None,
             platforms: vec![],
             min_version: None,
             max_version: None,

@@ -524,6 +524,11 @@ export function noticesMarkRead(ids: string[]): Promise<NoticeItem[]> {
   return invoke<NoticeItem[]>("notices_mark_read", { ids });
 }
 
+/** Событие уведомления для статистики: shown | clicked | dismissed (один раз, только при включённой статистике). */
+export function noticeEvent(id: string, ev: "shown" | "clicked" | "dismissed"): Promise<void> {
+  return invoke<void>("notice_event", { id, ev });
+}
+
 export function updateToastClose(): Promise<void> {
   return invoke<void>("update_toast_close");
 }

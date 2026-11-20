@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::settings::{self, TelemetryState};
-use crate::telemetry_scrub::{place_from_stack, scrub, sig, truncate};
+use crate::telemetry_scrub::{clip_bytes, place_from_stack, scrub_clip, sig};
 
 #[cfg(not(debug_assertions))]
 const BASE: &str = "https://stats.clodhelper.com";
@@ -31,8 +31,15 @@ const MAX_WAIT_FOR_USE: Duration = Duration::from_secs(30 * 60);
 /// Как часто проверять, не пора ли слать пинг.
 const CHECK_EVERY: Duration = Duration::from_secs(3 * 3600);
 const MAX_UI_REPORTS: usize = 5;
-const STACK_MAX: usize = 8 * 1024;
-const MSG_MAX: usize = 2000;
+// Лимиты сервера (admin-API.md): сверх них ответ 400 или 413. Всё в байтах UTF-8.
+const MSG_MAX: usize = 1024;
+const STACK_MAX: usize = 16 * 1024;
+const CRASH_BODY_MAX: usize = 24 * 1024;
+const REPORT_TEXT_MAX: usize = 4 * 1024;
+const REPORT_DIAG_MAX: usize = 32 * 1024;
+const REPORT_CONTACT_MAX_CHARS: usize = 200;
+const REPORT_BODY_MAX: usize = 48 * 1024;
+const PING_BODY_MAX: usize = 2 * 1024;
 const PENDING_FILE: &str = "crash-pending.json";
 
 /// Адрес сервера. В отладочной сборке - только из `CLOD_STATS_URL`
@@ -217,6 +224,26 @@ pub struct Ping {
     pub used: bool,
 }
 
+/// Архитектура в виде, который принимает сервер. Незнакомая - пинг не шлём.
+fn arch_for(a: &str) -> Option<&'static str> {
+    match a {
+        "x86_64" => Some("x86_64"),
+        "aarch64" => Some("aarch64"),
+        "x86" => Some("i686"),
+        _ => None,
+    }
+}
+
+fn ping_arch() -> Option<&'static str> {
+    arch_for(std::env::consts::ARCH)
+}
+
+/// Версия вида 1.2.3 без хвоста (-beta, +сборка): с хвостом пинг не шлём.
+fn ping_version_ok(v: &str) -> bool {
+    let parts: Vec<&str> = v.split('.').collect();
+    parts.len() == 3 && parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+}
+
 /// Собрать пинг по сохранённому состоянию. Чистая функция.
 pub fn plan_ping(st: &TelemetryState, now: &Stamp, version: &str, au: bool) -> Ping {
     let how = if st.legacy && !st.first_sent {
@@ -226,16 +253,18 @@ pub fn plan_ping(st: &TelemetryState, now: &Stamp, version: &str, au: bool) -> P
     } else {
         None
     };
+    let iw = if st.legacy { None } else { Some(st.install_week.clone().unwrap_or_else(|| now.week.clone())) };
     Ping {
         v: version.to_string(),
         os: os_name(),
-        arch: std::env::consts::ARCH,
+        arch: ping_arch().unwrap_or(std::env::consts::ARCH),
         au,
         d: st.last_day.as_deref() != Some(&now.day),
         w: gap_passed(st.last_w_day.as_deref(), now, 7),
         m: gap_passed(st.last_m_day.as_deref(), now, 30),
-        first: !st.first_sent && !st.legacy,
-        iw: if st.legacy { None } else { Some(st.install_week.clone().unwrap_or_else(|| now.week.clone())) },
+        // Сервер: iw = null требует first = false.
+        first: !st.first_sent && !st.legacy && iw.is_some(),
+        iw,
         how,
         used: st.used_day.as_deref() == Some(&now.day),
     }
@@ -346,7 +375,7 @@ fn reports_on() -> bool {
 /// Отправить пинг, если сегодня ещё не отправляли.
 async fn ping_if_due() {
     let now = Stamp::now();
-    if sent_today(&now.day) || base().is_none() {
+    if sent_today(&now.day) || base().is_none() || ping_arch().is_none() || !ping_version_ok(env!("CARGO_PKG_VERSION")) {
         return;
     }
     // Чтение файла - не в потоке async-задачи.
@@ -357,6 +386,9 @@ async fn ping_if_due() {
     let planned_how = s.telemetry.pending_how.clone();
     let p = plan_ping(&s.telemetry, &now, env!("CARGO_PKG_VERSION"), s.auto_update == Some(true));
     let Ok(body) = serde_json::to_value(&p) else { return };
+    if body.to_string().len() > PING_BODY_MAX {
+        return;
+    }
     match post("/v1/ping", &body).await {
         Ok(()) => {
             mark_sent_today(&now.day);
@@ -422,13 +454,27 @@ struct CrashReport {
 }
 
 fn build_crash(kind: &str, msg: &str, stack: &str, place: &str) -> CrashReport {
-    CrashReport {
+    let mut c = CrashReport {
         v: env!("CARGO_PKG_VERSION").to_string(),
         os: os_name().to_string(),
         kind: kind.to_string(),
-        msg: scrub(&truncate(msg, MSG_MAX)),
-        stack: scrub(&truncate(stack, STACK_MAX)),
+        // Чистим, потом режем: замены могут удлинить текст.
+        msg: scrub_clip(msg, MSG_MAX),
+        stack: scrub_clip(stack, STACK_MAX),
         sig: sig(kind, place),
+    };
+    fit_crash(&mut c);
+    c
+}
+
+/// Уложить сбой в лимиты сервера: msg до 1 КБ, stack до 16 КБ, тело до 24 КБ
+/// (в JSON переводы строк и кавычки занимают по два байта).
+fn fit_crash(c: &mut CrashReport) {
+    c.msg = clip_bytes(&c.msg, MSG_MAX);
+    c.stack = clip_bytes(&c.stack, STACK_MAX);
+    while serde_json::to_vec(c).map_or(0, |b| b.len()) > CRASH_BODY_MAX && !c.stack.is_empty() {
+        let keep = c.stack.len() * 9 / 10;
+        c.stack = clip_bytes(&c.stack, keep);
     }
 }
 
@@ -539,13 +585,75 @@ async fn send_pending_crash() {
         serde_json::from_str::<CrashReport>(&text).ok()
     })
     .await;
-    let Ok(Some(c)) = read else { return };
+    let Ok(Some(mut c)) = read else { return };
+    fit_crash(&mut c);
     if let Err(e) = send_crash(&c).await {
         tracing::info!("отчёт о сбое: {e}");
     }
 }
 
+// ---------------------------------------------------------------- события рассылок
+
+static SENT_EVENTS: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+
+/// Тело события или None: неизвестное событие, пустой id и уведомления об
+/// обновлении (у них нет записи в рассылках) не шлём.
+fn notice_event_body(id: &str, ev: &str) -> Option<Value> {
+    if !matches!(ev, "shown" | "clicked" | "dismissed") || id.is_empty() || id.len() > 128 || id.starts_with("update-") {
+        return None;
+    }
+    Some(json!({ "id": id, "ev": ev, "v": env!("CARGO_PKG_VERSION"), "os": os_name() }))
+}
+
+/// Одно событие на пару (id, ev) за запуск.
+fn first_event(id: &str, ev: &str) -> bool {
+    let Ok(mut g) = SENT_EVENTS.lock() else { return false };
+    g.get_or_insert_with(HashSet::new).insert(format!("{ev}:{id}"))
+}
+
+/// Событие уведомления для статистики рассылок (shown, clicked, dismissed):
+/// только при включённой статистике, один раз, без повторов.
+pub fn report_notice_event(id: &str, ev: &str) {
+    let Some(body) = notice_event_body(id, ev) else { return };
+    if base().is_none() || !first_event(id, ev) {
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        let Ok(Some(_)) = tokio::task::spawn_blocking(load_if_stats_on).await else { return };
+        if let Err(e) = post("/v1/notice-event", &body).await {
+            tracing::info!("событие уведомления: {e}");
+        }
+    });
+}
+
 // ---------------------------------------------------------------- отчёт человека
+
+/// Тело отчёта в лимитах сервера: text до 4 КБ, diag до 32 КБ, contact до 200
+/// символов, всё до 48 КБ. Тексты чистятся до обрезки.
+fn build_report_body(text: &str, diag: &str, contact: Option<&str>) -> Value {
+    let mut diag = scrub_clip(diag, REPORT_DIAG_MAX);
+    let text = scrub_clip(text, REPORT_TEXT_MAX);
+    let contact = contact
+        .map(|c| c.trim().chars().take(REPORT_CONTACT_MAX_CHARS).collect::<String>())
+        .filter(|c| !c.is_empty());
+    loop {
+        let mut body = json!({
+            "v": env!("CARGO_PKG_VERSION"),
+            "os": os_name(),
+            "text": text,
+            "diag": diag,
+        });
+        // Контакт человек вписал сам и хочет, чтобы ему ответили: не чистим.
+        if let Some(c) = &contact {
+            body["contact"] = json!(c);
+        }
+        if body.to_string().len() <= REPORT_BODY_MAX || diag.is_empty() {
+            return body;
+        }
+        let keep = diag.len() * 9 / 10;
+        diag = clip_bytes(&diag, keep);
+    }
+}
 
 /// Отчёт, отправленный человеком: текст, состояние программы и контакт.
 pub async fn send_report(text: String, contact: Option<String>) -> Result<(), String> {
@@ -555,17 +663,7 @@ pub async fn send_report(text: String, contact: Option<String>) -> Result<(), St
     // программе полный текст. Чтение файлов - в блокирующей задаче.
     let body = tokio::task::spawn_blocking(move || {
         let diag = crate::diagnostics::report_for_server();
-        let mut body = json!({
-            "v": env!("CARGO_PKG_VERSION"),
-            "os": os_name(),
-            "text": scrub(&truncate(&text, 10_000)),
-            "diag": scrub(&truncate(&diag, 64 * 1024)),
-        });
-        // Контакт человек вписал сам и хочет, чтобы ему ответили: не чистим.
-        if let Some(c) = contact.map(|c| c.trim().to_string()).filter(|c| !c.is_empty()) {
-            body["contact"] = json!(truncate(&c, 200));
-        }
-        body
+        build_report_body(&text, &diag, contact.as_deref())
     })
     .await
     .map_err(|_| FAIL.to_string())?;
@@ -832,6 +930,71 @@ mod tests {
         .await;
         assert!(r.is_err());
         assert_eq!(calls.load(Ordering::SeqCst), 2, "ошибка соединения: напрямую и через мост");
+    }
+
+    #[test]
+    fn long_cyrillic_fits_server_limits() {
+        let long = "Ошибка соединения с 1.2.3.4 при запуске моста. ".repeat(3000);
+        let c = build_crash("rust", &long, &long, "x.rs:1");
+        assert!(c.msg.len() <= MSG_MAX && c.stack.len() <= STACK_MAX);
+        assert!(serde_json::to_vec(&c).unwrap().len() <= CRASH_BODY_MAX);
+        // Стек из одних переводов строк: в JSON каждый занимает два байта.
+        let nl = "\n".repeat(20_000);
+        let c = build_crash("ui", "m", &nl, "x.js:1:1");
+        assert!(serde_json::to_vec(&c).unwrap().len() <= CRASH_BODY_MAX);
+        // Отложенный сбой из старой версии тоже режется.
+        let mut old = CrashReport { v: "0".into(), os: "windows".into(), kind: "rust".into(), msg: long.clone(), stack: long.clone(), sig: "rs-abcd".into() };
+        fit_crash(&mut old);
+        assert!(old.msg.len() <= MSG_MAX && serde_json::to_vec(&old).unwrap().len() <= CRASH_BODY_MAX);
+
+        let contact = "я".repeat(500);
+        let b = build_report_body(&long, &long, Some(&contact));
+        assert!(b.to_string().len() <= REPORT_BODY_MAX);
+        assert!(b["text"].as_str().unwrap().len() <= REPORT_TEXT_MAX);
+        assert!(b["diag"].as_str().unwrap().len() <= REPORT_DIAG_MAX);
+        assert_eq!(b["contact"].as_str().unwrap().chars().count(), 200);
+        // Диагностика из переводов строк тоже укладывается в 48 КБ.
+        let nl = "\n".repeat(40_000);
+        assert!(build_report_body("t", &nl, None).to_string().len() <= REPORT_BODY_MAX);
+        assert!(build_report_body("t", "d", Some("  ")).get("contact").is_none());
+    }
+
+    #[test]
+    fn ping_matches_server_contract() {
+        let now = at(2026, 11, 20);
+        // iw = null только у legacy, и тогда first = false: в любых состояниях.
+        for legacy in [false, true] {
+            for first_sent in [false, true] {
+                for week in [None, Some("2026-W40".to_string())] {
+                    let s = TelemetryState { legacy, first_sent, install_week: week, ..st() };
+                    let p = plan_ping(&s, &now, "0.9.1", true);
+                    assert!(p.iw.is_some() || !p.first, "iw=null и first=true недопустимы: {s:?}");
+                    assert!(serde_json::to_vec(&p).unwrap().len() <= PING_BODY_MAX);
+                }
+            }
+        }
+        assert!(ping_version_ok("0.9.1") && ping_version_ok("12.0.30"));
+        assert!(!ping_version_ok("0.9.1-beta") && !ping_version_ok("0.9") && !ping_version_ok("0.9.1+b2") && !ping_version_ok(""));
+        assert_eq!(arch_for("x86_64"), Some("x86_64"));
+        assert_eq!(arch_for("aarch64"), Some("aarch64"));
+        assert_eq!(arch_for("x86"), Some("i686"));
+        assert_eq!(arch_for("riscv64"), None);
+        assert!(ping_arch().is_some(), "на этой машине архитектура известна");
+        // Версия самой программы подходит под правило.
+        assert!(ping_version_ok(env!("CARGO_PKG_VERSION")), "в Cargo.toml версия с хвостом: пинг не уйдёт");
+    }
+
+    #[test]
+    fn notice_events_are_valid_and_once() {
+        let b = notice_event_body("whats-new-0-9-1", "shown").unwrap();
+        assert_eq!((b["id"].as_str(), b["ev"].as_str()), (Some("whats-new-0-9-1"), Some("shown")));
+        assert!(b["v"].is_string() && b["os"].is_string());
+        assert!(notice_event_body("x", "opened").is_none());
+        assert!(notice_event_body("", "shown").is_none());
+        assert!(notice_event_body("update-0.9.1", "clicked").is_none());
+        assert!(first_event("evt-test-a", "clicked"));
+        assert!(!first_event("evt-test-a", "clicked"));
+        assert!(first_event("evt-test-a", "dismissed"));
     }
 
     #[test]

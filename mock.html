@@ -127,7 +127,9 @@
       ip_hidden: true, dns_leak: false, leaking_apps: [], error: null,
     },
     update_check: { version: "0.7.0", notes: "", url: "x", sums_url: "y" },
-    notices_list: [],
+    notices_list: params.has("notice")
+      ? [{ id: "whats-new-0-9-1", kind: "news", date: "2026-11-11", title: "Вышла версия 0.9.1", body: "Что изменилось в этой версии.", link: "https://example.com/new", link_label: "Что нового", read: false }]
+      : [],
     proxy_backups_get: {},
     notices_mark_read: [],
     whats_new_take: params.has("whatsnew") ? "0.8.18" : null,
@@ -296,6 +298,10 @@
         await wait(600);
         if (params.has("reportfail")) throw "Не получилось отправить. Проверьте интернет и попробуйте ещё раз";
         window.__reports.push({ text: args.text, contact: args.contact });
+        return null;
+      }
+      if (cmd === "notice_event") {
+        (window.__noticeEvents ||= []).push({ id: args.id, ev: args.ev });
         return null;
       }
       if (cmd === "telemetry_ui_error") {

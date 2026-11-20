@@ -151,3 +151,24 @@ test("мастер на 700x580: все три переключателя и к�
   const btn = (await open.boundingBox())!;
   expect(last.y + last.height).toBeLessThan(btn.y);
 });
+
+test("отчёт: лимит 2000 символов и счётчик после 1600", async ({ page }) => {
+  const { dialog } = await openReport(page);
+  const field = dialog.getByLabel("Что случилось");
+  await expect(field).toHaveAttribute("maxlength", "2000");
+  await expect(dialog.getByText(/из 2000/)).toHaveCount(0);
+  await field.fill("а".repeat(1650));
+  await expect(dialog.getByText("1650 из 2000")).toBeVisible();
+});
+
+test("колокольчик: подпись кнопки link_label, событие clicked уходит один раз", async ({ page }) => {
+  await page.goto("/mock.html?still&notice&platform=win");
+  await page.getByRole("button", { name: /Уведомления/ }).click();
+  const panel = page.getByRole("dialog", { name: "Уведомления" });
+  const link = panel.getByRole("button", { name: "Что нового", exact: true });
+  await expect(link).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Подробнее", exact: true })).toHaveCount(0);
+  await link.click();
+  const ev = await page.evaluate(() => (window as unknown as { __noticeEvents?: unknown[] }).__noticeEvents);
+  expect(ev).toEqual([{ id: "whats-new-0-9-1", ev: "clicked" }]);
+});

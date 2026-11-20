@@ -14,6 +14,9 @@ struct Rules {
     bare_at: Regex,
     bare_colon: Regex,
     bare_host_first: Regex,
+    /// key=..., token=..., password=...
+    kv_secret: Regex,
+    bearer: Regex,
     win_user: Regex,
     win_user_end: Regex,
     unix_user: Regex,
@@ -46,6 +49,8 @@ fn rules() -> &'static Rules {
                 r#"(^|[\s"'(<\[,;=])(?:[A-Za-z0-9-]+\.)+[A-Za-z0-9-]+:\d{2,5}@"#,
                 r"[^\s@:]+:\S+",
             )),
+            kv_secret: re(r#"(?i)\b([A-Za-z0-9_-]*(?:key|token|password|passwd))=[^\s&"',;]+"#),
+            bearer: re(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+"),
             // Имя пользователя целиком до следующего «\» или «/», пробелы внутри
             // можно. Без разделителя после имени - старое правило (до пробела).
             win_user: re(r#"(?i)([A-Z]:[\\/]+Users[\\/]+)[^\\/\s"'<>|]+"#),
@@ -175,6 +180,8 @@ pub fn scrub_with(text: &str, secrets: &[(String, &'static str)]) -> String {
     for re in [&r.bare_at, &r.bare_colon, &r.bare_host_first] {
         s = re.replace_all(&s, "${1}<proxy>").into_owned();
     }
+    s = r.kv_secret.replace_all(&s, "${1}=<secret>").into_owned();
+    s = r.bearer.replace_all(&s, "Bearer <token>").into_owned();
     for (v, tag) in secrets {
         // Без учёта регистра: Windows путает «Ivan» и «IVAN».
         match Regex::new(&format!("(?i){}", regex::escape(v))) {
@@ -204,8 +211,9 @@ pub fn scrub_with(text: &str, secrets: &[(String, &'static str)]) -> String {
         .into_owned()
 }
 
-/// Обрезать по границе символа.
-pub fn truncate(s: &str, max: usize) -> String {
+/// Обрезать до max БАЙТ UTF-8 по границе символа, без добавок в конец:
+/// лимиты сервера считаются в байтах.
+pub fn clip_bytes(s: &str, max: usize) -> String {
     if s.len() <= max {
         return s.to_string();
     }
@@ -213,10 +221,30 @@ pub fn truncate(s: &str, max: usize) -> String {
     while !s.is_char_boundary(end) {
         end -= 1;
     }
-    format!("{}...", &s[..end])
+    s[..end].to_string()
 }
 
-/// Подпись сбоя: kind + нормализованное место, первые 16 hex sha256.
+/// Очистить и уложить в лимит. Сначала грубо режем исходник (чтобы не гонять
+/// регулярки по мегабайтам), потом чистим, и только потом точно обрезаем:
+/// замены могут удлинить текст.
+pub fn scrub_clip(text: &str, max: usize) -> String {
+    clip_bytes(&scrub(&clip_bytes(text, max.saturating_mul(4))), max)
+}
+
+/// Короткий вид для подписи: rs, ui, br, up (сервер: 4-128 символов из
+/// букв, цифр и _.:-).
+fn sig_prefix(kind: &str) -> &'static str {
+    match kind {
+        "rust" => "rs",
+        "ui" => "ui",
+        "bridge" => "br",
+        "update" => "up",
+        _ => "xx",
+    }
+}
+
+/// Подпись сбоя: вид-хэш, где хэш - первые 16 hex sha256 от kind и
+/// нормализованного места (например rs-4f1a...).
 /// Нормализация: без query/hash в URL, без номеров колонок, без имени
 /// пользователя в путях, обратные слэши как прямые.
 pub fn sig(kind: &str, place: &str) -> String {
@@ -229,7 +257,8 @@ pub fn sig(kind: &str, place: &str) -> String {
     h.update(kind.as_bytes());
     h.update(b"\n");
     h.update(p.as_bytes());
-    h.finalize().iter().take(8).map(|b| format!("{b:02x}")).collect()
+    let hex: String = h.finalize().iter().take(8).map(|b| format!("{b:02x}")).collect();
+    format!("{}-{hex}", sig_prefix(kind))
 }
 
 /// Место сбоя из стека JS: первая строка, где есть «:строка».
@@ -357,7 +386,8 @@ mod tests {
     #[test]
     fn sig_is_stable() {
         let a = sig("ui", "http://tauri.localhost/assets/index.js:10:55?v=1#x");
-        assert_eq!(a.len(), 16);
+        assert_eq!(a.len(), 19);
+        assert!(a.starts_with("ui-"));
         assert_eq!(a, sig("ui", "http://tauri.localhost/assets/index.js:10:99"), "колонка и query не влияют");
         assert_ne!(a, sig("ui", "http://tauri.localhost/assets/index.js:11:55"));
         assert_ne!(a, sig("rust", "http://tauri.localhost/assets/index.js:10:55"));
@@ -367,6 +397,39 @@ mod tests {
             "имя пользователя не влияет"
         );
         assert_eq!(sig("rust", "/home/a/x.rs:5"), sig("rust", "/home/b/x.rs:5"));
+    }
+
+    #[test]
+    fn sig_fits_server_format() {
+        let ok = |s: &str| {
+            (4..=128).contains(&s.len()) && s.chars().all(|c| c.is_ascii_alphanumeric() || "_.:-".contains(c))
+        };
+        for (kind, pre) in [("rust", "rs-"), ("ui", "ui-"), ("bridge", "br-"), ("update", "up-")] {
+            let s = sig(kind, r"C:\Users\Иван Петров\x.rs:5");
+            assert!(ok(&s) && s.starts_with(pre), "{s}");
+        }
+        assert!(ok(&sig("что-то", "место")));
+    }
+
+    #[test]
+    fn scrubs_key_token_password_and_bearer() {
+        assert_eq!(clean("GET /x?token=abc123&y=1"), "GET /x?token=<secret>&y=1");
+        assert_eq!(clean("password=hunter2 ok"), "password=<secret> ok");
+        assert_eq!(clean("api_key=sk-12345, next"), "api_key=<secret>, next");
+        assert_eq!(clean("Authorization: Bearer abc.def-ghi_1/2="), "Authorization: Bearer <token>");
+        assert_eq!(clean("keyboard layout"), "keyboard layout");
+    }
+
+    #[test]
+    fn clip_fits_bytes_after_scrub() {
+        let long = "Ошибка соединения с 1.2.3.4 ".repeat(500);
+        let out = scrub_clip(&long, 1024);
+        assert!(out.len() <= 1024, "{}", out.len());
+        assert!(std::str::from_utf8(out.as_bytes()).is_ok());
+        // Замена IP на <ip> делает текст длиннее; лимит всё равно держится.
+        let ips = "1.2.3.4 ".repeat(2000);
+        assert!(scrub_clip(&ips, 1000).len() <= 1000);
+        assert_eq!(clip_bytes("яя", 3), "я", "по границе символа");
     }
 
     #[test]

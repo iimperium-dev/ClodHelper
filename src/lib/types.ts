@@ -438,6 +438,8 @@ export interface NoticeItem {
   title: string;
   body: string;
   link: string | null;
+  /** Подпись кнопки со ссылкой; нет - «Подробнее». */
+  link_label?: string | null;
   read: boolean;
 }
 

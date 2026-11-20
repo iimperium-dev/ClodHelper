@@ -145,6 +145,7 @@ pub fn run() {
             commands::privacy_set,
             commands::telemetry_ui_error,
             commands::telemetry_report,
+            commands::notice_event,
             commands::play_chime,
             commands::diagnostics_report,
             commands::notices_list,
