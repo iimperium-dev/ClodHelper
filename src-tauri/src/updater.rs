@@ -939,7 +939,7 @@ impl SwapScript<'_> {
              pid={pid}\ni=0\n\
              while kill -0 $pid 2>/dev/null; do\n  i=$((i+1))\n  if [ $i -gt {steps} ]; then\n    echo \"$(date '+%F %T') программа не вышла за {wait} с, замену отменяю\"\n    rm -rf {new}\n    exit 1\n  fi\n  sleep 0.3\ndone\n\
              mkdir -p {bdir}\nrm -rf {bold}\n\
-             if mv {app} {bold}; then\n  if mv {new} {app}; then\n    echo \"$(date '+%F %T') версия заменена\"\n  else\n    mv {bold} {app}\n    echo \"$(date '+%F %T') не удалось поставить новую, вернул старую\"\n  fi\nelse\n  echo \"$(date '+%F %T') не удалось переместить старую версию\"\n  rm -rf {new}\nfi\n\
+             if mv {app} {bold}; then\n  if mv {new} {app}; then\n    for f in {bdir}/*.app; do [ \"$f\" = {bold} ] || rm -rf \"$f\"; done\n    echo \"$(date '+%F %T') версия заменена\"\n  else\n    mv {bold} {app}\n    echo \"$(date '+%F %T') не удалось поставить новую, вернул старую\"\n  fi\nelse\n  echo \"$(date '+%F %T') не удалось переместить старую версию\"\n  rm -rf {new}\nfi\n\
              xattr -dr com.apple.quarantine {app} 2>/dev/null\n{open}\n\
              echo \"$(date '+%F %T') запуск: готово\"\n",
             log = self.log,
@@ -952,25 +952,6 @@ impl SwapScript<'_> {
             app = self.app,
             open = open,
         )
-    }
-}
-
-/// Оставить в папке резервных копий не больше `keep` последних `.app`
-/// (старые удаляются). Вызывается перед созданием новой копии: keep = 0.
-#[cfg_attr(target_os = "windows", allow(dead_code))]
-fn prune_backups(dir: &Path, keep: usize) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
-    let mut apps: Vec<(std::time::SystemTime, PathBuf)> = rd
-        .flatten()
-        .filter(|e| {
-            let n = e.file_name().to_string_lossy().into_owned();
-            n.starts_with("Clod Helper (") && n.ends_with(").app")
-        })
-        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
-        .collect();
-    apps.sort_by(|a, b| b.0.cmp(&a.0));
-    for (_, p) in apps.into_iter().skip(keep) {
-        let _ = std::fs::remove_dir_all(&p);
     }
 }
 
@@ -1013,7 +994,6 @@ fn platform_install(run: &Path, dmg: &Path, info: &UpdateInfo, silent: bool, how
     // новую - на место.
     let backup_dir = dirs::data_dir().ok_or("Нет папки данных")?.join("ClodHelper-backup");
     let _ = std::fs::create_dir_all(&backup_dir);
-    prune_backups(&backup_dir, 0);
     let log = dirs::home_dir().ok_or("Нет домашней папки")?.join("Library/Logs/ClodHelper/update-swap.log");
     let q = |p: &Path| crate::macos::sh_quote(&p.to_string_lossy());
     let backup_app = backup_dir.join(format!("Clod Helper ({}).app", env!("CARGO_PKG_VERSION")));
@@ -1395,27 +1375,10 @@ mod tests {
         assert!(quiet.contains("sleep 0.3"));
         assert!(quiet.contains("exec >> \"$log\" 2>&1"));
         assert!(quiet.contains("log='/L/update-swap.log'"));
+        // Лишние резервные копии убираются, остаётся предыдущая (она же bold).
+        assert!(quiet.contains("for f in '/B'/*.app; do [ \"$f\" = '/B/Clod Helper (0.8.18).app' ] || rm -rf \"$f\"; done"));
         // Откат, если новая не встала.
         assert!(quiet.contains("mv '/B/Clod Helper (0.8.18).app' '/A/Clod Helper.app'"));
-    }
-
-    #[test]
-    fn only_one_backup_is_kept() {
-        let dir = std::env::temp_dir().join(format!("clod-backups-{}-{}", std::process::id(), random_hex()));
-        std::fs::create_dir_all(&dir).unwrap();
-        for v in ["0.8.15", "0.8.16", "0.8.17"] {
-            std::fs::create_dir_all(dir.join(format!("Clod Helper ({v}).app"))).unwrap();
-        }
-        std::fs::create_dir_all(dir.join("Чужая папка")).unwrap();
-        prune_backups(&dir, 0);
-        let left: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
-        assert_eq!(left, ["Чужая папка"], "свои копии убраны, чужое не тронуто");
-        for v in ["0.8.15", "0.8.16"] {
-            std::fs::create_dir_all(dir.join(format!("Clod Helper ({v}).app"))).unwrap();
-        }
-        prune_backups(&dir, 1);
-        assert_eq!(std::fs::read_dir(&dir).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().starts_with("Clod Helper (")).count(), 1);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1841,5 +1804,46 @@ mod tests {
     #[ignore]
     async fn live_update_signature() {
         fetch_manifest().await.expect("подпись последнего релиза не сошлась");
+    }
+    /// Живой прогон скрипта замены в sh на временных папках: в резерве
+    /// остаётся только предыдущая версия.
+    #[cfg(unix)]
+    #[test]
+    fn swap_keeps_only_previous_backup() {
+        let root = std::env::temp_dir().join(format!("clod-swap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let backup = root.join("backup dir");
+        let app = root.join("Apps/Clod Helper.app");
+        let staged = root.join("Apps/Clod Helper.app.new");
+        for (dir, mark) in [(&app, "old"), (&staged, "new")] {
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::write(dir.join("v"), mark).unwrap();
+        }
+        let stale = backup.join("Clod Helper (0.0.1).app");
+        std::fs::create_dir_all(&stale).unwrap();
+        // pid уже завершившегося процесса: ждать нечего.
+        let mut done = std::process::Command::new("true").spawn().unwrap();
+        let pid = done.id();
+        done.wait().unwrap();
+        let q = |p: &Path| crate::macos::sh_quote(&p.to_string_lossy());
+        let script = SwapScript {
+            pid,
+            log: &q(&root.join("swap.log")),
+            backup_dir: &q(&backup),
+            backup_app: &q(&backup.join("Clod Helper (9.9.9).app")),
+            app: &q(&app),
+            staged: &q(&staged),
+            silent: false,
+        }
+        .render()
+        .replace("\nopen ", "\n: open ");
+        let ok = std::process::Command::new("/bin/sh").arg("-c").arg(&script).status().unwrap();
+        assert!(ok.success());
+        assert_eq!(std::fs::read_to_string(app.join("v")).unwrap(), "new");
+        let prev = backup.join("Clod Helper (9.9.9).app");
+        assert_eq!(std::fs::read_to_string(prev.join("v")).unwrap(), "old");
+        assert!(!stale.exists(), "старые копии должны удаляться");
+        assert!(!staged.exists());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
