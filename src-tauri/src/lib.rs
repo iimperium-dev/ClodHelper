@@ -1,4 +1,5 @@
 mod apps;
+mod auto_update;
 mod autostart;
 mod bridge_file;
 mod claude_desktop;
@@ -9,6 +10,8 @@ mod claude_wipe;
 mod commands;
 mod diagnostics;
 mod notices;
+mod telemetry;
+mod telemetry_scrub;
 #[cfg(target_os = "windows")]
 mod elevate;
 mod env_proxy;
@@ -75,6 +78,9 @@ pub fn run() {
         )
         .init();
 
+    // Сбои Rust: запись на диск до аварийного выхода, отправка при старте.
+    telemetry::install_panic_hook();
+
     // Из Dock/Finder приложение получает PATH без Homebrew/nvm - node, npm и
     // claude не нашлись бы. Чиним до любых спавнов.
     #[cfg(not(target_os = "windows"))]
@@ -82,7 +88,15 @@ pub fn run() {
 
     // Контекст (с ресурсами фронтенда) создаётся один раз: второй вызов
     // generate_context! вшил бы фронтенд в exe повторно.
-    let context = tauri::generate_context!();
+    #[allow(unused_mut)]
+    let mut context = tauri::generate_context!();
+    // Запуск в трей (--tray: автозапуск, тихое обновление): главное окно
+    // сразу создаётся скрытым, без мелькания на экране.
+    if std::env::args().any(|a| a == "--tray") {
+        for w in context.config_mut().app.windows.iter_mut().filter(|w| w.label == "main") {
+            w.visible = false;
+        }
+    }
 
     // Заставка на время установки обновления - отдельный короткий режим.
     #[cfg(target_os = "windows")]
@@ -134,6 +148,15 @@ pub fn run() {
             commands::update_toast_open,
             commands::update_toast_close,
             commands::whats_new_take,
+            commands::auto_update_get,
+            commands::auto_update_set,
+            commands::privacy_get,
+            commands::privacy_set,
+            commands::privacy_notice_seen,
+            commands::telemetry_report_preview,
+            commands::telemetry_ui_error,
+            commands::telemetry_report,
+            commands::notice_event,
             commands::play_chime,
             commands::diagnostics_report,
             commands::notices_list,
@@ -234,7 +257,6 @@ pub fn run() {
             commands::google_ads_get,
             commands::google_ads_set,
             commands::proxies_ping,
-            commands::proxy_speedtest,
             // Окна (трей-попап)
             commands::show_main_window,
             commands::quit_app,
@@ -275,6 +297,15 @@ pub fn run() {
             // Фоновая проверка обновлений: новая версия - уведомление в углу
             // экрана со звуком (одно на версию).
             update_notify::spawn_watcher(app.handle().clone());
+            // Тихая автоустановка: скачивание заранее и установка при простое;
+            // итог установки, начатой прошлой копией, проверяется тут же.
+            auto_update::spawn(app.handle().clone());
+
+            // Статистика (раз в сутки) и отчёт о сбое прошлого запуска.
+            // Метка установки - здесь: единственный экземпляр уже проверен,
+            // режим заставки обновления сюда не доходит.
+            telemetry::mark_legacy();
+            telemetry::spawn();
 
             // macOS: агент переменных старого формата (`/bin/sh -c`, виден в
             // «Объектах входа» как безымянный «sh») → `clod-helper --apply-env`.

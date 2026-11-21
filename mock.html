@@ -11,7 +11,15 @@
   Стенд интерфейса без Tauri: подставной бэкенд с реалистичными данными.
   npm run mock → http://localhost:1420/mock.html (в vite build не входит).
   ?still - без анимаций (для снимков), ?platform=win - интерфейс Windows,
-  ?fresh - первый запуск: моста ещё нет, открывается мастер.
+  ?fresh - первый запуск: моста ещё нет, открывается мастер (?wizfail -
+  установка падает на проверке, ?wizslow - фазы идут медленно).
+  ?whatsnew - окно «Что нового» после обновления; ?autooffer - затем
+  предложение включить автообновление (установка до этой функции).
+  ?noticebanner - обычная установка, автообновление уже отвечено, переключатели ещё не показывали
+  (плашка про отчёты; ?newinstall - без «С этой версии»); window.__noticeSeen() - флаг privacy_notice_seen.
+  ?statsoff - ответ уже был; ?privacyfail - privacy_get падает, пока window.__privacyFailOff не true.
+  ?reportlimit (429) и ?reportbusy (503) - ошибка отправки; ?reportslow - отправка 9 секунд; __reportNonces.
+  ?reportfail - отправка отчёта падает; window.__privacy(), __reports, __uiErrors - для тестов.
   Используется тестами tests/ui (Playwright).
 -->
 <script>
@@ -121,11 +129,15 @@
       dns: [{ ip: "172.253.11.22", country: "United States of America", org: "Google LLC" }],
       ip_hidden: true, dns_leak: false, leaking_apps: [], error: null,
     },
-    update_check: { version: "0.7.0", notes: "", url: "x", sums_url: "y" },
-    notices_list: [],
+    update_check: { version: "0.7.0", notes: "", url: "x", sums_url: "y", page: "https://example.com/release",
+      ...(params.has("manual") ? { manual_only: true } : {}),
+      handles_silently: !params.has("autooffer") && !params.has("manual") && !params.has("nosilent") },
+    notices_list: params.has("notice")
+      ? [{ id: "whats-new-0-9-1", kind: "news", date: "2026-11-11", title: "Вышла версия 0.9.1", body: "Что изменилось в этой версии.", link: "https://example.com/new", link_label: "Что нового", read: false }]
+      : [],
     proxy_backups_get: {},
     notices_mark_read: [],
-    whats_new_take: null,
+    whats_new_take: params.has("whatsnew") ? "0.8.18" : null,
     bridge_file_issue: null,
     "plugin:app|version": "0.6.0",
     "plugin:autostart|is_enabled": true,
@@ -143,11 +155,41 @@
     R.shim_script_path = null;
     R.shim_status = { running: false };
   }
+  // Автообновление: ?autooffer - установка до этой функции, ещё не спрашивали.
+  let autoUpdate = params.has("autooffer") ? null : true;
+  window.__autoUpdate = () => autoUpdate;
+  // Отчёты об ошибках и статистика: включены по умолчанию (None = включено).
+  // ?statsoff - человек уже отвечал: статистика выключена, флаг показа стоит (мастер потом не должен это перезаписать).
+  let privacy = { crash_reports: true, usage_stats: !params.has("statsoff") };
+  // Флаг privacy_notice_seen: до показа переключателей ничего не уходит.
+  // По умолчанию в стенде «уже показаны»; мастер, окно предложения и ?noticebanner начинают с false.
+  // Между перезагрузками страницы флаг держится в sessionStorage (как настройки на диске).
+  let noticeSeen = params.has("statsoff") || !(params.has("noticebanner") || params.has("autooffer") || params.has("fresh"));
+  try { if (sessionStorage.getItem("mockNoticeSeen") === "1") noticeSeen = true; } catch {}
+  window.__noticeSeen = () => noticeSeen;
+  window.__privacyWrites = [];
+  const privacyState = () => ({ auto_update: autoUpdate === true, ...privacy, offer: autoUpdate === null && !params.has("fresh"), notice_seen: noticeSeen, legacy: !params.has("newinstall") });
+  window.__privacy = () => ({ auto_update: autoUpdate === true, ...privacy });
+  window.__reports = [];
+  window.__uiErrors = [];
   window.__R = R; // тесты меняют ответы на лету (например, растущие ошибки прокси)
   let cbId = 1;
+  // События Tauri: listen() регистрирует колбэк, window.__emit(имя, данные)
+  // доставляет его (как emit из Rust) - для хода установки мастера и т.п.
+  const callbacks = {};
+  let listeners = [];
+  let listenId = 1;
+  window.__emit = (event, payload) => {
+    for (const l of listeners) if (l.event === event) callbacks[l.handler]?.({ event, id: l.id, payload });
+  };
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   window.__TAURI_INTERNALS__ = {
     metadata: { currentWindow: { label: "main" }, currentWebview: { windowLabel: "main", label: "main" } },
-    transformCallback: () => cbId++,
+    transformCallback: (cb) => {
+      const id = cbId++;
+      callbacks[id] = cb;
+      return id;
+    },
     unregisterCallback: () => {},
     convertFileSrc: (p) => p,
     invoke: async (cmd, args) => {
@@ -259,7 +301,77 @@
       if (cmd === "proxy_assignments_set") { await new Promise((r) => setTimeout(r, 500)); R.proxy_assignments_get = args.assignments; return null; }
       if (cmd === "apps_relaunch") { await new Promise((r) => setTimeout(r, 700)); return null; }
       if (cmd === "reveal_in_folder") return null;
+      if (cmd === "plugin:event|listen") {
+        const id = listenId++;
+        listeners.push({ id, event: args.event, handler: args.handler });
+        return id;
+      }
+      if (cmd === "plugin:event|unlisten") {
+        listeners = listeners.filter((l) => l.id !== args.eventId);
+        return null;
+      }
       if (cmd.startsWith("plugin:event|")) return 1;
+      if (cmd === "update_install") {
+        await wait(200);
+        if (params.has("busyupd")) throw "Обновление уже устанавливается";
+        return null;
+      }
+      if (cmd === "auto_update_get") return { enabled: autoUpdate === true, offer: autoUpdate === null && !params.has("fresh") };
+      if (cmd === "privacy_get") {
+        if (params.has("privacyfail") && !window.__privacyFailOff) throw "Не получилось прочитать настройки";
+        return privacyState();
+      }
+      if (cmd === "privacy_notice_seen") {
+        noticeSeen = true;
+        try { sessionStorage.setItem("mockNoticeSeen", "1"); } catch {}
+        return null;
+      }
+      if (cmd === "telemetry_report_preview") {
+        return JSON.stringify({ v: "0.9.1", os: win ? "windows" : "macos", nonce: args.nonce, text: args.text, diag: "Версия: 0.9.1\nПрокси: <proxy>", ...(args.contact ? { contact: args.contact } : {}) }, null, 2);
+      }
+      if (cmd === "privacy_set") {
+        window.__privacyWrites.push({ key: args.key, on: !!args.on });
+        if (args.key === "auto_update") autoUpdate = !!args.on;
+        else if (args.key in privacy) privacy[args.key] = !!args.on;
+        else throw "Неизвестная настройка";
+        return privacyState();
+      }
+      if (cmd === "telemetry_report") {
+        (window.__reportNonces ||= []).push(args.nonce);
+        await wait(params.has("reportslow") ? 9000 : 600);
+        if (params.has("reportlimit")) throw "Лимит отчётов на сегодня исчерпан. Попробуйте завтра";
+        if (params.has("reportbusy")) throw "Сервер сейчас не принимает отчёты. Попробуйте позже";
+        if (params.has("reportfail")) throw "Не получилось отправить. Проверьте интернет и попробуйте ещё раз";
+        window.__reports.push({ text: args.text, contact: args.contact });
+        return null;
+      }
+      if (cmd === "notice_event") {
+        (window.__noticeEvents ||= []).push({ id: args.id, ev: args.ev });
+        return null;
+      }
+      if (cmd === "telemetry_ui_error") {
+        window.__uiErrors.push({ msg: args.msg, stack: args.stack });
+        return null;
+      }
+      if (cmd === "auto_update_set") {
+        autoUpdate = !!args.enabled;
+        return { enabled: autoUpdate, offer: false };
+      }
+      // Мастер: фазы установки событиями "wizard:step", как wizard_install.
+      if (cmd === "wizard_install") {
+        const step = params.has("wizslow") ? 900 : params.has("still") ? 40 : 420;
+        const phases = ["bridge", "task", "env", "presets", ...(win ? [] : ["claude"]), "test"];
+        for (const ph of phases) {
+          window.__emit("wizard:step", ph + ":start");
+          await wait(step);
+          if (ph === "test" && params.has("wizfail")) {
+            window.__emit("wizard:step", "test:err");
+            throw "Прокси не ответил за 10 секунд (185.68.187.138:8000)";
+          }
+          window.__emit("wizard:step", ph + ":ok");
+        }
+        return { test: structuredClone(R.shim_test), env_on: true };
+      }
       if (cmd in R) return structuredClone(R[cmd]);
       if (cmd in SITES) return structuredClone(SITES[cmd]);
       (window.__mockMisses ||= []).push(cmd);

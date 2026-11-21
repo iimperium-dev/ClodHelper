@@ -65,6 +65,8 @@ pub(crate) const DESKTOP_CHATS: &[&str] = &[
     "scratch-workspaces",
     "side-session-notes",
     "git-worktrees.json",
+    // Теневые git-копии рабочих папок сессий (для отмены правок).
+    "git-shadow",
 ];
 /// Переписка и связанное у Claude Code (~/.claude).
 const CODE_CHATS: &[&str] = &[
@@ -186,6 +188,8 @@ const DESKTOP_REMOVE: &[(Group, &str)] = &[
     (Group::Login, "Network"),
     (Group::Login, "Cookies"),
     (Group::Login, "Cookies-journal"),
+    // Состояние сети: на macOS лежит в корне userData, а не в Network.
+    (Group::Login, "Network Persistent State"),
     (Group::Login, "ssh-remote-server-state.json"),
     // Секреты сессий Code и доступы, выданные под аккаунт.
     (Group::Login, "ccd-session-secrets"),
@@ -249,6 +253,7 @@ const DESKTOP_REMOVE: &[(Group, &str)] = &[
     (Group::Cache, "DawnGraphiteCache"),
     (Group::Cache, "DawnWebGPUCache"),
     (Group::Cache, "DawnCache"),
+    (Group::Cache, "GraphiteDawnCache"),
     (Group::Cache, "GrShaderCache"),
     (Group::Cache, "ShaderCache"),
     (Group::Cache, "GPUPersistentCache"),
@@ -364,6 +369,12 @@ const CODE_DIR_REMOVE: &[(Group, &str)] = &[
     (Group::Account, "policy-limits.json"),
     (Group::Account, "mcp-needs-auth-cache.json"),
     (Group::Account, "bridge-pointer.json"),
+    // Claude Desktop запускает свой Claude Code и сервер удалённых сессий из
+    // ~/.claude/remote: здесь токен демона, его журнал и плагины организации
+    // (как plugin-list у Desktop). Сами программы (ccd-cli, srv) скачаются
+    // заново, их не трогаем.
+    (Group::Login, "remote/run"),
+    (Group::Account, "remote/plugins"),
     // Каталог моделей: имена файлов - id организации и хэш аккаунта.
     (Group::Account, "cache/model-catalog"),
     (Group::Logs, "telemetry"),
@@ -564,6 +575,8 @@ pub fn env() -> Env {
             const ID: &str = "com.anthropic.claudefordesktop";
             e.desktop_extra.push((Group::Logs, lib.join("Logs").join("Claude")));
             e.desktop_extra.push((Group::Cache, lib.join("Caches").join(ID)));
+            // Кэш обновлятора Squirrel (ShipIt).
+            e.desktop_extra.push((Group::Cache, lib.join("Caches").join(format!("{ID}.ShipIt"))));
             e.desktop_extra.push((Group::Login, lib.join("HTTPStorages").join(ID)));
             e.desktop_extra.push((Group::Login, lib.join("HTTPStorages").join(format!("{ID}.binarycookies"))));
             e.desktop_extra.push((Group::Cache, lib.join("Saved Application State").join(format!("{ID}.savedState"))));
@@ -607,6 +620,10 @@ fn size_of(p: &Path) -> Option<(u64, u32)> {
     }
     let mut bytes = 0;
     let mut stack = vec![p.to_path_buf()];
+    // Жёсткие ссылки считаем один раз: cargo в target/ дублирует ими файлы,
+    // и на Маке 19 ГБ рабочих папок показывались как 33 ГБ.
+    #[cfg(unix)]
+    let mut seen = std::collections::HashSet::new();
     while let Some(d) = stack.pop() {
         for entry in read_dir(&d) {
             // Метаданные из самого перечисления папки: без лишнего обращения
@@ -615,6 +632,13 @@ fn size_of(p: &Path) -> Option<(u64, u32)> {
             if m.is_dir() && !m.file_type().is_symlink() {
                 stack.push(entry.path());
             } else {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt;
+                    if m.nlink() > 1 && !seen.insert((m.dev(), m.ino())) {
+                        continue;
+                    }
+                }
                 bytes += m.len();
             }
         }
@@ -1303,7 +1327,12 @@ fn is_npm_cli(p: &sysinfo::Process) -> bool {
 #[cfg(target_os = "windows")]
 fn processes(env: &Env) -> Procs {
     let desktop_exe = crate::claude_desktop::detect().map(|i| i.exe_path.to_lowercase());
-    let data: Vec<String> = env.desktop_dirs.iter().map(|d| d.to_string_lossy().to_lowercase()).collect();
+    let mut data: Vec<String> = env.desktop_dirs.iter().map(|d| d.to_string_lossy().to_lowercase()).collect();
+    // Claude Code и сервер удалённых сессий, которые запускает Desktop
+    // (~/.claude/remote) - тоже его помощники: на Маке они там живут.
+    if let Some(dir) = &env.code_dir {
+        data.push(dir.join("remote").to_string_lossy().to_lowercase());
+    }
     let sys = process_list();
     let mine = mine(&sys);
     let mut out = Procs::default();
@@ -1339,8 +1368,39 @@ fn processes(env: &Env) -> Procs {
     out
 }
 
+/// macOS: чей это процесс.
+#[cfg(any(target_os = "macos", test))]
+#[derive(Debug, PartialEq, Eq)]
+enum MacProc {
+    Desktop,
+    Helper,
+    Cli,
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn mac_proc(exe: &str, name: &str, code_dir: Option<&Path>, npm_cli: bool) -> Option<MacProc> {
+    if exe.contains("/Claude.app/Contents/") {
+        return Some(MacProc::Desktop);
+    }
+    if exe.contains("/Application Support/Claude/") {
+        return Some(MacProc::Helper);
+    }
+    // Claude Code вкладки Code и сервер удалённых сессий, которые запускает
+    // Desktop: ~/.claude/remote/ccd-cli/<версия>, ~/.claude/remote/srv/<хэш>/server.
+    // Имя процесса у них - версия или «server», а не «claude».
+    if code_dir.is_some_and(|d| Path::new(exe).starts_with(d.join("remote"))) {
+        return Some(MacProc::Helper);
+    }
+    // Отдельный Claude Code: Homebrew/npm (имя claude) или родной установщик
+    // (~/.local/share/claude/versions/<версия> - имя процесса тоже версия).
+    if name == "claude" || exe.contains("/.local/share/claude/versions/") || npm_cli {
+        return Some(MacProc::Cli);
+    }
+    None
+}
+
 #[cfg(target_os = "macos")]
-fn processes(_env: &Env) -> Procs {
+fn processes(env: &Env) -> Procs {
     let sys = process_list();
     let mine = mine(&sys);
     let mut out = Procs::default();
@@ -1349,12 +1409,12 @@ fn processes(_env: &Env) -> Procs {
             continue;
         }
         let exe = p.exe().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
-        if exe.contains("/Claude.app/Contents/") {
-            out.desktop.push(pid.as_u32());
-        } else if exe.contains("/Application Support/Claude/") {
-            out.helpers.push(pid.as_u32());
-        } else if p.name().to_string_lossy() == "claude" || is_npm_cli(p) {
-            out.cli.push(pid.as_u32());
+        let name = p.name().to_string_lossy();
+        match mac_proc(&exe, &name, env.code_dir.as_deref(), is_npm_cli(p)) {
+            Some(MacProc::Desktop) => out.desktop.push(pid.as_u32()),
+            Some(MacProc::Helper) => out.helpers.push(pid.as_u32()),
+            Some(MacProc::Cli) => out.cli.push(pid.as_u32()),
+            None => {}
         }
     }
     out
@@ -1393,11 +1453,21 @@ fn wait_until(secs: u64, left: impl Fn() -> bool) -> bool {
 fn ask_desktop_to_quit(pids: &[u32]) {
     let _ = crate::win::end_session(pids);
 }
+/// macOS: SIGTERM главному процессу - Electron выходит штатно, как по ⌘Q,
+/// и сохраняет данные. AppleScript «quit» тут не годится: macOS спрашивает
+/// разрешение «Clod Helper хочет управлять Claude», и очистка ждала ответа.
 #[cfg(target_os = "macos")]
-fn ask_desktop_to_quit(_pids: &[u32]) {
-    let _ = std::process::Command::new("/usr/bin/osascript")
-        .args(["-e", "tell application \"Claude\" to quit"])
-        .status();
+fn ask_desktop_to_quit(pids: &[u32]) {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, Signal, System, UpdateKind};
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::new().with_exe(UpdateKind::OnlyIfNotSet));
+    for pid in pids {
+        if let Some(p) = sys.process(Pid::from_u32(*pid)) {
+            if p.exe().is_some_and(|e| e.ends_with("Contents/MacOS/Claude")) {
+                let _ = p.kill_with(Signal::Term);
+            }
+        }
+    }
 }
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn ask_desktop_to_quit(_pids: &[u32]) {}
@@ -1776,7 +1846,25 @@ mod tests {
         let _serial = crate::claude_chats_export::tests::serial();
         let a = crate::claude_chats_export::export_to(&env(), &out).unwrap();
         eprintln!("{:?} за {:?}", a, started.elapsed());
-        let _ = std::fs::remove_dir_all(&out);
+        // CLOD_KEEP_EXPORT=1 - оставить архив, чтобы открыть его руками.
+        if std::env::var_os("CLOD_KEEP_EXPORT").is_none() {
+            let _ = std::fs::remove_dir_all(&out);
+        }
+    }
+
+    /// Что закрыла бы очистка на этом компьютере (только смотрит, никого не закрывает).
+    #[test]
+    #[ignore = "только чтение: список настоящих процессов Claude на этом ПК"]
+    fn processes_real_machine() {
+        use sysinfo::Pid;
+        let p = processes(&env());
+        let sys = process_list();
+        let show = |ids: &[u32]| -> Vec<String> {
+            ids.iter()
+                .map(|id| sys.process(Pid::from_u32(*id)).and_then(|p| p.exe()).map(|e| e.display().to_string()).unwrap_or_default())
+                .collect()
+        };
+        eprintln!("desktop: {:#?}\nhelpers: {:#?}\ncli: {:#?}", show(&p.desktop), show(&p.helpers), show(&p.cli));
     }
 
     #[test]
@@ -1784,5 +1872,70 @@ mod tests {
     fn scan_real_machine() {
         let s = scan();
         eprintln!("{s:#?}");
+    }
+
+    /// Раскладка с живого Мака (ноябрь 2026): всё, что выдаёт аккаунт или
+    /// устройство, удаляется; программы, сертификаты и чаты остаются.
+    #[test]
+    fn mac_layout_from_live_mac() {
+        let root = std::env::temp_dir().join(format!("clod-wipe-mac-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (env, d, home, _tmp) = test_env(&root);
+        let gone = [
+            d.join("Network Persistent State"),
+            d.join("GraphiteDawnCache").join("data_0"),
+            d.join("ant-did"),
+            d.join("ccd-ids.json"),
+            home.join(".claude").join("remote").join("run").join("da1c328b").join("daemon.token"),
+            home.join(".claude").join("remote").join("plugins").join("da1c328b").join("p"),
+        ];
+        let kept = [
+            d.join("claude-code").join("2.1.0").join("claude"),
+            d.join("ca-bundle.pem"),
+            d.join("window-state.json"),
+            d.join("terminal-shell-integration").join("zsh"),
+            d.join("git-shadow").join("cli-temp-roots.json"),
+            home.join(".claude").join("remote").join("ccd-cli").join("2.1.325"),
+            home.join(".claude").join("remote").join("srv").join("h").join("server"),
+            home.join(".claude").join("settings.json"),
+        ];
+        for p in gone.iter().chain(kept.iter()) {
+            write(p, "x");
+        }
+        write(&d.join("config.json"), "{}");
+        let res = wipe_env(&env, true, true, false);
+        assert!(res.failed.is_empty(), "{:?}", res.failed);
+        for p in &gone {
+            assert!(!p.exists(), "осталось {p:?}");
+        }
+        for p in &kept {
+            assert!(p.exists(), "удалено лишнее {p:?}");
+        }
+        // С чатами уходят и теневые копии git сессий.
+        wipe_env(&env, false, false, true);
+        assert!(!d.join("git-shadow").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn mac_processes_are_classified() {
+        let code = Path::new("/Users/u/.claude");
+        let k = |exe: &str, name: &str| mac_proc(exe, name, Some(code), false);
+        assert_eq!(k("/Applications/Claude.app/Contents/MacOS/Claude", "Claude"), Some(MacProc::Desktop));
+        assert_eq!(
+            k("/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)", "Claude Helper (Renderer)"),
+            Some(MacProc::Desktop)
+        );
+        // Claude Code вкладки Code и сервер удалённых сессий - имена не «claude».
+        assert_eq!(k("/Users/u/.claude/remote/ccd-cli/2.1.325-1b2c3c6aecdd", "2.1.325-1b2c3c6aecdd"), Some(MacProc::Helper));
+        assert_eq!(k("/Users/u/.claude/remote/srv/8737/server", "server"), Some(MacProc::Helper));
+        assert_eq!(k("/Users/u/Library/Application Support/Claude/claude-code/2.1.0/claude", "claude"), Some(MacProc::Helper));
+        assert_eq!(k("/opt/homebrew/Caskroom/claude-code/2.1.0/claude", "claude"), Some(MacProc::Cli));
+        assert_eq!(k("/Users/u/.local/share/claude/versions/2.1.3", "2.1.3"), Some(MacProc::Cli));
+        assert_eq!(mac_proc("/opt/homebrew/bin/node", "node", Some(code), true), Some(MacProc::Cli));
+        // Свой мост и чужие программы не трогаем.
+        assert_eq!(k("/Users/u/Library/Application Support/ClaudeDesktopProxy/clod-bridge", "clod-bridge"), None);
+        assert_eq!(k("/Applications/Clod Helper.app/Contents/MacOS/clod-helper", "clod-helper"), None);
+        assert_eq!(k("/opt/homebrew/bin/node", "node"), None);
     }
 }

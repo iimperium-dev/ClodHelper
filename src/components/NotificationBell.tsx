@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { Bell, CheckCheck, Download, ExternalLink } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
-import { noticesList, noticesMarkRead, noticesRefresh, updateLatest } from "../lib/api";
+import { noticeEvent, noticesList, noticesMarkRead, noticesRefresh, updateLatest } from "../lib/api";
 import { openUpdateDialog } from "../lib/updateBus";
 import { cn } from "../lib/cn";
 import type { NoticeItem } from "../lib/types";
@@ -18,7 +18,7 @@ function formatDate(d: string): string {
   Колокольчик в заголовке окна: обновления и рассылки разработчика
   (notices.json в репозитории). Непрочитанное - светящийся кружок с числом.
   Панель: «Прочитать все», клик по уведомлению - прочитано; у обновления -
-  «Обновить», у рассылки со ссылкой - «Подробнее».
+  «Обновить», у рассылки со ссылкой - «Подробнее» (или своя подпись link_label).
 */
 export function NotificationBell() {
   const [items, setItems] = useState<NoticeItem[]>([]);
@@ -197,12 +197,13 @@ export function NotificationBell() {
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   void markRead([i.id]);
+                                  void noticeEvent(i.id, "clicked").catch(() => {});
                                   void import("@tauri-apps/plugin-opener").then((m) => m.openUrl(i.link!));
                                 }}
                                 className="inline-flex items-center gap-1.5 rounded-lg border border-vb-border px-2.5 py-1 text-[12px] text-vb-silver transition-colors hover:border-vb-border-strong"
                               >
                                 <ExternalLink className="h-3.5 w-3.5" />
-                                Подробнее
+                                {i.link_label || "Подробнее"}
                               </button>
                             )}
                           </div>

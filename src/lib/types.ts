@@ -418,7 +418,38 @@ export interface UpdateInfo {
   sha256: string;
   /** Пункты «Что нового» этой версии. */
   highlights?: string[];
+  /** Срочное исправление. */
+  force?: boolean;
+  /** Слишком старая установка: обновить можно только вручную со страницы релиза. */
+  manual_only?: boolean;
+  /** Страница релиза на GitHub. */
+  page?: string;
+  /** Доля установок, которым предложена версия. */
+  rollout?: number;
+  /** Бэкенд: обновление поставится само (автообновление включено и условия позволяют). */
+  handles_silently?: boolean;
 }
+
+/** Автообновление (settings.auto_update). */
+export interface AutoUpdateState {
+  enabled: boolean;
+  /** Один раз предложить включить (установка до этой функции). */
+  offer: boolean;
+}
+
+/** Приватность: три переключателя и «предложить автообновление» (privacy_get). */
+export interface PrivacyState {
+  auto_update: boolean;
+  crash_reports: boolean;
+  usage_stats: boolean;
+  offer: boolean;
+  /** Переключатели или строка про отчёты уже были показаны. */
+  notice_seen: boolean;
+  /** Установка со старой версии (до статистики). */
+  legacy: boolean;
+}
+
+export type PrivacyKey = "auto_update" | "crash_reports" | "usage_stats";
 
 /** Элемент колокольчика: обновление или рассылка разработчика (notices.rs). */
 export interface NoticeItem {
@@ -429,6 +460,8 @@ export interface NoticeItem {
   title: string;
   body: string;
   link: string | null;
+  /** Подпись кнопки со ссылкой; нет - «Подробнее». */
+  link_label?: string | null;
   read: boolean;
 }
 

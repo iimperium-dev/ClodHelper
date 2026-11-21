@@ -26,6 +26,9 @@ pub struct Notice {
     /// Кнопка «Подробнее» - только https.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<String>,
+    /// Подпись кнопки со ссылкой; нет - «Подробнее».
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_label: Option<String>,
     /// "windows" / "macos"; пусто - всем.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub platforms: Vec<String>,
@@ -52,6 +55,7 @@ pub struct NoticeItem {
     pub title: String,
     pub body: String,
     pub link: Option<String>,
+    pub link_label: Option<String>,
     pub read: bool,
 }
 
@@ -86,12 +90,26 @@ fn parse(text: &str, current: &str) -> Result<Vec<Notice>, String> {
         .map(|mut n| {
             // Ссылка только https - никаких file:/javascript: из файла.
             n.link = n.link.filter(|l| l.starts_with("https://"));
+            // Подпись кнопки: без пробелов по краям, не длиннее 40 символов.
+            n.link_label = n
+                .link_label
+                .map(|l| l.trim().chars().take(40).collect::<String>())
+                .filter(|l| !l.is_empty() && n.link.is_some());
             n
         })
         .collect();
     v.sort_by(|a, b| b.date.cmp(&a.date).then_with(|| a.id.cmp(&b.id)));
     v.truncate(50);
     Ok(v)
+}
+
+/// Сервер рассылок спрашиваем не чаще раза в час (по фокусу окна запрос шёл
+/// бы раз в минуту). GitHub - как раньше.
+const SERVER_MIN_GAP: std::time::Duration = std::time::Duration::from_secs(3600);
+static SERVER_AT: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
+fn server_due() -> bool {
+    SERVER_AT.lock().map(|g| g.is_none_or(|t| t.elapsed() >= SERVER_MIN_GAP)).unwrap_or(true)
 }
 
 /// Скачать рассылки и обновить кэш. Возвращает новые (ещё не всплывавшие).
@@ -102,23 +120,115 @@ pub async fn fetch() -> Result<Vec<Notice>, String> {
     if let Some(path) = std::env::var_os("CLOD_NOTICES_FILE") {
         let text = std::fs::read_to_string(path).map_err(|e| format!("CLOD_NOTICES_FILE: {e}"))?;
         let s = crate::settings::set_notices_cache(parse(&text, env!("CARGO_PKG_VERSION"))?)?;
-        return Ok(s.notices_cache.iter().filter(|n| !s.notices_toasted.contains(&n.id)).cloned().collect());
+        return Ok(cached(&s).into_iter().filter(|n| !s.notices_toasted.contains(&n.id)).collect());
     }
     // raw.githubusercontent.com у части провайдеров в России заблокирован:
     // не достали напрямую - берём через свой прокси (строгий вход моста).
+    // Два источника: файл на GitHub и сервер рассылок. Один упал - берём
+    // другой; ошибка - только если не получилось ничего. Сервер статистики
+    // спрашиваем только при включённой статистике.
+    let current = env!("CARGO_PKG_VERSION");
+    let (server_on, au) = tokio::task::spawn_blocking(|| match crate::settings::load_checked() {
+        Ok(s) => (crate::settings::usage_stats_on(&s), crate::settings::auto_update_state(&s).enabled),
+        Err(_) => (false, false),
+    })
+    .await
+    .unwrap_or((false, false));
+    let server_fut = async {
+        if server_on && server_due() {
+            let r = fetch_server(current, au).await;
+            // Отметка только после ответа: сбой или «ещё не показали переключатели»
+            // не должны откладывать следующую попытку на час.
+            if r.is_ok() {
+                if let Ok(mut g) = SERVER_AT.lock() {
+                    *g = Some(std::time::Instant::now());
+                }
+            }
+            Some(r)
+        } else {
+            None
+        }
+    };
+    let (github, server) = tokio::join!(fetch_github(current), server_fut);
+    if let (Err(a), false) = (&github, matches!(server, Some(Ok(_)))) {
+        return Err(match &server {
+            Some(Err(b)) => format!("рассылки: GitHub - {a}; сервер - {b}"),
+            _ => format!("рассылки: GitHub - {a}"),
+        });
+    }
+    // Кэш каждого источника свой: ответил - заменяется целиком, упал -
+    // остаётся прежний (заново проверенный на пригодность этой версии).
+    let s = crate::settings::update_notices_caches(|s| {
+        combine_caches(&s.notices_cache, &s.notices_cache_server, github, server, current)
+    })?;
+    Ok(cached(&s).into_iter().filter(|n| !s.notices_toasted.contains(&n.id)).collect())
+}
+
+/// Новые кэши (GitHub, сервер). Источник ответил (Ok) - его кэш заменяется
+/// целиком; упал (Err) или не спрашивался (None) - берём его прежний кэш,
+/// заново пропущенный через applies(current).
+fn combine_caches(
+    prev_github: &[Notice],
+    prev_server: &[Notice],
+    github: Result<Vec<Notice>, String>,
+    server: Option<Result<Vec<Notice>, String>>,
+    current: &str,
+) -> (Vec<Notice>, Vec<Notice>) {
+    let keep = |prev: &[Notice]| -> Vec<Notice> { prev.iter().filter(|n| applies(n, current)).cloned().collect() };
+    let gh = github.unwrap_or_else(|_| keep(prev_github));
+    let srv = match server {
+        Some(Ok(v)) => v,
+        _ => keep(prev_server),
+    };
+    (gh, srv)
+}
+
+/// Все закэшированные рассылки (оба источника), новые сверху.
+pub fn cached(s: &crate::settings::Settings) -> Vec<Notice> {
+    merge(vec![s.notices_cache.clone(), s.notices_cache_server.clone()])
+}
+
+/// Файл рассылок на GitHub: напрямую, не вышло - через мост. 404 - пусто.
+async fn fetch_github(current: &str) -> Result<Vec<Notice>, String> {
     let text = match download(None).await {
         Ok(t) => t,
         Err(direct) => download(Some(&format!("http://127.0.0.1:{}", crate::claude_desktop::PROXY_PORT)))
             .await
-            .map_err(|via| format!("рассылки: напрямую - {direct}; через мост - {via}"))?,
+            .map_err(|via| format!("напрямую - {direct}; через мост - {via}"))?,
     };
-    // Файла нет (404) - рассылок нет, это нормально.
-    let list = match text {
-        Some(t) => parse(&t, env!("CARGO_PKG_VERSION"))?,
-        None => Vec::new(),
-    };
-    let s = crate::settings::set_notices_cache(list)?;
-    Ok(s.notices_cache.iter().filter(|n| !s.notices_toasted.contains(&n.id)).cloned().collect())
+    match text {
+        Some(t) => parse(&t, current),
+        None => Ok(Vec::new()),
+    }
+}
+
+/// Рассылки с сервера: `GET /v1/notices?v=&os=`. 404 - пусто.
+async fn fetch_server(current: &str, au: bool) -> Result<Vec<Notice>, String> {
+    match crate::telemetry::get(&server_notices_query(current, au)).await? {
+        Some(t) => parse_server(&t, current),
+        None => Ok(Vec::new()),
+    }
+}
+
+/// Запрос рассылок сервера: версия, система и режим автообновления (au=1|0).
+fn server_notices_query(current: &str, au: bool) -> String {
+    let os = if cfg!(target_os = "windows") { "windows" } else { "macos" };
+    format!("/v1/notices?v={current}&os={os}&au={}", u8::from(au))
+}
+
+/// Ответ сервера: `{"notices":[...]}`, записи - как в notices.json.
+/// Отдельная функция: формат могут уточнить.
+fn parse_server(text: &str, current: &str) -> Result<Vec<Notice>, String> {
+    parse(text, current).map_err(|e| e.replace("notices.json", "ответ сервера"))
+}
+
+/// Слить списки по id (первый источник главнее), новые сверху.
+fn merge(lists: Vec<Vec<Notice>>) -> Vec<Notice> {
+    let mut seen = std::collections::HashSet::new();
+    let mut v: Vec<Notice> = lists.into_iter().flatten().filter(|n| seen.insert(n.id.clone())).collect();
+    v.sort_by(|a, b| b.date.cmp(&a.date).then_with(|| a.id.cmp(&b.id)));
+    v.truncate(50);
+    v
 }
 
 /// Скачать notices.json (через прокси, если задан). None - файла нет (404).
@@ -186,9 +296,12 @@ pub fn list() -> Vec<NoticeItem> {
             title: format!("Доступна версия {}", u.version),
             body: u.highlights.first().cloned().unwrap_or_else(|| "Исправления и улучшения".into()),
             link: None,
+            link_label: None,
         });
     }
-    for n in &s.notices_cache {
+    // Итог установки обновления: «Обновлено до X» / «Не установилось».
+    items.extend(crate::auto_update::bell_items(&s, crate::auto_update::now_secs()));
+    for n in &cached(&s) {
         items.push(NoticeItem {
             id: n.id.clone(),
             kind: "news",
@@ -196,6 +309,7 @@ pub fn list() -> Vec<NoticeItem> {
             title: n.title.clone(),
             body: n.body.clone(),
             link: n.link.clone(),
+            link_label: n.link_label.clone(),
             read: s.notices_read.contains(&n.id),
         });
     }
@@ -232,6 +346,100 @@ mod tests {
     }
 
     #[test]
+    fn merge_dedups_by_id_and_sorts() {
+        let n = |id: &str, date: &str, title: &str| Notice {
+            id: id.into(),
+            date: date.into(),
+            title: title.into(),
+            body: String::new(),
+            link: None,
+            link_label: None,
+            platforms: vec![],
+            min_version: None,
+            max_version: None,
+        };
+        let gh = vec![n("a", "2026-11-01", "из GitHub"), n("b", "2026-11-03", "b")];
+        let srv = vec![n("a", "2026-11-01", "с сервера"), n("c", "2026-11-05", "c")];
+        let m = merge(vec![gh, srv]);
+        let ids: Vec<&str> = m.iter().map(|x| x.id.as_str()).collect();
+        assert_eq!(ids, vec!["c", "b", "a"]);
+        assert_eq!(m.iter().find(|x| x.id == "a").unwrap().title, "из GitHub", "дубль: первый источник");
+        assert!(merge(vec![vec![], vec![]]).is_empty());
+        let one = merge(vec![Vec::new(), vec![n("z", "2026-11-01", "z")]]);
+        assert_eq!(one.len(), 1, "пустой источник не мешает другому");
+        // Прежний кэш - младший источник: живёт, пока источник лежит.
+        let cache = vec![n("old", "2026-10-01", "из кэша"), n("a", "2026-11-01", "устаревший a")];
+        let m = merge(vec![vec![n("a", "2026-11-01", "свежий a")], Vec::new(), cache]);
+        assert_eq!(m.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(), vec!["a", "old"]);
+        assert_eq!(m[0].title, "свежий a");
+    }
+
+    #[test]
+    fn source_caches_are_independent() {
+        let n = |id: &str, max: Option<&str>| Notice {
+            id: id.into(),
+            date: "2026-11-01".into(),
+            title: id.into(),
+            body: String::new(),
+            link: None,
+            link_label: None,
+            platforms: vec![],
+            min_version: None,
+            max_version: max.map(str::to_string),
+        };
+        let prev_gh = vec![n("gh-old", None), n("gh-gone", Some("0.1.0"))];
+        let prev_srv = vec![n("srv-old", None)];
+        let ids = |v: &[Notice]| v.iter().map(|x| x.id.clone()).collect::<Vec<_>>();
+        // GitHub упал, сервер ответил: кэш GitHub - прежний (минус неподходящее), кэш сервера заменён целиком.
+        let (gh, srv) = combine_caches(&prev_gh, &prev_srv, Err("нет сети".into()), Some(Ok(vec![n("srv-new", None)])), "0.8.3");
+        assert_eq!(ids(&gh), vec!["gh-old"], "прежний кэш заново прошёл applies");
+        assert_eq!(ids(&srv), vec!["srv-new"], "ответивший источник заменяется целиком");
+        // Сервер упал, GitHub ответил пустым списком: пустой ответ тоже заменяет кэш.
+        let (gh, srv) = combine_caches(&prev_gh, &prev_srv, Ok(vec![]), Some(Err("500".into())), "0.8.3");
+        assert!(gh.is_empty());
+        assert_eq!(ids(&srv), vec!["srv-old"]);
+        // Сервер не спрашивали (статистика выключена): его кэш остаётся.
+        let (_, srv) = combine_caches(&prev_gh, &prev_srv, Ok(vec![]), None, "0.8.3");
+        assert_eq!(ids(&srv), vec!["srv-old"]);
+        // Колокольчик видит оба источника.
+        let s = crate::settings::Settings { notices_cache: prev_gh, notices_cache_server: prev_srv, ..Default::default() };
+        assert_eq!(cached(&s).len(), 3);
+    }
+
+    #[test]
+    fn link_label_is_optional_and_trimmed() {
+        let v = parse(
+            r#"{"notices":[
+            {"id":"a","date":"2026-11-01","title":"A","link":"https://x.y","link_label":"  Что нового  "},
+            {"id":"b","date":"2026-11-02","title":"B","link":"https://x.y"},
+            {"id":"c","date":"2026-11-03","title":"C","link_label":"без ссылки"},
+            {"id":"d","date":"2026-11-04","title":"D","link":"https://x.y","link_label":"   ","level":"info"}
+        ]}"#,
+            "0.8.3",
+        )
+        .unwrap();
+        let get = |id: &str| v.iter().find(|n| n.id == id).unwrap().link_label.clone();
+        assert_eq!(get("a").as_deref(), Some("Что нового"));
+        assert_eq!(get("b"), None);
+        assert_eq!(get("c"), None, "подпись без ссылки не нужна");
+        assert_eq!(get("d"), None);
+    }
+
+    #[test]
+    fn server_query_carries_auto_update_flag() {
+        assert!(server_notices_query("0.9.1", true).ends_with("&au=1"));
+        assert!(server_notices_query("0.9.1", false).ends_with("&au=0"));
+        assert!(server_notices_query("0.9.1", true).starts_with("/v1/notices?v=0.9.1&os="));
+    }
+
+    #[test]
+    fn server_notices_use_same_format() {
+        let v = parse_server(r#"{"notices":[{"id":"s1","date":"2026-11-10","title":"С сервера","link":"https://x.y"}]}"#, "0.8.18").unwrap();
+        assert_eq!(v.len(), 1);
+        assert!(parse_server("{bad", "0.8.18").unwrap_err().contains("ответ сервера"));
+    }
+
+    #[test]
     fn only_recent_notices_pop_up() {
         let n = |date: &str| Notice {
             id: "x".into(),
@@ -239,6 +447,7 @@ mod tests {
             title: "t".into(),
             body: String::new(),
             link: None,
+            link_label: None,
             platforms: vec![],
             min_version: None,
             max_version: None,

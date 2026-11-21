@@ -51,3 +51,6 @@ src-tauri/resources/clod-bridge
 src-tauri/target-macos-check
 test-results/
 playwright-report/
+
+# Карты исходников (разбор сбоев): переносятся из dist после сборки
+sourcemaps/

@@ -16,6 +16,9 @@ import type {
   FoundApp,
   PrivacyReport,
   UpdateInfo,
+  AutoUpdateState,
+  PrivacyKey,
+  PrivacyState,
   BrowserPolicyStatus,
   LeakGuardStatus,
   AutostartState,
@@ -527,6 +530,11 @@ export function noticesMarkRead(ids: string[]): Promise<NoticeItem[]> {
   return invoke<NoticeItem[]>("notices_mark_read", { ids });
 }
 
+/** Событие уведомления для статистики: shown | clicked | dismissed (один раз, только при включённой статистике). */
+export function noticeEvent(id: string, ev: "shown" | "clicked" | "dismissed"): Promise<void> {
+  return invoke<void>("notice_event", { id, ev });
+}
+
 export function updateToastClose(): Promise<void> {
   return invoke<void>("update_toast_close");
 }
@@ -534,6 +542,45 @@ export function updateToastClose(): Promise<void> {
 /** Версия для окна «Что нового», если приложение только что обновилось. */
 export function whatsNewTake(): Promise<string | null> {
   return invoke<string | null>("whats_new_take");
+}
+
+/** Автообновление: включено ли и надо ли один раз предложить его включить. */
+export function autoUpdateGet(): Promise<AutoUpdateState> {
+  return invoke<AutoUpdateState>("auto_update_get");
+}
+
+/** Включить/выключить автообновление (любой ответ снимает предложение). */
+export function autoUpdateSet(enabled: boolean): Promise<AutoUpdateState> {
+  return invoke<AutoUpdateState>("auto_update_set", { enabled });
+}
+
+/** Три переключателя приватности: автообновление, отчёты об ошибках, статистика. */
+export function privacyGet(): Promise<PrivacyState> {
+  return invoke<PrivacyState>("privacy_get");
+}
+
+export function privacySet(key: PrivacyKey, on: boolean): Promise<PrivacyState> {
+  return invoke<PrivacyState>("privacy_set", { key, on });
+}
+
+/** Ошибка интерфейса уходит в отчёты о сбоях (если они включены). */
+export function telemetryUiError(msg: string, stack: string): Promise<void> {
+  return invoke<void>("telemetry_ui_error", { msg, stack });
+}
+
+/** Человек увидел переключатели или строку про отчёты: после этого отчёты и статистика могут уходить. */
+export function privacyNoticeSeen(): Promise<void> {
+  return invoke<void>("privacy_notice_seen");
+}
+
+/** Тело ручного отчёта так, как оно уйдёт на сервер: очищенное, JSON с отступами. */
+export function telemetryReportPreview(text: string, contact: string | null, nonce: string): Promise<string> {
+  return invoke<string>("telemetry_report_preview", { text, contact, nonce });
+}
+
+/** Отчёт, который человек отправил сам. Ошибка - готовый текст по-русски. */
+export function telemetryReport(text: string, contact: string | null, nonce: string): Promise<void> {
+  return invoke<void>("telemetry_report", { text, contact, nonce });
 }
 
 export function playChime(): Promise<void> {

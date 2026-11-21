@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import { Loader2 } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
 import { Toggle } from "../components/Toggle";
+import { PrivacyCard } from "../components/PrivacyCard";
 import { UpdateBanner } from "../components/UpdateBanner";
 import { useStatus } from "../lib/status";
 import { autostartGet, autostartSet } from "../lib/api";
@@ -83,6 +84,7 @@ export function Settings() {
               onChange={handleAutostartToggle}
               disabled={autostartBusy}
               label="Автозапуск"
+              size="sm"
             />
           )}
         </div>
@@ -96,7 +98,11 @@ export function Settings() {
         )}
       </motion.section>
 
-      {/* ── Обновления ── */}
+      {/* ── Обновления и отчёты ── */}
+      <motion.div variants={fadeInUp}>
+        <PrivacyCard />
+      </motion.div>
+
       <motion.section variants={fadeInUp} className="mt-4">
         <UpdateBanner />
       </motion.section>

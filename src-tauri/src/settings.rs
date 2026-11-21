@@ -17,14 +17,33 @@ use crate::apps::AppProfile;
 /// откатывает, например, только что сохранённый пул прокси).
 static SETTINGS_LOCK: Mutex<()> = Mutex::new(());
 
-fn with_settings<F>(f: F) -> Result<Settings, String>
+/// Прочитать-изменить-записать под общей блокировкой. Если файл настроек есть,
+/// но не читается или не разбирается, запись отменяется: иначе настройки по
+/// умолчанию затёрли бы прокси человека. Нет файла - не ошибка.
+pub fn with_settings<F>(f: F) -> Result<Settings, String>
+where
+    F: FnOnce(&mut Settings) -> Result<(), String>,
+{
+    with_settings_mode(false, f)
+}
+
+/// Для фоновых записей без действия человека (телеметрия, рассылки): при
+/// любой ошибке чтения файла запись отменяется, битый файл не трогаем.
+pub fn with_settings_strict<F>(f: F) -> Result<Settings, String>
+where
+    F: FnOnce(&mut Settings) -> Result<(), String>,
+{
+    with_settings_mode(true, f)
+}
+
+fn with_settings_mode<F>(strict: bool, f: F) -> Result<Settings, String>
 where
     F: FnOnce(&mut Settings) -> Result<(), String>,
 {
     let _g = SETTINGS_LOCK
         .lock()
         .map_err(|_| "settings lock poisoned".to_string())?;
-    let mut s = load();
+    let mut s = if strict { load_checked()? } else { load_recovering(&settings_path()?)? };
     f(&mut s)?;
     save(&s)?;
     Ok(s)
@@ -97,10 +116,55 @@ pub struct Settings {
     /// «Что нового». None - сборки до этого поля (или первый запуск).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_version_seen: Option<String>,
+    /// Случайный номер установки 0-99 для поэтапной раскатки обновлений
+    /// (auto_update.rs). Создаётся один раз и никуда не отправляется.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_rollout: Option<u8>,
+    /// Последний принятый `seq` подписанного манифеста: меньший отвергается.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_seq: Option<u64>,
+    /// С какого времени тихая установка ждёт эту версию (для запасного пути:
+    /// ждём больше 48 часов - обычное уведомление с кнопкой).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_seen: Option<UpdateSeen>,
+    /// Отметка «запустил установку версии X»: на следующем запуске по ней
+    /// видно, получилось ли.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_attempt: Option<UpdateAttempt>,
+    /// Неудачные установки подряд (для одной версии).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_failures: Option<UpdateFailures>,
+    /// Последнее событие установки для колокольчика («Обновлено до X» или
+    /// «Обновление до X не установилось»).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_notice: Option<UpdateNotice>,
+    /// Автообновление: новые версии ставятся сами. None - человека ещё не
+    /// спрашивали (установка до этой функции): после «Что нового» ему
+    /// один раз предлагают включить. Мастер первого запуска пишет явно.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_update: Option<bool>,
+    /// Отчёты о сбоях (без личных данных). None - включено: так и для
+    /// старых установок, они включаются с выпуском этой функции.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crash_reports: Option<bool>,
+    /// Анонимная статистика запусков (раз в сутки). None - включено.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_stats: Option<bool>,
+    /// Человек увидел переключатели или строку про отчёты (мастер, окно
+    /// предложения или плашка). Пока false, ничего автоматически не уходит.
+    #[serde(default)]
+    pub privacy_notice_seen: bool,
+    /// Что уже отправлено в статистику (см. telemetry.rs).
+    #[serde(default)]
+    pub telemetry: TelemetryState,
     /// Рассылки разработчика (последний скачанный notices.json) - колокольчик
     /// виден и без сети.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notices_cache: Vec<crate::notices::Notice>,
+    /// Рассылки с сервера статистики: свой кэш, чтобы падение одного
+    /// источника не стирало записи другого.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notices_cache_server: Vec<crate::notices::Notice>,
     /// Прочитанные уведомления (id рассылок и «update-X.Y.Z»).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notices_read: Vec<String>,
@@ -129,6 +193,136 @@ pub struct Settings {
     /// bridge-sites.json на лету, без перезапуска.
     #[serde(default)]
     pub sites: Vec<SiteEntry>,
+}
+
+/// Запущенная установка обновления: версия, время (unix, с) и способ
+/// ("auto" | "manual").
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UpdateAttempt {
+    pub version: String,
+    pub at: u64,
+    pub how: String,
+}
+
+/// Сколько установок версии `version` подряд не завершилось и когда была
+/// последняя неудача (unix, с).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UpdateFailures {
+    pub version: String,
+    pub count: u32,
+    pub last_at: u64,
+}
+
+/// Когда тихая установка впервые взялась за версию.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UpdateSeen {
+    pub version: String,
+    pub at: u64,
+}
+
+/// Итог установки для колокольчика: `ok` - обновились (тихо), иначе - не
+/// получилось.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UpdateNotice {
+    pub ok: bool,
+    pub version: String,
+    pub at: u64,
+}
+
+/// Состояние пинга статистики: что уже отправлено. Флаги пишутся только
+/// после ответа сервера 2xx.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TelemetryState {
+    pub first_sent: bool,
+    /// "YYYY-MM-DD" (UTC) последней отправки.
+    pub last_day: Option<String>,
+    /// День последнего пинга с w=1 ("YYYY-MM-DD"). Старые значения других
+    /// форматов при разборе отбрасываются.
+    pub last_w_day: Option<String>,
+    /// День последнего пинга с m=1.
+    pub last_m_day: Option<String>,
+    /// ISO-неделя первой отметки (ставится один раз).
+    pub install_week: Option<String>,
+    /// День, когда прокси реально работал.
+    pub used_day: Option<String>,
+    /// "auto" | "manual": как запущено обновление (пишет установщик).
+    pub pending_how: Option<String>,
+    /// Версия, для которой "how" уже отправлен.
+    pub how_version: Option<String>,
+    /// Обновились со старой версии (до статистики): не новая установка,
+    /// первый пинг идёт без first/iw/how.
+    pub legacy: bool,
+}
+
+pub fn crash_reports_on(s: &Settings) -> bool {
+    s.crash_reports != Some(false)
+}
+
+pub fn usage_stats_on(s: &Settings) -> bool {
+    s.usage_stats != Some(false)
+}
+
+pub fn set_crash_reports(on: bool) -> Result<Settings, String> {
+    with_settings(|s| {
+        s.crash_reports = Some(on);
+        Ok(())
+    })
+}
+
+pub fn set_usage_stats(on: bool) -> Result<Settings, String> {
+    with_settings(|s| {
+        s.usage_stats = Some(on);
+        Ok(())
+    })
+}
+
+/// Отметить, что человек увидел переключатели. Строгая запись: при битом
+/// файле флаг не ставится, и ничего не уходит.
+pub fn set_privacy_notice_seen() -> Result<Settings, String> {
+    with_settings_strict(|s| {
+        s.privacy_notice_seen = true;
+        Ok(())
+    })
+}
+
+/// Изменить состояние пинга под общей блокировкой.
+pub fn update_telemetry<F: FnOnce(&mut TelemetryState)>(f: F) -> Result<Settings, String> {
+    with_settings_strict(|s| {
+        f(&mut s.telemetry);
+        Ok(())
+    })
+}
+
+/// Переключатели приватности для интерфейса.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct PrivacyState {
+    pub auto_update: bool,
+    pub crash_reports: bool,
+    pub usage_stats: bool,
+    /// Предложить автообновление (как в AutoUpdateState).
+    pub offer: bool,
+    /// Переключатели или строка про отчёты уже были показаны.
+    pub notice_seen: bool,
+    /// Установка с версии до статистики: для неё плашка говорит «С этой версии».
+    pub legacy: bool,
+}
+
+pub fn privacy_state(s: &Settings) -> PrivacyState {
+    let a = auto_update_state(s);
+    PrivacyState {
+        auto_update: a.enabled,
+        crash_reports: crash_reports_on(s),
+        usage_stats: usage_stats_on(s),
+        offer: a.offer,
+        notice_seen: s.privacy_notice_seen,
+        legacy: s.telemetry.legacy,
+    }
+}
+
+/// Папка данных программы (рядом с settings.json).
+pub fn data_dir() -> Option<PathBuf> {
+    settings_path().ok()?.parent().map(|p| p.to_path_buf())
 }
 
 /// Сайт пользователя: имя, его домены (с поддоменами) и прокси.
@@ -238,14 +432,48 @@ fn settings_path() -> Result<PathBuf, String> {
 }
 
 pub fn load() -> Settings {
-    let path = match settings_path() {
-        Ok(p) => p,
-        Err(_) => return Settings::default(),
+    load_checked().unwrap_or_default()
+}
+
+/// Прочитать настройки, не скрывая сбоев. Нет файла - настройки по умолчанию
+/// (первый запуск); файл есть, но не читается или не разбирается - ошибка.
+pub fn load_checked() -> Result<Settings, String> {
+    let path = settings_path()?;
+    parse_checked(fs::read_to_string(&path), &path)
+}
+
+/// Для записи по действию человека: файл не разобрался - переименовать в
+/// settings.json.bad-<время> (резервная копия), предупредить и продолжить с
+/// умолчаний. Ошибка ввода-вывода (не читается) - запись отклоняется.
+fn load_recovering(path: &std::path::Path) -> Result<Settings, String> {
+    let text = match fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Settings::default()),
+        Err(e) => return Err(format!("Не смог прочитать {}: {e}", path.display())),
     };
-    let Ok(text) = fs::read_to_string(&path) else {
-        return Settings::default();
+    match serde_json::from_str(&text) {
+        Ok(s) => Ok(s),
+        Err(e) => {
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let bad = path.with_extension(format!("json.bad-{ts}"));
+            fs::rename(path, &bad)
+                .map_err(|re| format!("Настройки повреждены ({e}), а сохранить копию не вышло: {re}"))?;
+            tracing::warn!("settings.json не разобрался ({e}): сохранён как {}, продолжаю с умолчаний", bad.display());
+            Ok(Settings::default())
+        }
+    }
+}
+
+fn parse_checked(read: std::io::Result<String>, path: &std::path::Path) -> Result<Settings, String> {
+    let text = match read {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Settings::default()),
+        Err(e) => return Err(format!("Не смог прочитать {}: {e}", path.display())),
     };
-    serde_json::from_str(&text).unwrap_or_default()
+    serde_json::from_str(&text).map_err(|e| format!("Не смог разобрать {}: {e}", path.display()))
 }
 
 pub fn save(settings: &Settings) -> Result<(), String> {
@@ -412,7 +640,8 @@ pub fn load_with_presets() -> Settings {
     // настроек (опрос статусов, окна) не должны ждать детекта.
     let presets = crate::apps::builtin_presets();
     let _g = SETTINGS_LOCK.lock().ok();
-    let mut s = load();
+    // Нечитаемый файл: отдаём умолчания, но на диск ничего не пишем.
+    let Ok(mut s) = load_checked() else { return Settings::default() };
     if merge_presets(&mut s.app_profiles, presets) {
         let _ = save(&s);
     }
@@ -510,19 +739,30 @@ pub fn set_sites_bypass(apps: Vec<crate::browser_ext::BypassApp>) -> Result<Sett
 }
 
 pub fn set_notices_cache(list: Vec<crate::notices::Notice>) -> Result<Settings, String> {
-    with_settings(|s| {
+    update_notices_caches(|_| (list, Vec::new()))
+}
+
+/// Пересчитать оба кэша рассылок (GitHub, сервер) под общей блокировкой:
+/// `f` видит прежние настройки и возвращает новые списки.
+pub fn update_notices_caches<F>(f: F) -> Result<Settings, String>
+where
+    F: FnOnce(&Settings) -> (Vec<crate::notices::Notice>, Vec<crate::notices::Notice>),
+{
+    with_settings_strict(|s| {
+        let (github, server) = f(s);
         // Отметки о прочтении - только для живых id: файл рассылок может
         // похудеть, а список прочитанного не должен расти вечно.
-        let alive: Vec<String> = list.iter().map(|n| n.id.clone()).collect();
+        let alive: Vec<String> = github.iter().chain(server.iter()).map(|n| n.id.clone()).collect();
         s.notices_read.retain(|id| id.starts_with("update-") || alive.contains(id));
         s.notices_toasted.retain(|id| alive.contains(id));
-        s.notices_cache = list;
+        s.notices_cache = github;
+        s.notices_cache_server = server;
         Ok(())
     })
 }
 
 pub fn mark_notices_read(ids: &[String]) -> Result<Settings, String> {
-    with_settings(|s| {
+    with_settings_strict(|s| {
         for id in ids {
             if !s.notices_read.contains(id) {
                 s.notices_read.push(id.clone());
@@ -539,7 +779,7 @@ pub fn mark_notices_read(ids: &[String]) -> Result<Settings, String> {
 }
 
 pub fn mark_notices_toasted(ids: &[String]) -> Result<Settings, String> {
-    with_settings(|s| {
+    with_settings_strict(|s| {
         for id in ids {
             if !s.notices_toasted.contains(id) {
                 s.notices_toasted.push(id.clone());
@@ -563,8 +803,18 @@ pub fn set_system_pac_saved(conf: Option<crate::system_pac::ProxyConf>) -> Resul
     })
 }
 
+/// Запомнить `seq` принятого манифеста (только вперёд).
+pub fn set_update_seq(seq: u64) -> Result<Settings, String> {
+    with_settings_strict(|s| {
+        if s.update_seq.is_none_or(|old| seq > old) {
+            s.update_seq = Some(seq);
+        }
+        Ok(())
+    })
+}
+
 pub fn set_update_notified(version: &str) -> Result<Settings, String> {
-    with_settings(|s| {
+    with_settings_strict(|s| {
         s.update_notified = Some(version.to_string());
         Ok(())
     })
@@ -576,7 +826,7 @@ pub fn set_update_notified(version: &str) -> Result<Settings, String> {
 /// считается уже настроенная установка; первый запуск - нет.
 pub fn take_whats_new(current: &str) -> Result<Option<String>, String> {
     let mut news = None;
-    with_settings(|s| {
+    with_settings_strict(|s| {
         let configured = s.proxy_url.is_some() || !s.proxies.is_empty();
         if just_updated(s.last_version_seen.as_deref(), configured, current) {
             news = Some(current.to_string());
@@ -585,6 +835,33 @@ pub fn take_whats_new(current: &str) -> Result<Option<String>, String> {
         Ok(())
     })?;
     Ok(news)
+}
+
+/// Состояние автообновления для интерфейса.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct AutoUpdateState {
+    /// Включено ли автообновление сейчас.
+    pub enabled: bool,
+    /// Предложить включить (окно после «Что нового»): программа уже была
+    /// настроена до этой функции, а человека ещё не спрашивали.
+    pub offer: bool,
+}
+
+pub fn auto_update_state(s: &Settings) -> AutoUpdateState {
+    let configured = s.proxy_url.is_some() || !s.proxies.is_empty();
+    AutoUpdateState {
+        enabled: s.auto_update == Some(true),
+        offer: s.auto_update.is_none() && configured,
+    }
+}
+
+/// Включить/выключить автообновление (мастер, окно-предложение, Настройки).
+/// Любой ответ - и «не сейчас» тоже - снимает предложение навсегда.
+pub fn set_auto_update(enabled: bool) -> Result<Settings, String> {
+    with_settings(|s| {
+        s.auto_update = Some(enabled);
+        Ok(())
+    })
 }
 
 fn just_updated(seen: Option<&str>, configured: bool, current: &str) -> bool {
@@ -617,6 +894,39 @@ mod tests {
     use crate::apps::LaunchKind;
 
     #[test]
+    fn broken_settings_are_backed_up_for_user_writes() {
+        let dir = std::env::temp_dir().join(format!("clod-settings-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("settings.json");
+        assert!(load_recovering(&p).is_ok(), "нет файла - не ошибка");
+        fs::write(&p, "{broken").unwrap();
+        let s = load_recovering(&p).unwrap();
+        assert!(s.proxy_url.is_none());
+        assert!(!p.exists(), "битый файл переименован");
+        let bak: Vec<_> = fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert!(bak.iter().any(|n| n.starts_with("settings.json.bad-")), "{bak:?}");
+        // Не читается из-за ввода-вывода (каталог вместо файла): отказ, ничего не переименовано.
+        let d = dir.join("dir-as-file.json");
+        fs::create_dir_all(&d).unwrap();
+        assert!(load_recovering(&d).is_err());
+        assert!(d.exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_checked_distinguishes_missing_from_broken() {
+        use std::io::{Error, ErrorKind};
+        let p = std::path::Path::new("settings.json");
+        assert!(parse_checked(Err(Error::from(ErrorKind::NotFound)), p).is_ok(), "нет файла - не ошибка");
+        assert!(parse_checked(Err(Error::from(ErrorKind::PermissionDenied)), p).is_err(), "не читается - ошибка");
+        assert!(parse_checked(Ok("{broken".into()), p).is_err(), "не разбирается - ошибка");
+        assert!(parse_checked(Ok(String::new()), p).is_err());
+        let ok = parse_checked(Ok(r#"{"proxy_url":"http://1.2.3.4:80"}"#.into()), p).unwrap();
+        assert_eq!(ok.proxy_url.as_deref(), Some("http://1.2.3.4:80"));
+    }
+
+    #[test]
     fn backups_go_after_the_pool_and_keep_pool_indexes() {
         let mut s = Settings::default();
         s.proxies = vec!["a".into(), "b".into()];
@@ -641,6 +951,35 @@ mod tests {
         assert_eq!(bridge_upstreams(&s), vec!["a", "a2", "x"]);
         assert!(!s.proxy_backups.contains_key("b"));
         assert!(!s.proxy_labels.contains_key("y"), "имя ушедшего резерва убрано");
+    }
+
+    #[test]
+    fn auto_update_is_offered_once_to_existing_installs() {
+        let fresh = Settings::default();
+        assert_eq!(auto_update_state(&fresh), AutoUpdateState { enabled: false, offer: false }, "до мастера не предлагаем");
+        let old = Settings { proxy_url: Some("http://1.2.3.4:80".into()), ..Settings::default() };
+        assert_eq!(auto_update_state(&old), AutoUpdateState { enabled: false, offer: true });
+        let declined = Settings { auto_update: Some(false), ..old.clone() };
+        assert_eq!(auto_update_state(&declined), AutoUpdateState { enabled: false, offer: false });
+        let on = Settings { auto_update: Some(true), ..old };
+        assert_eq!(auto_update_state(&on), AutoUpdateState { enabled: true, offer: false });
+        // Старый settings.json без поля читается как «не спрашивали».
+        let s: Settings = serde_json::from_str(r#"{"proxy_url":"http://1.2.3.4:80"}"#).unwrap();
+        assert_eq!(s.auto_update, None);
+    }
+
+    #[test]
+    fn privacy_switches_default_to_on() {
+        let s = Settings::default();
+        assert_eq!(s.crash_reports, None);
+        assert!(crash_reports_on(&s) && usage_stats_on(&s));
+        let old: Settings = serde_json::from_str(r#"{"proxy_url":"http://1.2.3.4:80"}"#).unwrap();
+        assert!(crash_reports_on(&old) && usage_stats_on(&old));
+        assert_eq!(old.telemetry, TelemetryState::default());
+        let off = Settings { crash_reports: Some(false), usage_stats: Some(false), ..old };
+        assert!(!crash_reports_on(&off) && !usage_stats_on(&off));
+        let p = privacy_state(&off);
+        assert!(!p.crash_reports && !p.usage_stats && !p.auto_update && p.offer);
     }
 
     #[test]

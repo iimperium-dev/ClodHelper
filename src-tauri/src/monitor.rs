@@ -197,6 +197,12 @@ fn run(app: AppHandle, h: TrayHandles) {
             None
         };
 
+        // Статистика: через мост идут соединения и прокси здоров - сегодня
+        // прокси реально пропускал трафик.
+        if health.as_ref().is_some_and(|hh| hh.active > 0 && hh.upstreams.iter().any(|u| u.healthy)) {
+            crate::telemetry::note_used();
+        }
+
         // Латентность до upstream - раз в LATENCY_EVERY_TICKS.
         if tick % LATENCY_EVERY_TICKS == 0 {
             if let Some(hh) = &health {

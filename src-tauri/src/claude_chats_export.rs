@@ -117,7 +117,9 @@ fn walk(src: &Path, name: &str, out: &mut Vec<(PathBuf, String, u64, Option<Syst
             let fname = e.file_name().to_string_lossy().to_string();
             let inner = format!("{prefix}/{fname}");
             if m.is_dir() {
-                if !SKIP_DIRS.contains(&fname.as_str()) {
+                // Папка-кэш со стандартной меткой (target/ сборки Rust и т.п.):
+                // в рабочих папках сессий это гигабайты, к переписке отношения нет.
+                if !SKIP_DIRS.contains(&fname.as_str()) && !e.path().join("CACHEDIR.TAG").is_file() {
                     stack.push((e.path(), inner));
                 }
             } else {
@@ -398,14 +400,16 @@ id файла переписки в `Claude Code/projects`.\n\
 - `Claude Desktop/local-agent-mode-sessions/…` - задачи и сессии Cowork, их файлы и расписания.\n\
 - `Claude Desktop/scratch-workspaces/…` - рабочие папки временных сессий (что в них создавал Claude).\n\
 - `Claude Desktop/side-session-notes/` - заметки побочных сессий.\n\
-- `Claude Desktop/git-worktrees.json` - список рабочих копий git, созданных для сессий.\n\n\
+- `Claude Desktop/git-worktrees.json` - список рабочих копий git, созданных для сессий.\n\
+- `Claude Desktop/git-shadow/` - теневые копии git рабочих папок сессий (для отмены правок).\n\n\
 ## Как искать\n\n\
 Распакуйте архив и попросите агента: «Найди в этом архиве чат про …» или «Собери, что мы \
 решили по проекту X». Быстрее всего - искать по тексту во всех `*.jsonl` в \
 `Claude Code/projects`, а название сессии брать из карточек в \
 `Claude Desktop/claude-code-sessions` по `cliSessionId`.\n\n\
 Папки `node_modules` в рабочих папках не сохранены: это установленные зависимости, их \
-восстанавливает установка пакетов. Ссылки на другие папки внутри тоже не сохранены.\n\n\
+восстанавливает установка пакетов. Не сохранены и папки-кэши (с файлом `CACHEDIR.TAG`, \
+например `target` сборки Rust): их заново создаёт сборка. Ссылки на другие папки внутри тоже не сохранены.\n\n\
 Архив содержит переписку и данные прошлого аккаунта - храните его отдельно от нового.\n"
     );
     if skipped.is_empty() {
@@ -445,6 +449,9 @@ pub(crate) mod tests {
         };
         w(d.join("claude-code-sessions").join("a").join("o").join("local_1.json"), r#"{"title":"Чат"}"#);
         w(d.join("scratch-workspaces").join("a").join("node_modules").join("big.js"), "x");
+        // Сборка Rust в рабочей папке: на живом Маке такие target - 18 ГБ.
+        w(d.join("scratch-workspaces").join("a").join("target").join("CACHEDIR.TAG"), "Signature: 8a477f597d28d172789f06886806bc55");
+        w(d.join("scratch-workspaces").join("a").join("target").join("debug").join("app"), "бинарник");
         w(d.join("Cache").join("f"), "кэш не нужен");
         w(home.join(".claude").join("projects").join("C--p").join("s.jsonl"), "{\"type\":\"user\"}\n");
         w(home.join(".claude").join("history.jsonl"), "{}\n");
@@ -465,7 +472,7 @@ pub(crate) mod tests {
         ] {
             assert!(names.iter().any(|x| x == n), "нет {n}: {names:?}");
         }
-        assert!(!names.iter().any(|x| x.contains("node_modules") || x.contains("Cache") || x.contains("settings.json")));
+        assert!(!names.iter().any(|x| x.contains("node_modules") || x.contains("Cache") || x.contains("target/") || x.contains("settings.json")));
         let mut text = String::new();
         z.by_name("Claude Desktop/claude-code-sessions/a/o/local_1.json").unwrap().read_to_string(&mut text).unwrap();
         assert!(text.contains("Чат"));

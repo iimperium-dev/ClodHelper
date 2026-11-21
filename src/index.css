@@ -207,6 +207,17 @@
     }
   }
 
+  /* Шаг мастера: въезжает со стороны движения (вперёд - справа). */
+  .wizard-enter {
+    animation: wizard-enter 0.26s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  @keyframes wizard-enter {
+    from {
+      opacity: 0;
+      transform: translateX(calc(20px * var(--wizard-dir, 1)));
+    }
+  }
+
   /* Reduced motion: не «ноль», а мягче - убираем движение, оставляем opacity. */
   @media (prefers-reduced-motion: reduce) {
     *,

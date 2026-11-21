@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { X } from "lucide-react";
 import { LogoTile } from "../components/UpdateDialog";
-import { noticesList, updateLatest, updateToastClose, updateToastOpen } from "../lib/api";
+import { noticeEvent, noticesList, updateLatest, updateToastClose, updateToastOpen } from "../lib/api";
 import { isMac } from "../lib/platform";
 
 /** Сколько уведомление висит само; наведение мыши ставит отсчёт на паузу. */
@@ -108,6 +108,8 @@ export function UpdateToast() {
               aria-label="Закрыть"
               onClick={(e) => {
                 e.stopPropagation();
+                // Закрыли крестиком (не само по таймеру) - в статистику рассылок.
+                if (!isUpdate) void noticeEvent(id, "dismissed").catch(() => {});
                 dismiss("close");
               }}
               className="absolute right-2 top-2 rounded-full p-1 text-vb-silver-faint opacity-0 transition-opacity hover:bg-vb-surface-2 hover:text-vb-silver group-hover:opacity-100"

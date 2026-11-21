@@ -5,12 +5,16 @@ import { ArrowRight, Check, Download, Loader2, RotateCw, ShieldCheck, Sparkles, 
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { Button } from "./Button";
-import { updateInstall } from "../lib/api";
+import { autoUpdateGet, updateInstall } from "../lib/api";
 import { formatMb, onOpenUpdateDialog } from "../lib/updateBus";
 import { cn } from "../lib/cn";
 import type { UpdateInfo, UpdateProgress } from "../lib/types";
 
 const RELEASES = "https://github.com/iimperium-dev/ClodHelper/releases/latest";
+/** Текст ошибки бэкенда, когда установка уже идёт (автоматическая или из другого окна). */
+const ALREADY = "Обновление уже устанавливается";
+
+const openPage = (url: string) => import("@tauri-apps/plugin-opener").then((m) => m.openUrl(url));
 
 type Phase = "offer" | "installing" | "error";
 
@@ -33,12 +37,14 @@ export function UpdateDialog() {
   const [progress, setProgress] = useState<UpdateProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [current, setCurrent] = useState("");
+  const [auto, setAuto] = useState(false);
   // Подписки ставятся один раз - текущая фаза читается через ref.
   const phaseRef = useRef<Phase>(phase);
   phaseRef.current = phase;
 
   useEffect(() => {
     void getVersion().then(setCurrent).catch(() => {});
+    void autoUpdateGet().then((a) => setAuto(a.enabled)).catch(() => {});
     const offBus = onOpenUpdateDialog((i) => {
       if (phaseRef.current !== "installing") setInfo(i);
     });
@@ -81,6 +87,9 @@ export function UpdateDialog() {
     }
   };
 
+  const already = error === ALREADY;
+  const manualOnly = !!info?.manual_only;
+  const page = info?.page || RELEASES;
   const highlights = info?.highlights?.length ? info.highlights : null;
 
   return createPortal(
@@ -169,6 +178,24 @@ export function UpdateDialog() {
                     </ul>
                   </div>
 
+                  {manualOnly ? (
+                    <p
+                      data-testid="update-manual-note"
+                      className="mx-5 mt-3 rounded-lg border border-vb-border bg-vb-surface-2/50 px-3 py-2 text-[12px] leading-snug text-vb-silver"
+                    >
+                      Эта версия сильно новее установленной. Скачайте её со страницы релиза и поставьте вручную.
+                    </p>
+                  ) : (
+                    auto && info.handles_silently && (
+                      <p
+                        data-testid="update-auto-note"
+                        className="mx-5 mt-3 text-[12px] leading-snug text-vb-silver-faint"
+                      >
+                        Поставится само, когда программа свёрнута и вы отойдёте от компьютера.
+                      </p>
+                    )
+                  )}
+
                   <div className="flex items-center justify-between gap-3 px-5 pb-5 pt-4">
                     <span className="flex items-center gap-1.5 text-[11px] text-vb-silver-faint">
                       <ShieldCheck className="h-3.5 w-3.5" />
@@ -178,10 +205,16 @@ export function UpdateDialog() {
                       <Button variant="ghost" size="sm" onClick={close}>
                         Позже
                       </Button>
-                      <Button variant="primary" size="sm" onClick={install}>
-                        <Download className="h-3.5 w-3.5" />
-                        Обновить
-                      </Button>
+                      {manualOnly ? (
+                        <Button variant="primary" size="sm" onClick={() => void openPage(page)}>
+                          Открыть страницу
+                        </Button>
+                      ) : (
+                        <Button variant="primary" size="sm" onClick={install}>
+                          <Download className="h-3.5 w-3.5" />
+                          Обновить
+                        </Button>
+                      )}
                     </div>
                   </div>
                 </motion.div>
@@ -196,31 +229,41 @@ export function UpdateDialog() {
                 >
                   <ProgressRing progress={progress} failed={phase === "error"} />
                   <h2 className="mt-5 text-[16px] font-semibold text-vb-fg">
-                    {phase === "error" ? "Не получилось обновить" : `Обновляю до ${info.version}`}
+                    {phase === "error" ? (already ? "Обновление уже ставится в фоне" : "Не получилось обновить") : `Обновляю до ${info.version}`}
                   </h2>
                   <p className="mt-1 min-h-[18px] text-center text-[12px] text-vb-silver-faint">
                     {phase === "error"
-                      ? "Текущая версия продолжает работать"
+                      ? already
+                        ? "Программа перезапустится сама, когда закончит"
+                        : "Текущая версия продолжает работать"
                       : stageHint(progress)}
                   </p>
 
                   {phase === "error" ? (
                     <>
-                      <p className="mt-4 w-full rounded-lg border border-vb-loss/30 bg-vb-loss/10 px-3 py-2 text-[12px] leading-snug text-vb-loss">
-                        {error}
-                      </p>
+                      {!already && (
+                        <p className="mt-4 w-full rounded-lg border border-vb-loss/30 bg-vb-loss/10 px-3 py-2 text-[12px] leading-snug text-vb-loss">
+                          {error}
+                        </p>
+                      )}
                       <div className="mt-5 flex w-full justify-end gap-2">
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => import("@tauri-apps/plugin-opener").then((m) => m.openUrl(RELEASES))}
+                          onClick={() => void openPage(page)}
                         >
                           Скачать вручную
                         </Button>
-                        <Button variant="secondary" size="sm" onClick={install}>
-                          <RotateCw className="h-3.5 w-3.5" />
-                          Повторить
-                        </Button>
+                        {already ? (
+                          <Button variant="secondary" size="sm" onClick={close}>
+                            Закрыть
+                          </Button>
+                        ) : (
+                          <Button variant="secondary" size="sm" onClick={install}>
+                            <RotateCw className="h-3.5 w-3.5" />
+                            Повторить
+                          </Button>
+                        )}
                       </div>
                     </>
                   ) : (
