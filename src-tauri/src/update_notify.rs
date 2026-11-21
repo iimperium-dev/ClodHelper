@@ -2,9 +2,9 @@
 //! в углу экрана (как у Telegram), со звуком.
 //!
 //! Системный тост Windows/macOS не годится: по клику на нём Tauri ничего не
-//! получает, а нужно открыть окно обновления. Поэтому — своё маленькое окно
+//! получает, а нужно открыть окно обновления. Поэтому - своё маленькое окно
 //! без рамки поверх всех, которое не забирает фокус (`focusable(false)`):
-//! человек печатает в другой программе — уведомление ему не мешает.
+//! человек печатает в другой программе - уведомление ему не мешает.
 
 use std::sync::Mutex;
 use std::time::Duration;
@@ -20,23 +20,29 @@ const TOAST_H: f64 = 120.0;
 /// Отступ от края рабочей области (над панелью задач).
 const MARGIN: f64 = 8.0;
 
-/// Первая проверка — не сразу: при входе в систему сеть поднимается не
+/// Первая проверка - не сразу: при входе в систему сеть поднимается не
 /// мгновенно. Но и не поздно: рассылку, пропущенную с выключенным
 /// компьютером, человек должен увидеть вскоре после запуска.
 const FIRST_CHECK: Duration = Duration::from_secs(15);
-/// Обновления — каждые 30 минут: у GitHub API лимит 60 запросов в час на
-/// IP, 2 в час (+ по открытию окна, не чаще UPDATE_MIN_GAP) — с запасом.
+/// Первая проверка обновлений - со случайной задержкой 0-10 минут: при
+/// большой аудитории все не должны прийти на GitHub в одну минуту после
+/// входа в систему.
+const FIRST_UPDATE_SPREAD: u64 = 10 * 60;
+/// Обновления - каждые 30 минут ±5 (разброс по тем же причинам).
 /// В 0.8.4 было 6 часов, и вышедшую версию ждали полдня.
-const CHECK_EVERY: Duration = Duration::from_secs(30 * 60);
+const CHECK_EVERY: u64 = 30 * 60;
+const CHECK_SPREAD: u64 = 5 * 60;
 /// По открытию окна обновления проверяем не чаще раза в 10 минут.
 const UPDATE_MIN_GAP: Duration = Duration::from_secs(10 * 60);
-/// Рассылки — часто: файл с raw.githubusercontent.com лёгкий и без лимита,
-/// а человек ждёт, что сообщение дойдёт за минуты, а не за часы.
-const NOTICES_EVERY: Duration = Duration::from_secs(10 * 60);
-/// Не чаще раза в минуту по фокусу окна (открыл-закрыл — не повод качать).
+/// Рассылки - при старте и дальше раз в 3 часа ±20 минут: при росте
+/// аудитории запрос каждые 10 минут от каждого был бы лишней нагрузкой.
+/// Открыл окно - проверка по фокусу (не чаще NOTICES_MIN_GAP).
+const NOTICES_EVERY: u64 = 3 * 3600;
+const NOTICES_SPREAD: u64 = 20 * 60;
+/// Не чаще раза в минуту по фокусу окна (открыл-закрыл - не повод качать).
 const NOTICES_MIN_GAP: Duration = Duration::from_secs(60);
 
-/// Последнее найденное обновление — окно-уведомление и главное окно берут
+/// Последнее найденное обновление - окно-уведомление и главное окно берут
 /// его отсюда, а не проверяют GitHub ещё раз.
 static LATEST: Mutex<Option<UpdateInfo>> = Mutex::new(None);
 
@@ -51,32 +57,43 @@ pub fn remember(info: &Option<UpdateInfo>) {
     }
 }
 
+/// Случайное число секунд в [base - spread, base + spread] из случайного u64.
+fn jittered_secs(base: u64, spread: u64, rnd: u64) -> u64 {
+    base - spread + rnd % (2 * spread + 1)
+}
+
+/// Случайная пауза base ± spread (секунды).
+fn jitter(base: u64, spread: u64) -> Duration {
+    let rnd = u64::from_str_radix(&crate::updater::random_hex()[..16], 16).unwrap_or(0);
+    Duration::from_secs(jittered_secs(base, spread, rnd))
+}
+
 pub fn spawn_watcher(app: AppHandle) {
-    // Обновления — раз в 6 часов.
+    // Обновления: первая проверка через 0-10 минут, дальше раз в 30 ±5 минут.
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(FIRST_CHECK).await;
+        let first = u64::from_str_radix(&crate::updater::random_hex()[..16], 16).unwrap_or(0) % (FIRST_UPDATE_SPREAD + 1);
+        tokio::time::sleep(Duration::from_secs(first)).await;
         loop {
             check_update(&handle, true).await;
-            tokio::time::sleep(CHECK_EVERY).await;
+            tokio::time::sleep(jitter(CHECK_EVERY, CHECK_SPREAD)).await;
         }
     });
-    // Рассылки — каждые 10 минут (и по открытию окна — refresh_notices).
+    // Рассылки: при старте, дальше раз в 3 часа ±20 минут (и по открытию
+    // окна - refresh_notices).
     tauri::async_runtime::spawn(async move {
-        // Чуть позже обновлений: если есть и то, и другое, первым всплывёт
-        // обновление, рассылка — следом, а не перекроет его.
         tokio::time::sleep(FIRST_CHECK + Duration::from_secs(20)).await;
         loop {
             refresh_notices(&app, true).await;
-            tokio::time::sleep(NOTICES_EVERY).await;
+            tokio::time::sleep(jitter(NOTICES_EVERY, NOTICES_SPREAD)).await;
         }
     });
 }
 
 static UPDATE_AT: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 
-/// Проверить обновление; новое — всплыть в углу (один раз на версию).
-/// `forced` — фоновый цикл; по фокусу окна — не чаще UPDATE_MIN_GAP.
+/// Проверить обновление; новое - всплыть в углу (один раз на версию).
+/// `forced` - фоновый цикл; по фокусу окна - не чаще UPDATE_MIN_GAP.
 pub async fn check_update(app: &AppHandle, forced: bool) {
     if let Ok(mut at) = UPDATE_AT.lock() {
         if !forced && at.is_some_and(|t| t.elapsed() < UPDATE_MIN_GAP) {
@@ -84,13 +101,18 @@ pub async fn check_update(app: &AppHandle, forced: bool) {
         }
         *at = Some(std::time::Instant::now());
     }
-    match crate::updater::check().await {
+    match crate::updater::check(crate::updater::Mode::Background).await {
         Ok(found) => {
             remember(&found);
             if let Some(info) = found {
                 let _ = app.emit("update:available", &info);
-                let notified = crate::settings::load().update_notified;
-                if notified.as_deref() != Some(info.version.as_str()) {
+                let s = crate::settings::load();
+                // Автообновление включено: версию скачает и поставит
+                // crate::auto_update, всплывающее уведомление не нужно.
+                // Не получится (три неудачи, ручная установка) - обычное.
+                if crate::auto_update::handles_silently(&s, &info, crate::auto_update::now_secs()) {
+                    crate::auto_update::on_update_found(app);
+                } else if s.update_notified.as_deref() != Some(info.version.as_str()) {
                     let _ = crate::settings::set_update_notified(&info.version);
                     show_toast(app, &crate::notices::update_id(&info.version));
                 }
@@ -101,11 +123,11 @@ pub async fn check_update(app: &AppHandle, forced: bool) {
     }
 }
 
-/// Последняя проверка рассылок — чтобы фокус окна не качал файл каждый раз.
+/// Последняя проверка рассылок - чтобы фокус окна не качал файл каждый раз.
 static NOTICES_AT: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 
-/// Скачать рассылки; новое свежее — всплыть в углу (если `toast`). По фокусу
-/// окна вызывается без всплытия: человек и так смотрит в программу —
+/// Скачать рассылки; новое свежее - всплыть в углу (если `toast`). По фокусу
+/// окна вызывается без всплытия: человек и так смотрит в программу -
 /// колокольчик загорится сам.
 pub async fn refresh_notices(app: &AppHandle, toast: bool) {
     if let Ok(mut at) = NOTICES_AT.lock() {
@@ -129,17 +151,17 @@ pub async fn refresh_notices(app: &AppHandle, toast: bool) {
     }
 }
 
-/// Показать уведомление `id` (обновление «update-X» или рассылка): Windows —
-/// справа внизу над панелью задач, macOS — справа вверху под строкой меню.
+/// Показать уведомление `id` (обновление «update-X» или рассылка): Windows -
+/// справа внизу над панелью задач, macOS - справа вверху под строкой меню.
 pub fn show_toast(app: &AppHandle, id: &str) {
-    // Старое уведомление (о прошлой версии) — закрыть, новое создаётся с нуля:
+    // Старое уведомление (о прошлой версии) - закрыть, новое создаётся с нуля:
     // так анимация появления проигрывается каждый раз.
     if let Some(old) = app.get_webview_window(TOAST_LABEL) {
         let _ = old.destroy();
     }
     // Окно сразу создаётся видимым, на своём месте и без фокуса. Показ потом
     // через show() активировал его (ввод уходил из программы, где человек
-    // печатал), а ShowWindow в обход Tauri ломал его состояние — окну
+    // печатал), а ShowWindow в обход Tauri ломал его состояние - окну
     // возвращались рамка и заголовок. Проверено вживую на Windows 11.
     let (x, y) = corner(app);
     match tauri::WebviewWindowBuilder::new(
@@ -161,15 +183,15 @@ pub fn show_toast(app: &AppHandle, id: &str) {
     .skip_taskbar(true)
     .focused(false)
     .focusable(false)
-    // macOS: сначала невидимым — класс и уровень окна меняются до показа.
+    // macOS: сначала невидимым - класс и уровень окна меняются до показа.
     .visible(!cfg!(target_os = "macos"))
     .build()
     {
         Ok(_win) => {
             // macOS: неактивирующая панель на всех рабочих столах и поверх
-            // полноэкранных приложений (как меню значка) — уведомление видно
+            // полноэкранных приложений (как меню значка) - уведомление видно
             // где угодно и не переключает пользователя на стол Clod Helper.
-            // AppKit — только из главного потока (показ идёт из фоновой задачи).
+            // AppKit - только из главного потока (показ идёт из фоновой задачи).
             #[cfg(target_os = "macos")]
             {
                 let w = _win.clone();
@@ -185,6 +207,8 @@ pub fn show_toast(app: &AppHandle, id: &str) {
         }
     }
     crate::sound::chime();
+    // Статистика рассылок: уведомление всплыло (для обновления - нет записи, пропускается).
+    crate::telemetry::report_notice_event(id, "shown");
 }
 
 /// Левый верхний угол окна уведомления (логические px) на основном мониторе.
@@ -207,8 +231,8 @@ pub fn close_toast(app: &AppHandle) {
     }
 }
 
-/// Клик по уведомлению: главное окно и в нём — окно обновления (для
-/// «update-…») или колокольчик с этой рассылкой. Кликнутое — прочитано.
+/// Клик по уведомлению: главное окно и в нём - окно обновления (для
+/// «update-…») или колокольчик с этой рассылкой. Кликнутое - прочитано.
 pub fn open_from_toast(app: &AppHandle, id: &str) {
     close_toast(app);
     crate::show_main_window(app);
@@ -220,5 +244,25 @@ pub fn open_from_toast(app: &AppHandle, id: &str) {
         }
     } else {
         let _ = app.emit_to("main", "notices:open", id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn jitter_stays_inside_the_window() {
+        for rnd in [0u64, 1, 599, 600, 601, u64::MAX, 123_456_789_012] {
+            let s = jittered_secs(CHECK_EVERY, CHECK_SPREAD, rnd);
+            assert!((CHECK_EVERY - CHECK_SPREAD..=CHECK_EVERY + CHECK_SPREAD).contains(&s), "{s}");
+            let n = jittered_secs(NOTICES_EVERY, NOTICES_SPREAD, rnd);
+            assert!((NOTICES_EVERY - NOTICES_SPREAD..=NOTICES_EVERY + NOTICES_SPREAD).contains(&n));
+        }
+        assert_eq!(jittered_secs(1800, 300, 0), 1500);
+        assert_eq!(jittered_secs(1800, 300, 600), 2100);
+        // Живой разброс: за 40 бросков не одно и то же значение.
+        let set: std::collections::HashSet<u64> = (0..40).map(|_| jitter(CHECK_EVERY, CHECK_SPREAD).as_secs()).collect();
+        assert!(set.len() > 10);
     }
 }

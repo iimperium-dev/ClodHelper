@@ -7,10 +7,10 @@ async function open(page: Page, query = "still") {
   page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
   await page.setViewportSize({ width: 700, height: 580 });
   await page.goto(`/mock.html?${query}`);
-  // Первый заход ждёт компиляцию vite — при многих параллельных воркерах
+  // Первый заход ждёт компиляцию vite - при многих параллельных воркерах
   // дольше стандартных 5 с.
   await expect(page.getByText("Мост активен").first()).toBeVisible({ timeout: 20_000 });
-  // Размеры (меню, попапы) — только после загрузки шрифтов: под нагрузкой
+  // Размеры (меню, попапы) - только после загрузки шрифтов: под нагрузкой
   // меню успевало измериться запасным шрифтом и потом вырастало.
   await page.evaluate(() => document.fonts.ready);
   return errors;
@@ -19,7 +19,7 @@ async function open(page: Page, query = "still") {
 /** Открыть окно настроек приложения через шестерёнку на иконке. */
 async function gear(page: Page, name: string) {
   await page.getByText(name, { exact: true }).first().hover();
-  await page.getByRole("button", { name: `Настройки — ${name}` }).click();
+  await page.getByRole("button", { name: `Настройки - ${name}` }).click();
 }
 
 async function go(page: Page, label: string) {
@@ -32,12 +32,12 @@ test("обзор: IP один раз, проверка приватности с
   await expect(page.getByText("Доступна версия 0.7.0")).toBeVisible();
   await page.getByRole("button", { name: "Проверить" }).click();
   await expect(page.getByText("Всё чисто")).toBeVisible();
-  // Рядом с IP — пинг прокси, а не время проверочного запроса (420 мс).
+  // Рядом с IP - пинг прокси, а не время проверочного запроса (420 мс).
   await expect(page.getByText("74 мс")).toBeVisible();
   await expect(page.getByText("420 мс")).toHaveCount(0);
   await expect(page.getByText("Через мост ваш IP скрыт")).toBeVisible();
   await expect(page.getByText("DNS не выдаёт провайдера")).toBeVisible();
-  await expect(page.getByText("Приложения из вашего списка — через мост")).toBeVisible();
+  await expect(page.getByText("Приложения из вашего списка - через мост")).toBeVisible();
   await expect(page.getByText("Остальные программы работают напрямую, как обычно")).toBeVisible();
   await page.screenshot({ path: "test-results/overview.png" });
   expect(errors).toEqual([]);
@@ -61,7 +61,7 @@ test("приложения: сетка и режим упорядочивани�
   await page.getByRole("radio", { name: "Сетка" }).click();
   await expect(page.getByText("Telegram")).toBeVisible();
   await page.screenshot({ path: "test-results/apps-grid.png", fullPage: true });
-  // ПКМ → меню → «Упорядочить»
+  // ПКМ → меню → «Выбрать»
   await page.getByText("Telegram").click({ button: "right" });
   const menu = page.getByRole("menu");
   await expect(menu).toBeVisible();
@@ -70,7 +70,7 @@ test("приложения: сетка и режим упорядочивани�
   expect(box && box.y + box.height).toBeLessThanOrEqual(580);
   await expect(page.getByRole("menuitem", { name: "Убрать из списка" })).toBeInViewport();
   await page.screenshot({ path: "test-results/apps-context-menu.png" });
-  await page.getByRole("menuitem", { name: "Упорядочить" }).click();
+  await page.getByRole("menuitem", { name: "Выбрать" }).click();
   await expect(page.getByRole("button", { name: "Готово" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Новая папка" })).toBeVisible();
   await page.screenshot({ path: "test-results/apps-editing.png", fullPage: true });
@@ -128,7 +128,7 @@ test("прокси, настройки и сайдбар", async ({ page }) => {
   await page.waitForTimeout(800);
   await page.screenshot({ path: "test-results/proxies.png", fullPage: true });
   await expect(page.getByText("Claude main").first()).toBeVisible();
-  // IP — без порта, пинг — своей колонкой, без лишних подсказок.
+  // IP - без порта, пинг - своей колонкой, без лишних подсказок.
   await expect(page.getByText("185.68.187.138", { exact: true })).toBeVisible();
   await expect(page.getByText("185.68.187.138:8000")).toHaveCount(0);
   await expect(page.getByText("74 мс", { exact: true })).toBeVisible();
@@ -145,6 +145,80 @@ test("прокси, настройки и сайдбар", async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+test("прокси: замер скорости по кнопке", async ({ page }) => {
+  const errors = await open(page);
+  await go(page, "Прокси");
+  await page.getByText("Claude main").first().hover();
+  await page.getByRole("button", { name: "Замерить скорость", exact: true }).first().click();
+  await expect(page.getByText("замеряю…")).toBeVisible();
+  await expect(page.getByText("46 Мбит/с", { exact: true })).toBeVisible({ timeout: 5000 });
+  // Результат запоминается: после перехода на другой экран - на месте.
+  await go(page, "Настройки");
+  await go(page, "Прокси");
+  await expect(page.getByText("46 Мбит/с", { exact: true })).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("прокси: основной отдельно, звёздочка «сделать основным», замер без кнопок", async ({ page }) => {
+  const errors = await open(page);
+  await go(page, "Прокси");
+  await expect(page.getByText("Основной", { exact: true })).toBeVisible();
+  await expect(page.getByText("Другие прокси", { exact: true })).toBeVisible();
+  await expect(page.getByText(/Запасные/)).toHaveCount(0);
+  await page.getByText("93.1.2.3").first().hover();
+  await expect(page.getByRole("button", { name: "Сделать основным", exact: true }).first()).toBeVisible();
+  // Замер: кнопки уходят сразу, хотя курсор ещё на строке.
+  await page.getByRole("button", { name: "Замерить скорость", exact: true }).last().click();
+  await expect(page.getByText("замеряю…")).toBeVisible();
+  // Кнопки прозрачны (слот занят цифрами), Playwright прозрачное считает видимым - смотрим opacity.
+  await expect
+    .poll(() => page.getByRole("button", { name: "Сделать основным", exact: true }).first().evaluate((b) => getComputedStyle(b.parentElement!).opacity))
+    .toBe("0");
+  await expect(page.getByText("7,4 Мбит/с", { exact: true })).toBeVisible({ timeout: 5000 });
+  expect(errors).toEqual([]);
+});
+
+test("сайты: сброс автонастройки другой программой виден сам, без переходов", async ({ page }) => {
+  const errors = await open(page);
+  await go(page, "Сайты");
+  await expect(page.getByText(/сбросила «Во всех браузерах»/)).toHaveCount(0);
+  // Другая программа сбросила настройку, пока экран открыт.
+  await page.evaluate(() => {
+    (window as unknown as { __R: Record<string, unknown> }).__R.system_pac_status = {
+      supported: true,
+      enabled: true,
+      active: false,
+      foreign: "прокси 127.0.0.1:2080",
+    };
+  });
+  // Без перехода между экранами: StatusProvider проверяет сам (~15 с).
+  await expect(page.getByText(/сбросила «Во всех браузерах»/)).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("tab", { name: "Сайты" })).toHaveAttribute("title", /настройку сбросила другая программа/);
+  expect(errors).toEqual([]);
+});
+
+test("настройки приложения: прокси сохраняется только по кнопке, затем - перезапуск", async ({ page }) => {
+  const errors = await open(page, "still&platform=win");
+  await go(page, "Приложения");
+  await gear(page, "Google Chrome");
+  const d = page.getByRole("dialog");
+  await d.getByRole("radio").filter({ hasText: "Прокси 2" }).click();
+  await expect(d.getByRole("button", { name: "Сохранить" })).toBeVisible();
+  // Отмена - выбор возвращается, ничего не сохранено.
+  await d.getByRole("button", { name: "Отменить" }).click();
+  await expect(d.getByRole("button", { name: "Сохранить" })).toHaveCount(0);
+  await expect(d.getByRole("radio").filter({ hasText: "Авто" })).toHaveAttribute("aria-checked", "true");
+  // Сохранить - приложение открыто, предлагаем перезапуск.
+  await d.getByRole("radio").filter({ hasText: "Прокси 2" }).click();
+  await d.getByRole("button", { name: "Сохранить" }).click();
+  await expect(d.getByRole("button", { name: "Перезапустить с новым прокси" })).toBeVisible();
+  await d.getByRole("button", { name: "Закрыть" }).click();
+  await expect(page.getByText("Прокси сменён - перезапустите")).toBeVisible();
+  await page.getByRole("button", { name: "Перезапустить", exact: true }).click();
+  await expect(page.getByText("Прокси сменён - перезапустите")).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
 test("windows: статусы по соединениям, Telegram и вид плитками", async ({ page }) => {
   const errors = await open(page, "still&platform=win");
   await go(page, "Приложения");
@@ -156,7 +230,7 @@ test("windows: статусы по соединениям, Telegram и вид п
   expect(errors).toEqual([]);
 });
 
-test("обзор без тумблеров; режим Claude Code в терминале — в окне Claude", async ({ page }) => {
+test("обзор без тумблеров; режим Claude Code в терминале - в окне Claude", async ({ page }) => {
   const errors = await open(page);
   await expect(page.getByText("Умная маршрутизация")).toHaveCount(0);
   await go(page, "Приложения");
@@ -165,14 +239,14 @@ test("обзор без тумблеров; режим Claude Code в терми
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByText("Claude Code в терминале и VS Code")).toBeVisible();
   await dialog.getByText("Через прокси всё").click();
-  await expect(dialog.getByText("Сохранено — действует в новых окнах терминала")).toBeVisible();
+  await expect(dialog.getByText("Сохранено - действует в новых окнах терминала")).toBeVisible();
   await page.screenshot({ path: "test-results/claude-code-modes.png" });
   await dialog.getByText("Выключено", { exact: true }).click();
-  await expect(dialog.getByText("Выключено — новые окна терминала пойдут напрямую")).toBeVisible();
+  await expect(dialog.getByText("Выключено - новые окна терминала пойдут напрямую")).toBeVisible();
   expect(errors).toEqual([]);
 });
 
-test("защита от утечек — в окне Claude и Telegram, не в Настройках", async ({ page }) => {
+test("защита от утечек - в окне Claude и Telegram, не в Настройках", async ({ page }) => {
   const errors = await open(page);
   await go(page, "Настройки");
   await expect(page.getByText("Открывать при входе")).toBeVisible();
@@ -199,7 +273,7 @@ test("меню в строке меню: только статус и дейст
   expect(errors).toEqual([]);
 });
 
-test("windows: защита от утечек — в окне Claude и Telegram, как на Mac", async ({ page }) => {
+test("windows: защита от утечек - в окне Claude и Telegram, как на Mac", async ({ page }) => {
   const errors = await open(page, "still&platform=win");
   await go(page, "Приложения");
   await gear(page, "Claude Desktop");
@@ -216,7 +290,7 @@ test("windows: защита от утечек — в окне Claude и Telegram
   expect(errors).toEqual([]);
 });
 
-test("windows: Codex — защита WebRTC; устаревшее правило обновляется кнопкой", async ({ page }) => {
+test("windows: Codex - защита WebRTC; устаревшее правило обновляется кнопкой", async ({ page }) => {
   const errors = await open(page, "still&platform=win");
   await go(page, "Приложения");
   await gear(page, "ChatGPT Codex");
@@ -235,14 +309,14 @@ test("windows: Codex — защита WebRTC; устаревшее правил�
   await expect(dialog.getByText("Приложение обновилось", { exact: false })).toBeVisible();
   await page.screenshot({ path: "test-results/windows-codex-guard-stale.png" });
   await page.keyboard.press("Escape");
-  // У Claude правило свежее — предупреждения нет.
+  // У Claude правило свежее - предупреждения нет.
   await gear(page, "Claude Desktop");
   await expect(dialog.getByText("Брандмауэр закрывает прямой выход к Claude и WebRTC", { exact: false })).toBeVisible();
   await expect(dialog.getByText("Приложение обновилось", { exact: false })).toHaveCount(0);
   expect(errors).toEqual([]);
 });
 
-test("mac: у Codex нет защиты брандмауэра — pf не различает программы", async ({ page }) => {
+test("mac: у Codex нет защиты брандмауэра - pf не различает программы", async ({ page }) => {
   const errors = await open(page);
   await go(page, "Приложения");
   await gear(page, "ChatGPT Codex");
@@ -250,7 +324,7 @@ test("mac: у Codex нет защиты брандмауэра — pf не ра�
   expect(errors).toEqual([]);
 });
 
-test("windows: Claude — обычная строка с «Подключить», без отдельной панели", async ({ page }) => {
+test("windows: Claude - обычная строка с «Подключить», без отдельной панели", async ({ page }) => {
   await page.addInitScript(() => {
     (window as unknown as { __mockOverrides: unknown }).__mockOverrides = {
       claude_proxy_status: {
@@ -267,7 +341,7 @@ test("windows: Claude — обычная строка с «Подключить�
   // Прежней панели «Claude Desktop и агенты» с «Настроить Claude» больше нет.
   await expect(page.getByText("Claude Desktop и агенты")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Настроить Claude" })).toHaveCount(0);
-  // Тумблеров killswitch в строках тоже нет — как на Mac.
+  // Тумблеров killswitch в строках тоже нет - как на Mac.
   await expect(page.getByRole("switch", { name: /Проксировать/ })).toHaveCount(0);
   await page.getByRole("button", { name: "Подключить", exact: true }).click();
   await expect(page.getByText(/закройте его через значок в трее/)).toBeVisible();
@@ -294,31 +368,31 @@ test("windows: обновление в один клик и «Всегда че�
   expect(errors).toEqual([]);
 });
 
-test("windows: умное добавление — программы из меню «Пуск»", async ({ page }) => {
+test("windows: умное добавление - программы из меню «Пуск»", async ({ page }) => {
   const errors = await open(page, "still&platform=win");
   await go(page, "Приложения");
   await page.getByRole("button", { name: "Добавить" }).click();
   await page.getByPlaceholder("Название программы").fill("wec");
   await expect(page.getByText("WeChat")).toBeVisible();
-  // Папка программы — по Windows-пути, без имени exe.
+  // Папка программы - по Windows-пути, без имени exe.
   await expect(page.getByText("C:\\Program Files\\Tencent\\Weixin", { exact: true })).toBeVisible();
   await page.screenshot({ path: "test-results/windows-apps-add.png" });
   expect(errors).toEqual([]);
 });
 
-test("windows: Telegram через чужой локальный прокси — честный статус и «Подключить»", async ({ page }) => {
+test("windows: Telegram через чужой локальный прокси - честный статус и «Подключить»", async ({ page }) => {
   const errors = await open(page, "still&platform=win&tg=other");
   await go(page, "Приложения");
   // Раньше: «Открыт · сейчас без соединений».
   await expect(page.getByText("Через другой прокси, мимо моста")).toBeVisible();
   await page.getByRole("button", { name: "Подключить", exact: true }).click();
-  // Пока Telegram не подключился через мост — подсказка в строке.
+  // Пока Telegram не подключился через мост - подсказка в строке.
   await expect(page.getByText("В окне Telegram нажмите «Подключить»")).toBeVisible();
   await expect(page.getByText("Готово: Telegram идёт через мост, мимо прокси не пойдёт")).toBeVisible();
   expect(errors).toEqual([]);
 });
 
-test("Telegram без связи из-за защиты — видно в строке, «Убрать из списка» снимает защиту", async ({ page }) => {
+test("Telegram без связи из-за защиты - видно в строке, «Убрать из списка» снимает защиту", async ({ page }) => {
   const errors = await open(page, "still&tg=blocked");
   await go(page, "Приложения");
   // Раньше: спокойное «Открыт · сейчас без соединений».
@@ -370,7 +444,7 @@ test("сторож окна: прозрачная страница восста�
   expect(misses).toContain("ui_log");
 });
 
-test("браузер: расширение снимает защиту WebRTC — понятное предупреждение", async ({ page }) => {
+test("браузер: расширение снимает защиту WebRTC - понятное предупреждение", async ({ page }) => {
   await page.addInitScript(() => {
     (window as unknown as { __mockOverrides: unknown }).__mockOverrides = {
       apps_traffic: [
@@ -394,7 +468,7 @@ test("первый запуск: «Сначала очистка» открыв�
   await expect(page.getByText("Вставьте прокси").first()).toBeVisible({ timeout: 20_000 });
   await page.getByRole("button", { name: /Сначала очистка/ }).click();
   await expect(page.getByRole("heading", { name: "Инструменты" })).toBeVisible();
-  await expect(page.getByText("Очистка аккаунта Claude")).toBeVisible();
+  await expect(page.getByText("Очистка локальных данных Claude")).toBeVisible();
   await expect(page.getByText(/Прокси ещё не добавлен/)).toBeVisible();
   // Полоса остаётся при переходах по разделам, пока прокси не добавлен.
   await go(page, "Обзор");

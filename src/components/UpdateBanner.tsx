@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Loader2 } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { Button } from "./Button";
-import { updateCheck } from "../lib/api";
+import { autoUpdateGet, updateCheck } from "../lib/api";
 import { openUpdateDialog } from "../lib/updateBus";
 import type { UpdateInfo } from "../lib/types";
 import { cn } from "../lib/cn";
@@ -19,13 +19,13 @@ function remember(r: UpdateInfo | null) {
 }
 
 /** Одна проверка за сеанс приложения (GitHub API не дёргаем на каждый заход).
-    Ошибку не кэшируем и не выдаём за «последнюю версию» — показываем её. */
+    Ошибку не кэшируем и не выдаём за «последнюю версию» - показываем её. */
 async function checkOnce(force: boolean): Promise<{ info: UpdateInfo | null; error: string | null }> {
   try {
     const cached = sessionStorage.getItem(SESSION_KEY);
     if (!force && cached) return { info: JSON.parse(cached) as UpdateInfo | null, error: null };
   } catch {
-    /* нет sessionStorage — просто проверим */
+    /* нет sessionStorage - просто проверим */
   }
   try {
     const r = await updateCheck();
@@ -39,15 +39,17 @@ async function checkOnce(force: boolean): Promise<{ info: UpdateInfo | null; err
 /*
   Обновление приложения: «Доступна версия X» → «Обновить» открывает окно
   обновления (UpdateDialog): что нового и живой ход установки.
-  compact — плашка для Обзора; иначе — блок для Настроек с ручной проверкой.
+  compact - плашка для Обзора; иначе - блок для Настроек с ручной проверкой.
 */
 export function UpdateBanner({ compact }: { compact?: boolean }) {
   const [info, setInfo] = useState<UpdateInfo | null>(null);
   const [checked, setChecked] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [auto, setAuto] = useState(false);
 
   useEffect(() => {
+    void autoUpdateGet().then((a) => setAuto(a.enabled)).catch(() => {});
     void checkOnce(false).then((r) => {
       setInfo(r.info);
       setError(r.error);
@@ -89,7 +91,11 @@ export function UpdateBanner({ compact }: { compact?: boolean }) {
             </div>
             <div className={cn("text-[12px]", error && !info ? "text-vb-warn" : "truncate text-vb-silver-faint")}>
               {info
-                ? "Посмотрите, что нового, — обновление в один клик"
+                ? info.manual_only
+                  ? "Поставьте вручную со страницы релиза"
+                  : auto && info.handles_silently
+                    ? "Поставится само, когда программа свёрнута и вы отойдёте от компьютера"
+                    : "Посмотрите, что нового, - обновление в один клик"
                 : busy
                   ? "Проверяю…"
                   : error
@@ -101,7 +107,7 @@ export function UpdateBanner({ compact }: { compact?: boolean }) {
           </div>
           {info ? (
             <Button variant="primary" size="sm" onClick={() => openUpdateDialog(info)}>
-              Обновить
+              {info.manual_only ? "Подробнее" : "Обновить"}
             </Button>
           ) : (
             !compact && (

@@ -1,5 +1,5 @@
 //! Значение реестра Windows в той форме, что нужна проверкам политик
-//! (Claude, браузеры). Чтение — в win.rs; сама логика проверок — чистые
+//! (Claude, браузеры). Чтение - в win.rs; сама логика проверок - чистые
 //! функции над этими значениями и тестируется на любой ОС.
 
 #[derive(Debug, Clone, PartialEq)]
@@ -7,7 +7,7 @@ pub enum RegValue {
     Absent,
     /// REG_SZ.
     Str(String),
-    /// Любой другой тип (DWORD, REG_EXPAND_SZ…) — для политик это «чужое».
+    /// Любой другой тип (DWORD, REG_EXPAND_SZ…) - для политик это «чужое».
     Other(String),
 }
 
@@ -21,7 +21,7 @@ impl RegValue {
     }
 
     /// Значение из записи владения: `{"exists":…,"kind":…,"data":…}`.
-    /// None — запись не той формы.
+    /// None - запись не той формы.
     pub fn from_backup(v: &serde_json::Value) -> Option<RegValue> {
         match v.get("exists")?.as_bool()? {
             false => Some(RegValue::Absent),

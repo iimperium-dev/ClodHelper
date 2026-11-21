@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { motion } from "framer-motion";
 import { Check } from "lucide-react";
 import { cn } from "../lib/cn";
@@ -21,7 +22,7 @@ interface Props {
 }
 
 /*
-  Контекстное меню по правому клику — в духе системного меню macOS:
+  Контекстное меню по правому клику - в духе системного меню macOS:
   появляется из точки клика (scale + fade), не выходит за край окна,
   закрывается кликом мимо, Esc, прокруткой.
 */
@@ -33,7 +34,7 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
     const el = ref.current;
     if (!el) return;
     // offset*, а не getBoundingClientRect: в момент замера меню ещё уменьшено
-    // анимацией появления — по нему оно «влезало» и обрезалось снизу.
+    // анимацией появления - по нему оно «влезало» и обрезалось снизу.
     const place = () => {
       const w = el.offsetWidth;
       const h = el.offsetHeight;
@@ -44,7 +45,7 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
     };
     place();
     // Меню может подрасти после первого замера: начертание шрифта для
-    // кириллицы грузится, только когда меню уже показано, — переставляем.
+    // кириллицы грузится, только когда меню уже показано, - переставляем.
     const grow = new ResizeObserver(place);
     grow.observe(el);
     return () => grow.disconnect();
@@ -66,7 +67,9 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
     };
   }, [onClose]);
 
-  return (
+  // В корень документа: у страницы есть предки со сдвигом (анимация
+  // появления), и fixed считался бы от них - меню уезжало от курсора.
+  return createPortal(
     <motion.div
       ref={ref}
       initial={{ opacity: 0, scale: 0.92 }}
@@ -102,6 +105,7 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
           </button>
         ),
       )}
-    </motion.div>
+    </motion.div>,
+    document.body,
   );
 }

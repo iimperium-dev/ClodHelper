@@ -1,103 +1,132 @@
-import { motion } from "framer-motion";
-import { AlertTriangle, AppWindow, Check, Globe } from "lucide-react";
+import { motion, useReducedMotion } from "framer-motion";
+import { AppWindow, ArrowRight, Check, Globe, Monitor, Power } from "lucide-react";
 import { Button } from "../components/Button";
-import type { WizardInstallResult } from "../lib/types";
+import { PrivacySwitches } from "../components/PrivacySwitches";
+import { WizardFooter, WizardTitle } from "../components/WizardShell";
+import type { PrivacyKey, WizardInstallResult } from "../lib/types";
 import { cn } from "../lib/cn";
-import { isMac, osName } from "../lib/platform";
+import { osName } from "../lib/platform";
 
 interface Props {
   result: WizardInstallResult;
+  /** Автообновление, отчёты и статистика: по умолчанию включены, человек может снять. */
+  privacy: Record<PrivacyKey, boolean>;
+  onPrivacy: (key: PrivacyKey, on: boolean) => void;
   onFinish: () => void;
 }
 
 /*
-  Шаг 3: честный итог. Пиллы — из РЕАЛЬНОГО shim-теста (запрос через мост),
-  а не из выбранных галочек: если проверка не прошла, говорим об этом прямо
-  и ведём в приложение чинить, а не рисуем зелёное.
+  Шаг 3: честный итог. Маршрут «компьютер → мост → внешний IP» - из
+  РЕАЛЬНОГО shim-теста (запрос через мост), а не из выбранных галочек: если
+  проверка не прошла, говорим прямо и ведём в программу чинить.
+  Здесь же - три переключателя (автообновление, отчёты, статистика), все включены.
 */
-export function StepDone({ result, onFinish }: Props) {
+export function StepDone({ result, privacy, onPrivacy, onFinish }: Props) {
   const ok = result.test.ok;
+  const reduce = useReducedMotion();
+
   return (
-    <div className="mx-auto max-w-2xl pt-8 text-center">
-      <motion.div
-        initial={{ scale: 0 }}
-        animate={{ scale: 1 }}
-        transition={{ type: "spring", stiffness: 380, damping: 22 }}
-        className={cn(
-          "mx-auto flex h-16 w-16 items-center justify-center rounded-full border",
+    <>
+      <WizardTitle
+        sub={
           ok
-            ? "border-vb-emerald/40 bg-vb-emerald/10 text-vb-emerald"
-            : "border-vb-warn/40 bg-vb-warn/10 text-vb-warn",
-        )}
+            ? undefined // успех виден по маршруту ниже; место нужно переключателям
+            : `${result.test.error ?? "Запрос через мост не прошёл."} Чаще всего прокси не отвечает. Его можно сменить в разделе «Прокси».`
+        }
       >
-        {ok ? <Check className="h-8 w-8" /> : <AlertTriangle className="h-7 w-7" />}
-      </motion.div>
-
-      <h2 className="mt-5 text-[22px] font-semibold tracking-tight text-vb-fg">
         {ok ? "Всё работает" : "Мост установлен, но проверка не прошла"}
-      </h2>
-      <p className="mx-auto mt-1.5 max-w-md text-[13px] leading-relaxed text-vb-silver-dim">
-        {ok ? (
-          <>
-            Соединение через мост проверено настоящим запросом
-            {result.test.external_ip && (
-              <>
-                {" — внешний IP "}
-                <span className="font-mono text-vb-silver">{result.test.external_ip}</span>
-              </>
+      </WizardTitle>
+
+      {/* Маршрут: этот компьютер → мост → выход в интернет. */}
+      <div className="mt-4 flex items-center gap-2 rounded-xl border border-vb-border bg-vb-surface px-4 py-2.5">
+        <RouteNode icon={<Monitor className="h-3.5 w-3.5" aria-hidden />} label="Этот компьютер" />
+        <RouteLine ok reduce={!!reduce} delay={0.1} />
+        <RouteNode icon={<Power className="h-3.5 w-3.5" aria-hidden />} label="Мост" />
+        <RouteLine ok={ok} reduce={!!reduce} delay={0.35} />
+        <div className="flex min-w-0 items-center gap-2">
+          <span
+            aria-hidden
+            className={cn("h-2 w-2 shrink-0 rounded-full", ok ? "bg-vb-emerald" : "bg-vb-warn")}
+          />
+          <span className="min-w-0">
+            <span className="block truncate font-mono text-[12px] text-vb-fg">
+              {ok ? (result.test.external_ip ?? "выход через прокси") : "нет ответа"}
+            </span>
+            {ok && result.test.latency_ms != null && (
+              <span className="tnum block text-[11px] text-vb-silver-faint">{result.test.latency_ms} мс</span>
             )}
-            {result.test.latency_ms != null && (
-              <span className="tnum"> · {result.test.latency_ms} мс</span>
-            )}
-            .
-          </>
+          </span>
+        </div>
+      </div>
+
+      <ul className="mt-2">
+        <Row icon={<Check className="h-4 w-4 text-vb-emerald" aria-hidden />}>
+          Мост запускается сам при входе в {osName}
+        </Row>
+        {result.env_on ? (
+          <Row icon={<Globe className="h-4 w-4 text-vb-emerald" aria-hidden />}>
+            Терминал, VS Code и Claude Code уже идут через мост
+          </Row>
         ) : (
-          <>
-            {result.test.error ?? "Запрос через мост не прошёл."} Чаще всего это
-            значит, что прокси не отвечает — проверьте его в разделе «Прокси».
-          </>
+          <Row icon={<Globe className="h-4 w-4 text-vb-warn" aria-hidden />}>
+            Терминал пока идёт напрямую. Включить его можно в «Приложениях», в настройках Claude Desktop (шестерёнка)
+          </Row>
         )}
-      </p>
+        <Row icon={<AppWindow className="h-4 w-4 text-vb-silver-dim" aria-hidden />}>
+          Claude Desktop подключается в разделе «Приложения»
+        </Row>
+      </ul>
 
-      <div className="mx-auto mt-6 max-w-md space-y-2 text-left">
-        <div className="flex items-center gap-2.5 rounded-lg border border-vb-border/70 px-3.5 py-2.5 text-[13px] text-vb-silver">
-          <Check className="h-4 w-4 shrink-0 text-vb-emerald" />
-          Мост установлен и будет запускаться сам при входе в {osName}
-        </div>
-        <div className="flex items-center gap-2.5 rounded-lg border border-vb-border/70 px-3.5 py-2.5 text-[13px] text-vb-silver">
-          {result.env_on ? (
-            <>
-              <Globe className="h-4 w-4 shrink-0 text-vb-emerald" />
-              Системное проксирование включено — терминал, VS Code и Claude Code
-              уже идут через мост
-            </>
-          ) : (
-            <>
-              <Globe className="h-4 w-4 shrink-0 text-vb-warn" />
-              Системное проксирование не включилось — включите его в
-              «Приложениях» → Claude Desktop → ⚙ → «Claude Code в терминале»
-            </>
-          )}
-        </div>
-        <div className="flex items-center gap-2.5 rounded-lg border border-vb-border/70 px-3.5 py-2.5 text-[13px] text-vb-silver">
-          <AppWindow className="h-4 w-4 shrink-0 text-vb-silver-dim" />
-          {isMac ? (
-            <>
-              Claude Desktop, браузер и другие программы — в разделе
-              «Приложения»
-            </>
-          ) : (
-            <>
-              Дальше: «Приложения» → Claude Desktop → «Подключить». Там же
-              кнопкой «Добавить» — отдельный браузер для сайта Claude
-            </>
-          )}
-        </div>
+      <div className="mt-2 border-t border-vb-border/60 pt-3">
+        <PrivacySwitches dense idPrefix="wizard" values={privacy} onChange={onPrivacy} />
       </div>
 
-      <div className="mt-8">
-        <Button onClick={onFinish}>Открыть Clod Helper</Button>
-      </div>
-    </div>
+      <WizardFooter>
+        <Button onClick={onFinish} autoFocus>
+          Открыть Clod Helper
+          <ArrowRight className="h-4 w-4" aria-hidden />
+        </Button>
+      </WizardFooter>
+    </>
   );
 }
+
+function RouteNode({ icon, label }: { icon: React.ReactNode; label: string }) {
+  return (
+    <span className="flex shrink-0 items-center gap-1.5 text-[12px] text-vb-silver">
+      <span className="flex h-6 w-6 items-center justify-center rounded-md bg-vb-surface-2 text-vb-silver-dim">
+        {icon}
+      </span>
+      <span className="hidden sm:inline">{label}</span>
+      <span className="sr-only sm:hidden">{label}</span>
+    </span>
+  );
+}
+
+/** Отрезок маршрута: прорисовывается слева направо (transform), обрыв - пунктир. */
+function RouteLine({ ok, reduce, delay }: { ok: boolean; reduce: boolean; delay: number }) {
+  return (
+    <span aria-hidden className="relative h-px min-w-4 flex-1 overflow-hidden">
+      {ok ? (
+        <motion.span
+          className="absolute inset-0 origin-left bg-vb-emerald-dim"
+          initial={reduce ? false : { scaleX: 0 }}
+          animate={{ scaleX: 1 }}
+          transition={{ delay, duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+        />
+      ) : (
+        <span className="absolute inset-0 border-t border-dashed border-vb-warn/60" />
+      )}
+    </span>
+  );
+}
+
+function Row({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <li className="flex items-start gap-2.5 px-1 py-1 text-[13px] leading-snug text-vb-silver">
+      <span className="mt-px shrink-0">{icon}</span>
+      <span>{children}</span>
+    </li>
+  );
+}
+

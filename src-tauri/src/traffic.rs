@@ -1,18 +1,18 @@
-//! Через мост ли на самом деле идёт приложение — по живым TCP-соединениям.
+//! Через мост ли на самом деле идёт приложение - по живым TCP-соединениям.
 //!
 //! Настройка «записана» ещё не значит «работает»: приложение могли открыть
 //! мимо ярлыка, политику мог стереть macOS. Поэтому статус в «Приложениях»
 //! считается по факту: один снимок `lsof` на все процессы, соединения
 //! раскладываются по приложениям по имени процесса.
-//!   - к 127.0.0.1:8889/8890/8891 — через мост;
-//!   - наружу (не loopback) — мимо моста.
+//!   - к 127.0.0.1:8889/8890/8891 - через мост;
+//!   - наружу (не loopback) - мимо моста.
 
 use serde::Serialize;
 
 use crate::apps::AppProfile;
 
 /// Входы моста: сайты 8887, общий HTTP 8889, строгий Claude 8890, SOCKS
-/// 8891 и закреплённые за прокси пула 8892–8896 (8888 мост не слушает).
+/// 8891 и закреплённые за прокси пула 8892-8896 (8888 мост не слушает).
 const BRIDGE_PORTS: std::ops::RangeInclusive<u16> = 8887..=8896;
 
 #[derive(Debug, Serialize, Default, Clone, PartialEq)]
@@ -26,12 +26,12 @@ pub struct AppTraffic {
     /// Браузер: включённое расширение, перехватившее прокси (FoxyProxy…).
     pub proxy_extension: Option<crate::browser_ext::ProxyExtension>,
     /// Telegram: адрес чужого локального прокси, через который он ходит
-    /// («127.0.0.1:1442» — tg-ws-proxy и т.п.); такой трафик идёт мимо моста.
+    /// («127.0.0.1:1442» - tg-ws-proxy и т.п.); такой трафик идёт мимо моста.
     pub other_proxy: Option<String>,
 }
 
 /// Имена процессов, по которым узнаём приложение (префикс: «Claude» ловит и
-/// «Claude Helper (Renderer)»). Общие рантаймы (node, git) не берём — они
+/// «Claude Helper (Renderer)»). Общие рантаймы (node, git) не берём - они
 /// принадлежат кому угодно.
 fn traffic_names(p: &AppProfile) -> Vec<String> {
     match p.id.as_str() {
@@ -43,7 +43,7 @@ fn traffic_names(p: &AppProfile) -> Vec<String> {
         _ => {
             // Своё приложение: имя бандла («WebStorm.app» → «WebStorm»).
             // Своё приложение: имя бандла/файла («WebStorm.app» → «WebStorm»,
-            // «C:\\…\\chrome.exe» → «chrome») — разбор без учёта ОС.
+            // «C:\\…\\chrome.exe» → «chrome») - разбор без учёта ОС.
             let from_path = p.exe_path.as_deref().and_then(|e| {
                 let leaf = e.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next()?;
                 let stem = leaf.strip_suffix(".app").or_else(|| leaf.strip_suffix(".exe")).unwrap_or(leaf);
@@ -56,7 +56,7 @@ fn traffic_names(p: &AppProfile) -> Vec<String> {
 
 /// Имя процесса совпадает с именем приложения или начинается с него и
 /// пробела/скобки («Claude Helper (Renderer)»). Без учёта регистра: на
-/// Windows процессы — «claude.exe», «chrome.exe».
+/// Windows процессы - «claude.exe», «chrome.exe».
 fn matches(command: &str, names: &[String]) -> bool {
     let c = command.to_ascii_lowercase();
     let c = c.strip_suffix(".exe").unwrap_or(&c);
@@ -66,7 +66,7 @@ fn matches(command: &str, names: &[String]) -> bool {
     })
 }
 
-/// Разобрать `lsof -Fcn`: «c<команда>» задаёт процесс, «n<лок>-><удал>» —
+/// Разобрать `lsof -Fcn`: «c<команда>» задаёт процесс, «n<лок>-><удал>» -
 /// его соединения. Возвращает (команда, удалённый адрес).
 #[cfg_attr(target_os = "windows", allow(dead_code))]
 fn parse_lsof(out: &str) -> Vec<(String, String)> {
@@ -96,7 +96,7 @@ fn is_bridge(remote: &str) -> bool {
 
 /// Дата-центры Telegram (официальные диапазоны MTProto). Для Telegram
 /// «мимо моста» считаем ТОЛЬКО их: сам клиент напрямую проверяет
-/// доступность сохранённых в нём прокси и ходит к служебным адресам —
+/// доступность сохранённых в нём прокси и ходит к служебным адресам -
 /// это не переписка, и тревога «мимо моста» из-за них была ложной.
 fn is_telegram_dc(remote: &str) -> bool {
     if let Some(v6) = remote.strip_prefix('[') {
@@ -124,7 +124,7 @@ fn is_telegram_dc(remote: &str) -> bool {
 
 /// Публичные DNS-резолверы (DNS-over-HTTPS / DNS-over-TLS). Движок Chromium
 /// в Electron-приложениях (ChatGPT, VS Code…) ходит к ним напрямую, мимо
-/// --proxy-server, — это поиск адресов, а не трафик к сервису: ни запросы,
+/// --proxy-server, - это поиск адресов, а не трафик к сервису: ни запросы,
 /// ни IP пользователя до OpenAI/Anthropic так не доходят. Считать их «мимо
 /// моста» значило бы вечное ложное «Частично мимо».
 fn is_dns_resolver(remote: &str) -> bool {
@@ -144,6 +144,29 @@ fn is_dns_resolver(remote: &str) -> bool {
 
 fn is_loopback(remote: &str) -> bool {
     remote.starts_with("127.") || remote.starts_with("[::1]")
+}
+
+/// Адрес в домашней или рабочей сети (192.168.x, 10.x, fe80:: и т. п.).
+/// Такие соединения не выходят в интернет: например, Claude Desktop
+/// подключается по SSH к соседнему компьютеру. Считать их «мимо моста»
+/// было ложной тревогой.
+fn is_lan(remote: &str) -> bool {
+    let host = match remote.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or(""),
+        None => remote.rsplit_once(':').map(|(h, _)| h).unwrap_or(remote),
+    };
+    let host = host.split('%').next().unwrap_or(host);
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) => ip.is_private() || ip.is_link_local() || ip.is_loopback(),
+        Ok(std::net::IpAddr::V6(ip)) => {
+            let first = ip.segments()[0];
+            ip.is_loopback()
+                || (first & 0xffc0) == 0xfe80 // fe80::/10 - адрес в пределах сети
+                || (first & 0xfe00) == 0xfc00 // fc00::/7 - частная сеть
+                || ip.to_ipv4_mapped().is_some_and(|v4| v4.is_private() || v4.is_link_local())
+        }
+        Err(_) => false,
+    }
 }
 
 /// Свести снимок процессов и соединений к статусу каждого профиля.
@@ -170,9 +193,10 @@ fn summarize(
                     t.via_bridge += 1;
                 } else if telegram && is_loopback(remote) {
                     // К localhost Telegram ходит только к прокси: чужой
-                    // локальный прокси — «открыт, без соединений» было неправдой.
+                    // локальный прокси - «открыт, без соединений» было неправдой.
                     t.other_proxy.get_or_insert_with(|| remote.clone());
                 } else if !is_loopback(remote)
+                    && !is_lan(remote)
                     && !is_dns_resolver(remote)
                     && (!telegram || is_telegram_dc(remote))
                 {
@@ -184,7 +208,7 @@ fn summarize(
         .collect()
 }
 
-/// Включена ли у браузера политика «всегда через мост» (кэш 30 с: статус —
+/// Включена ли у браузера политика «всегда через мост» (кэш 30 с: статус -
 /// это запуск скрипта).
 fn browser_policy_on(app_path: &str) -> bool {
     use std::collections::HashMap;
@@ -209,7 +233,7 @@ fn browser_policy_on(app_path: &str) -> bool {
 }
 
 /// Снимок не чаще раза в 3 с: страница «Приложения» и окно настроек могут
-/// спросить почти одновременно, а lsof по всем процессам — не бесплатный.
+/// спросить почти одновременно, а lsof по всем процессам - не бесплатный.
 #[cfg(not(target_os = "windows"))]
 pub fn snapshot(profiles: &[AppProfile]) -> Vec<AppTraffic> {
     use std::sync::Mutex;
@@ -262,7 +286,7 @@ fn mark_proxy_extensions(t: &mut [AppTraffic], profiles: &[AppProfile]) {
         let Some(ext) = crate::browser_ext::proxy_extensions(path).into_iter().next() else {
             continue;
         };
-        // Политика «всегда через мост» главнее расширений — тогда FoxyProxy
+        // Политика «всегда через мост» главнее расширений - тогда FoxyProxy
         // и т.п. уже ничего не перехватывают (проверяем, только если есть кого).
         if !browser_policy_on(path) {
             traffic.proxy_extension = Some(ext);
@@ -270,8 +294,8 @@ fn mark_proxy_extensions(t: &mut [AppTraffic], profiles: &[AppProfile]) {
     }
 }
 
-/// Windows: те же правила; соединения с PID — из таблицы TCP системы
-/// (GetExtendedTcpTable), имена процессов — sysinfo. Без tasklist/netstat:
+/// Windows: те же правила; соединения с PID - из таблицы TCP системы
+/// (GetExtendedTcpTable), имена процессов - sysinfo. Без tasklist/netstat:
 /// те стоили секунды на каждый опрос. Кэш 3 с, как на macOS.
 #[cfg(target_os = "windows")]
 pub fn snapshot(profiles: &[AppProfile]) -> Vec<AppTraffic> {
@@ -345,7 +369,19 @@ mod tests {
         assert!(!is_dns_resolver("104.18.32.47:443"));
     }
 
-    /// Windows: имена образов «Claude.exe», адреса из таблицы TCP — в том
+    /// Соединения внутри домашней сети (SSH к соседнему Маку) - не утечка.
+    #[test]
+    fn lan_is_not_a_leak() {
+        assert!(is_lan("[fe80::10c2:e72b:1c52:e318%24]:22"));
+        assert!(is_lan("192.168.1.20:22"));
+        assert!(is_lan("10.0.0.5:443"));
+        assert!(is_lan("[fd00::1]:22"));
+        assert!(!is_lan("72.56.129.22:8000"));
+        assert!(!is_lan("[2a00:1450::1]:443"));
+        assert!(!is_lan("100.64.0.1:443"));
+    }
+
+    /// Windows: имена образов «Claude.exe», адреса из таблицы TCP - в том
     /// числе IPv6 «[…]:порт».
     #[test]
     fn windows_processes_and_tcp_table() {
@@ -401,10 +437,10 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
         let t = summarize(&profiles, &running, &parse_lsof(lsof));
-        // ClaudeBar — другое приложение: префикс без пробела не считается.
+        // ClaudeBar - другое приложение: префикс без пробела не считается.
         assert_eq!((t[0].running, t[0].via_bridge, t[0].direct), (true, 1, 1));
         assert_eq!((t[1].via_bridge, t[1].direct), (1, 0));
-        // Локальный dev-сервер (127.0.0.1:3000) — не «мимо моста».
+        // Локальный dev-сервер (127.0.0.1:3000) - не «мимо моста».
         assert_eq!((t[2].running, t[2].via_bridge, t[2].direct), (true, 1, 0));
         assert_eq!((t[3].running, t[3].via_bridge, t[3].direct), (false, 0, 0));
         // Чужой локальный прокси отмечается только у Telegram.

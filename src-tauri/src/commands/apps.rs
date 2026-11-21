@@ -22,7 +22,7 @@ use super::*;
 // ─── App profiles (проксируемые приложения) ─────────────────────
 
 /// Список профилей + их runtime-статус (найдено ли приложение, есть ли ярлык).
-/// Внутри Get-AppxPackage (секунды!) — только spawn_blocking.
+/// Внутри Get-AppxPackage (секунды!) - только spawn_blocking.
 #[tauri::command]
 pub async fn apps_list() -> Result<Vec<AppProfileStatus>, String> {
     tokio::task::spawn_blocking(|| {
@@ -45,12 +45,12 @@ pub async fn apps_icons(paths: Vec<String>) -> Result<std::collections::HashMap<
 #[tauri::command]
 pub async fn apps_search(query: String) -> Result<Vec<apps::FoundApp>, String> {
     tokio::task::spawn_blocking(move || {
-        // Убранные из списка (встроенные прячутся) — тоже находятся.
+        // Убранные из списка (встроенные прячутся) - тоже находятся.
         let hidden: Vec<(String, String)> = settings::load_with_presets()
             .app_profiles
             .into_iter()
             .filter(|p| p.hidden)
-            // Приложения из Store (Codex/ChatGPT) — по AppID: файла не видно.
+            // Приложения из Store (Codex/ChatGPT) - по AppID: файла не видно.
             .filter_map(|p| Some((apps::profile_file(&p).or_else(|| apps::profile_store_id(&p))?, p)))
             .map(|(path, p)| (p.name, path))
             .collect();
@@ -60,9 +60,9 @@ pub async fn apps_search(query: String) -> Result<Vec<apps::FoundApp>, String> {
     .map_err(|e| format!("Внутренняя ошибка: {e}"))
 }
 
-/// Настройки приложения: свой прокси (None — «Авто») и «весь трафик».
+/// Настройки приложения: свой прокси (None - «Авто») и «весь трафик».
 /// Для Claude / Codex / Telegram прокси задаётся назначением сервиса (UI
-/// вызывает proxy_assignments_set) — здесь только профиль.
+/// вызывает proxy_assignments_set) - здесь только профиль.
 #[tauri::command]
 pub async fn apps_settings_set(
     id: String,
@@ -81,7 +81,7 @@ pub async fn apps_settings_set(
     Ok(apps::statuses(&saved.app_profiles))
 }
 
-/// Раскладка «Приложений» (вид, папки, порядок) — JSON от UI.
+/// Раскладка «Приложений» (вид, папки, порядок) - JSON от UI.
 #[tauri::command]
 pub async fn apps_layout_get() -> Result<Option<serde_json::Value>, String> {
     Ok(settings::load().apps_layout)
@@ -89,9 +89,11 @@ pub async fn apps_layout_get() -> Result<Option<serde_json::Value>, String> {
 
 #[tauri::command]
 pub async fn apps_layout_set(layout: serde_json::Value) -> Result<(), String> {
-    let mut s = settings::load();
-    s.apps_layout = Some(layout);
-    settings::save(&s)
+    settings::with_settings(|s| {
+        s.apps_layout = Some(layout);
+        Ok(())
+    })
+    .map(|_| ())
 }
 
 /// Открыть в браузере страницу расширения, перехватившего прокси.
@@ -107,7 +109,7 @@ pub async fn apps_open_extension(id: String, ext_id: String) -> Result<(), Strin
     return tokio::task::spawn_blocking(move || crate::browser_ext::open_extension_page(&path, &ext_id))
         .await
         .map_err(|e| format!("Внутренняя ошибка: {e}"))?;
-    // Windows: адрес chrome://extensions передаётся exe браузера — так же,
+    // Windows: адрес chrome://extensions передаётся exe браузера - так же,
     // как «Открыть», через мост (запущенный браузер просто откроет вкладку).
     #[cfg(target_os = "windows")]
     return tokio::task::spawn_blocking(move || {
@@ -118,7 +120,7 @@ pub async fn apps_open_extension(id: String, ext_id: String) -> Result<(), Strin
     .map_err(|e| format!("Внутренняя ошибка: {e}"))?;
 }
 
-/// Через мост ли идёт каждое приложение — по живым соединениям.
+/// Через мост ли идёт каждое приложение - по живым соединениям.
 #[tauri::command]
 pub async fn apps_traffic() -> Result<Vec<crate::traffic::AppTraffic>, String> {
     tokio::task::spawn_blocking(|| {
@@ -130,10 +132,10 @@ pub async fn apps_traffic() -> Result<Vec<crate::traffic::AppTraffic>, String> {
 }
 
 /// Сохранить новое состояние профилей (enabled-галочки, добавленные свои).
-/// Если killswitch активен — правила файрвола НЕ пересобираются автоматически
+/// Если killswitch активен - правила файрвола НЕ пересобираются автоматически
 /// здесь (это делает отдельный killswitch_enable), чтобы не плодить UAC-промпты
 /// на каждый чих. UI подскажет «переприменить killswitch» если нужно.
-/// settings.json VS Code больше не трогаем — терминал покрывает глобальный env.
+/// settings.json VS Code больше не трогаем - терминал покрывает глобальный env.
 #[tauri::command]
 pub async fn apps_set(profiles: Vec<AppProfile>) -> Result<Vec<AppProfileStatus>, String> {
     let saved = settings::set_profiles(profiles)?;
@@ -147,7 +149,7 @@ pub async fn apps_add_custom(
     exe_path: String,
 ) -> Result<Vec<AppProfileStatus>, String> {
     let mut s = settings::load_with_presets();
-    // Программа уже есть, но убрана из списка (в т.ч. встроенная) — вернуть.
+    // Программа уже есть, но убрана из списка (в т.ч. встроенная) - вернуть.
     // Путь сверяем с тем, где она стоит сейчас: поиск отдаёт путь из «Пуска»
     // или реестра, у встроенной он мог быть сохранён иначе или не сохранён.
     if let Some(p) = s.app_profiles.iter_mut().find(|p| {
@@ -160,7 +162,7 @@ pub async fn apps_add_custom(
         let saved = settings::set_profiles(s.app_profiles)?;
         return Ok(apps::statuses(&saved.app_profiles));
     }
-    // Новое своё приложение — только настоящий файл.
+    // Новое своё приложение - только настоящий файл.
     if !std::path::Path::new(&exe_path).exists() {
         return Err("Файл не найден по указанному пути".into());
     }
@@ -198,7 +200,7 @@ pub async fn apps_add_custom(
 pub async fn apps_remove(id: String) -> Result<Vec<AppProfileStatus>, String> {
     // Браузер с политикой «Всегда через мост»: убрать из списка = снять и её,
     // иначе браузер продолжает ходить через мост при любом запуске (политика
-    // главнее флагов). Отмена пароля — не убираем, чтобы не было рассинхрона.
+    // главнее флагов). Отмена пароля - не убираем, чтобы не было рассинхрона.
     if let Ok(domain) = browser_domain_of(&id) {
         let configured = tokio::task::spawn_blocking(move || crate::browser_policy::status(domain))
             .await
@@ -221,7 +223,7 @@ pub async fn apps_remove(id: String) -> Result<Vec<AppProfileStatus>, String> {
             .map_err(|e| format!("Не удалось снять защиту от утечек: {e}"))?;
     }
     let mut s = settings::load_with_presets();
-    // Встроенный не удаляем (пресеты пересеялись бы при запуске) — прячем.
+    // Встроенный не удаляем (пресеты пересеялись бы при запуске) - прячем.
     if let Some(p) = s.app_profiles.iter_mut().find(|p| p.id == id && p.builtin) {
         p.hidden = true;
     } else {
@@ -324,7 +326,7 @@ fn browser_domain_of(id: &str) -> Result<&'static str, String> {
         .ok_or_else(|| "Этот браузер не поддерживает закрепление политикой".to_string())
 }
 
-/// Состояние «всегда через мост» у браузера; None — браузер без политик.
+/// Состояние «всегда через мост» у браузера; None - браузер без политик.
 #[tauri::command]
 pub async fn browser_policy_status(id: String) -> Result<Option<crate::browser_policy::BrowserPolicyStatus>, String> {
     let Ok(domain) = browser_domain_of(&id) else { return Ok(None) };
@@ -333,7 +335,7 @@ pub async fn browser_policy_status(id: String) -> Result<Option<crate::browser_p
         .map_err(|e| format!("Внутренняя ошибка: {e}"))?
 }
 
-/// Включить/снять «всегда через мост» (пароль Mac / окно UAC). Вход — как у «Открыть».
+/// Включить/снять «всегда через мост» (пароль Mac / окно UAC). Вход - как у «Открыть».
 #[tauri::command]
 pub async fn browser_policy_set(id: String, enable: bool) -> Result<crate::browser_policy::BrowserPolicyStatus, String> {
     let domain = browser_domain_of(&id)?;

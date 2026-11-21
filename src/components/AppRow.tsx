@@ -30,9 +30,9 @@ export interface RowAction {
 
 interface Props {
   app: AppProfileStatus;
-  /** null — статуса нет (ещё не узнали): тихая подпись типа. */
+  /** null - статуса нет (ещё не узнали): тихая подпись типа. */
   status: RowStatus | null;
-  /** Главная кнопка, когда нужно действие («Подключить»). Иначе — «Открыть». */
+  /** Главная кнопка, когда нужно действие («Подключить»). Иначе - «Открыть». */
   action?: RowAction | null;
   onLaunch: () => Promise<void>;
   /** Настоящая иконка программы. */
@@ -45,10 +45,10 @@ interface Props {
 }
 
 /*
-  Строка приложения — одна для всех (Claude, Telegram, VS Code, свои):
-  логотип, имя, ОДНА строка статуса по живым соединениям, ОДНА кнопка —
+  Строка приложения - одна для всех (Claude, Telegram, VS Code, свои):
+  логотип, имя, ОДНА строка статуса по живым соединениям, ОДНА кнопка -
   «Подключить», если трафик идёт мимо моста, иначе «Открыть». Всё
-  второстепенное — в настройках приложения (шестерёнка).
+  второстепенное - в настройках приложения (шестерёнка).
 */
 export function AppRow({
   app,
@@ -64,7 +64,7 @@ export function AppRow({
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState<{ ok: boolean; text: string } | null>(null);
 
-  // Дополнительные действия (ярлыки, «Отключить прокси Claude»…) — в окне
+  // Дополнительные действия (ярлыки, «Отключить прокси Claude»…) - в окне
   // настроек приложения (шестерёнка на иконке), не в меню «…» строки.
   const run = async (fn: () => Promise<unknown> | void, okText?: string) => {
     setBusy(true);
@@ -114,7 +114,7 @@ export function AppRow({
             </motion.button>
           )}
         </AnimatePresence>
-        {/* В списке настройки — кнопкой справа; шестерёнка на иконке — только у плиток */}
+        {/* В списке настройки - кнопкой справа; шестерёнка на иконке - только у плиток */}
         <AppIcon name={app.name} icon={icon} size={32} dim={!app.installed} />
 
         <div className="min-w-0 flex-1">
@@ -164,13 +164,13 @@ export function AppRow({
                 Открыть
               </button>
             )}
-            {/* Настройки — там же, где раньше было «…»: в покое тихо, при
-                наведении на строку заметно, на самой кнопке — зелёным. */}
+            {/* Настройки - там же, где раньше было «…»: в покое тихо, при
+                наведении на строку заметно, на самой кнопке - зелёным. */}
             {onSettings && (
               <button
                 type="button"
                 onClick={onSettings}
-                aria-label={`Настройки — ${app.name}`}
+                aria-label={`Настройки - ${app.name}`}
                 title="Настройки"
                 className={cn(
                   "group/gear rounded-lg p-1.5 transition-colors duration-150 hover:bg-vb-emerald/10 hover:text-vb-emerald active:scale-[0.95]",

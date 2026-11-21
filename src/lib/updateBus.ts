@@ -4,7 +4,7 @@ import { isMac } from "./platform";
 
 /*
   Открыть окно обновления из любого места (баннер в Обзоре и Настройках,
-  уведомление в углу экрана — через событие Tauri "update:open").
+  уведомление в углу экрана - через событие Tauri "update:open").
 */
 const OPEN = "clod:update-open";
 
@@ -18,11 +18,11 @@ export function onOpenUpdateDialog(fn: (info: UpdateInfo) => void): () => void {
   return () => window.removeEventListener(OPEN, h);
 }
 
-/** Пункт «Что нового»: строка — для всех ОС, объект — только для своих. */
+/** Пункт «Что нового»: строка - для всех ОС, объект - только для своих. */
 type WhatsNewItem = string | { text: string; platforms?: ("mac" | "windows")[] };
 
 /** Пункты «Что нового» версии для этой ОС из src/whats-new.json (его же CI
-    кладёт в релиз и в манифест обновления — по ОС). */
+    кладёт в релиз и в манифест обновления - по ОС). */
 export function whatsNewItems(version: string): string[] {
   const entry = (whatsNew as Record<string, { items?: WhatsNewItem[] }>)[version];
   const os = isMac ? "mac" : "windows";

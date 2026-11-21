@@ -1,15 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangle, ArrowUpDown, Loader2 } from "lucide-react";
+import { AlertTriangle, ArrowRight, ArrowUpDown, Loader2 } from "lucide-react";
 import { Button } from "../components/Button";
 import { CountryFlag } from "../components/CountryFlag";
+import { WizardFooter, WizardTitle } from "../components/WizardShell";
 import { checkProxy } from "../lib/api";
 import { isParseReject, parseProxyInput, type ParsedProxy } from "../lib/proxyParse";
 import type { ProxyCheckResult } from "../lib/types";
 import { cn } from "../lib/cn";
 
 /** Инструкция «Свой прокси» на сайте проекта. */
-const OWN_PROXY_GUIDE = "https://iimperium-dev.github.io/ClodHelper/proxy/";
+const OWN_PROXY_GUIDE = "https://clodhelper.com/proxy/";
 
 interface Props {
   initialUrl: string | null;
@@ -18,11 +19,20 @@ interface Props {
   onSkipToTools?: () => void;
 }
 
+const fade = {
+  initial: { opacity: 0 },
+  animate: { opacity: 1 },
+  exit: { opacity: 0 },
+  transition: { duration: 0.16 },
+};
+
 /*
-  Шаг 1 нового мастера: приветствие + умный ввод прокси.
-  Парсер — тот же parseProxyInput, что в разделе «Прокси» (любые форматы
+  Шаг 1: умный ввод прокси.
+  Парсер - тот же parseProxyInput, что в разделе «Прокси» (любые форматы
   шопов, эскалация при неоднозначности). Гео-проверка информативная, НЕ
-  блокирует «Дальше»: настоящая проверка соединения будет на шаге установки.
+  блокирует «Дальше»: настоящая проверка соединения - на шаге настройки.
+  Enter в поле = «Дальше». Ссылки «Нет прокси?» и «Сначала очистка» - тихо
+  в подвале слева, чтобы не спорить с полем ввода.
 */
 export function StepProxy({ initialUrl, onNext, onSkipToTools }: Props) {
   const [input, setInput] = useState(initialUrl ?? "");
@@ -65,176 +75,166 @@ export function StepProxy({ initialUrl, onNext, onSkipToTools }: Props) {
 
   const geo = check.state === "done" ? check.result : null;
   const isRu = geo?.country_code?.toUpperCase() === "RU";
+  const submit = () => parsed && onNext(parsed.url);
+  const hasInput = !!input.trim();
 
   return (
-    <div className="mx-auto max-w-2xl pt-4">
-      <h2 className="text-[22px] font-semibold tracking-tight text-vb-silver">
+    <>
+      <WizardTitle sub="Строку от продавца - целиком, в любом формате. Дальше всё настроится само.">
         Вставьте прокси
-      </h2>
-      <p className="mt-1.5 text-[13px] text-vb-silver-dim">
-        Вставьте строку прокси целиком — формат любой, мы сами разберём её на
-        части. Дальше всё настроится автоматически.
-      </p>
+      </WizardTitle>
 
-      <div className="mt-3 flex flex-col items-start gap-1.5">
-        <button
-          type="button"
-          onClick={() =>
-            import("@tauri-apps/plugin-opener").then((m) =>
-              m.openUrl(OWN_PROXY_GUIDE),
-            )
-          }
-          className="inline-flex items-center gap-1.5 text-[12px] text-vb-silver-dim transition-colors hover:text-vb-silver"
-        >
-          Нет прокси?
-          <span className="text-vb-emerald/80">Поднимите свой за 15 минут →</span>
-        </button>
-        {onSkipToTools && (
-          <button
-            type="button"
-            onClick={onSkipToTools}
-            className="inline-flex items-center gap-1.5 text-[12px] text-vb-silver-dim transition-colors hover:text-vb-silver"
-          >
-            Был другой аккаунт Claude?
-            <span className="text-vb-emerald/80">Сначала очистка →</span>
-          </button>
-        )}
-      </div>
-
-      <div className="surface-card mt-5 p-5">
+      <div className="mt-5">
+        <label htmlFor="wizard-proxy" className="sr-only">
+          Строка прокси
+        </label>
         <input
+          id="wizard-proxy"
           type="text"
           spellCheck={false}
           autoCapitalize="off"
           autoCorrect="off"
+          autoComplete="off"
           value={input}
           onChange={(e) => {
             setInput(e.target.value);
             setSwapped(false);
           }}
-          placeholder="Например: 1.2.3.4:8000:логин:пароль"
-          className="w-full rounded-lg border border-vb-border bg-vb-surface-2 px-3.5 py-2.5 font-mono text-[13px] text-vb-fg outline-none transition-colors focus:border-vb-emerald/60"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") submit();
+          }}
+          aria-invalid={hasInput && !parsed}
+          aria-describedby="wizard-proxy-result"
+          placeholder="1.2.3.4:8000:логин:пароль"
+          className={cn(
+            "w-full rounded-xl border bg-vb-surface px-4 py-3 font-mono text-[14px] text-vb-fg outline-none",
+            "placeholder:text-vb-silver-faint transition-colors duration-150",
+            hasInput && !parsed
+              ? "border-vb-warn/50 focus:border-vb-warn/70"
+              : "border-vb-border hover:border-vb-border-strong focus:border-vb-emerald/60",
+          )}
           autoFocus
         />
+      </div>
 
-        {input.trim() &&
+      {/* Разбор строки - живой ответ под полем, объявляется читалкой. */}
+      <div id="wizard-proxy-result" aria-live="polite" className="mt-3 min-h-[20px]">
+        {hasInput &&
           (parsed ? (
             <div
               className={cn(
-                "mt-3 rounded-lg border p-3",
-                needsReview
-                  ? "border-vb-warn/35 bg-vb-warn/[0.05]"
-                  : "border-vb-emerald/25 bg-vb-emerald/[0.04]",
+                "rounded-xl border px-4 py-3",
+                needsReview ? "border-vb-warn/35 bg-vb-warn/[0.05]" : "border-vb-border bg-vb-surface",
               )}
             >
               {needsReview && (
                 <p className="mb-2 text-[12px] text-vb-warn">
                   {ambiguous
-                    ? "Формат неоднозначный — проверьте, где хост, а где логин:"
-                    : "Не до конца уверен в разборе — проверьте поля:"}
+                    ? "Формат неоднозначный - проверьте, где адрес, а где логин"
+                    : "Не до конца уверен в разборе - проверьте поля"}
                 </p>
               )}
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px]">
-                <span className="text-vb-silver-dim">
-                  Хост <span className="font-mono text-vb-fg">{parsed.host}</span>
-                </span>
-                <span className="text-vb-silver-dim">
-                  Порт <span className="tnum font-mono text-vb-fg">{parsed.port}</span>
-                </span>
+              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[12px] sm:grid-cols-[auto_1fr_auto_1fr]">
+                <dt className="text-vb-silver-faint">Адрес</dt>
+                <dd className="truncate font-mono text-vb-fg">{parsed.host}</dd>
+                <dt className="text-vb-silver-faint">Порт</dt>
+                <dd className="tnum font-mono text-vb-fg">{parsed.port}</dd>
                 {parsed.username !== undefined && (
                   <>
-                    <span className="text-vb-silver-dim">
-                      Логин <span className="font-mono text-vb-fg">{parsed.username}</span>
-                    </span>
-                    <span className="text-vb-silver-dim">
-                      Пароль{" "}
+                    <dt className="text-vb-silver-faint">Логин</dt>
+                    <dd className="truncate font-mono text-vb-fg">{parsed.username}</dd>
+                    <dt className="text-vb-silver-faint">Пароль</dt>
+                    <dd>
                       {parsed.password ? (
                         <span className="font-mono text-vb-fg">····</span>
                       ) : (
                         <span className="text-vb-warn">пусто</span>
                       )}
-                    </span>
+                    </dd>
                   </>
                 )}
-              </div>
+              </dl>
               {ambiguous && (
                 <button
                   type="button"
                   onClick={() => setSwapped((v) => !v)}
-                  className="mt-2 flex items-center gap-1.5 rounded-lg border border-vb-border px-2.5 py-1 text-[12px] font-medium text-vb-silver transition-colors hover:border-vb-border-strong hover:bg-vb-surface-2 active:scale-[0.97]"
+                  className="mt-2.5 flex items-center gap-1.5 rounded-lg border border-vb-border px-2.5 py-1 text-[12px] font-medium text-vb-silver transition-[background-color,border-color,transform] duration-150 hover:border-vb-border-strong hover:bg-vb-surface-2 active:scale-[0.97]"
                 >
-                  <ArrowUpDown className="h-3 w-3" />
+                  <ArrowUpDown className="h-3 w-3" aria-hidden />
                   Поменять местами
                 </button>
               )}
 
               {/* Гео-строка: информация, не блокировка */}
-              <div className="mt-2.5 border-t border-vb-border/50 pt-2.5">
-                <AnimatePresence mode="wait">
+              <div className="mt-2.5 flex min-h-[20px] items-center border-t border-vb-border/60 pt-2.5">
+                <AnimatePresence mode="wait" initial={false}>
                   {check.state === "checking" ? (
-                    <motion.div
-                      key="checking"
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      className="flex items-center gap-2 text-[12px] text-vb-silver-dim"
-                    >
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                      Проверяю доступность…
+                    <motion.div key="checking" {...fade} className="flex items-center gap-2 text-[12px] text-vb-silver-dim">
+                      <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+                      Проверяю, где он находится…
                     </motion.div>
                   ) : geo?.country_code ? (
-                    <motion.div
-                      key="geo"
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      className="flex items-center gap-2 text-[12px] text-vb-silver"
-                    >
+                    <motion.div key="geo" {...fade} className="flex items-center gap-2 text-[12px] text-vb-silver">
                       <CountryFlag code={geo.country_code} />
                       {geo.country_name ?? geo.country_code}
                       {geo.latency_ms != null && (
-                        <span className="tnum text-vb-silver-faint">
-                          · {geo.latency_ms} мс
-                        </span>
+                        <span className="tnum text-vb-silver-faint">· {geo.latency_ms} мс</span>
                       )}
                     </motion.div>
                   ) : check.state === "done" ? (
-                    <motion.div
-                      key="nogeo"
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      className="text-[12px] text-vb-silver-dim"
-                    >
-                      Быстрая проверка не прошла — не страшно: настоящая
-                      проверка будет на следующем шаге.
+                    <motion.div key="nogeo" {...fade} className="text-[12px] text-vb-silver-dim">
+                      Быстрая проверка не ответила - не страшно, настоящая будет на следующем шаге
                     </motion.div>
                   ) : null}
                 </AnimatePresence>
-                {isRu && (
-                  <div className="mt-2 flex items-start gap-2 rounded-lg border border-vb-warn/30 bg-vb-warn/5 px-3 py-2 text-[12px] text-vb-warn">
-                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                    Этот прокси в России. Claude его не примет — нужен зарубежный.
-                  </div>
-                )}
               </div>
+              {isRu && (
+                <div className="mt-2 flex items-start gap-2 rounded-lg border border-vb-warn/30 bg-vb-warn/5 px-3 py-2 text-[12px] text-vb-warn">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+                  Этот прокси в России. Claude его не примет - нужен зарубежный.
+                </div>
+              )}
             </div>
           ) : parseError ? (
-            <p className="mt-2.5 text-[12px] text-vb-warn">{parseError}</p>
+            <p className="text-[12px] text-vb-warn">{parseError}</p>
           ) : (
-            <p className="mt-2.5 text-[12px] text-vb-loss">
-              Не получилось разобрать. Примеры:{" "}
-              <span className="font-mono">1.2.3.4:8000:login:pass</span>,{" "}
-              <span className="font-mono">login:pass@1.2.3.4:8000</span>
+            <p className="text-[12px] text-vb-warn">
+              Не получилось разобрать. Подойдёт, например,{" "}
+              <span className="font-mono text-vb-silver">1.2.3.4:8000:login:pass</span> или{" "}
+              <span className="font-mono text-vb-silver">login:pass@1.2.3.4:8000</span>
             </p>
           ))}
       </div>
 
-      <div className="mt-8 flex items-center justify-end">
-        <Button onClick={() => parsed && onNext(parsed.url)} disabled={!parsed}>
+      <WizardFooter
+        left={
+          <>
+            <button
+              type="button"
+              onClick={() =>
+                import("@tauri-apps/plugin-opener").then((m) => m.openUrl(OWN_PROXY_GUIDE))
+              }
+              className="rounded text-[12px] text-vb-silver-dim transition-colors hover:text-vb-silver"
+            >
+              Нет прокси? <span className="text-vb-emerald">Свой за 15 минут</span>
+            </button>
+            {onSkipToTools && (
+              <button
+                type="button"
+                onClick={onSkipToTools}
+                className="rounded text-[12px] text-vb-silver-dim transition-colors hover:text-vb-silver"
+              >
+                Был другой аккаунт Claude? <span className="text-vb-emerald">Сначала очистка</span>
+              </button>
+            )}
+          </>
+        }
+      >
+        <Button onClick={submit} disabled={!parsed}>
           Дальше
+          <ArrowRight className="h-4 w-4" aria-hidden />
         </Button>
-      </div>
-    </div>
+      </WizardFooter>
+    </>
   );
 }

@@ -38,7 +38,7 @@ find_claude() {
 die() {
     echo "$1" >&2
     if [ "$SHOW_ERROR" = 1 ]; then
-        /usr/bin/osascript -e "display alert \"Claude Desktop — прокси\" message \"$1\" as warning" >/dev/null 2>&1
+        /usr/bin/osascript -e "display alert \"Claude Desktop - прокси\" message \"$1\" as warning" >/dev/null 2>&1
     fi
     exit 1
 }

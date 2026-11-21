@@ -1,14 +1,14 @@
-//! «Сайты во всех браузерах»: системная автонастройка прокси (PAC) —
+//! «Сайты во всех браузерах»: системная автонастройка прокси (PAC) -
 //! Windows (WinInet) и macOS (networksetup, настройки каждой сети).
 //!
 //! Вместо того чтобы подключать каждый браузер к мосту, Windows получает
 //! адрес PAC-файла, который отдаёт сам мост (`/proxy.pac` на входе сайтов).
 //! Chrome, Edge, Brave, Яндекс, Opera и Firefox («системные настройки
 //! прокси») сами спрашивают его, куда вести каждый сайт: сайты из списка и
-//! AI-сервисы — через мост, остальное — напрямую, мимо него. Ни прав
+//! AI-сервисы - через мост, остальное - напрямую, мимо него. Ни прав
 //! администратора, ни перезапуска браузеров: они следят за этими настройками.
 //!
-//! Пишем официальным API WinINet (per-connection options) — так же, как
+//! Пишем официальным API WinINet (per-connection options) - так же, как
 //! «Параметры → Прокси»: значение AutoConfigURL в реестре без флагов в
 //! DefaultConnectionSettings браузеры не читают. Прежние настройки (чужой
 //! прокси, корпоративный PAC, автоопределение) сохраняются и возвращаются
@@ -22,7 +22,7 @@ pub const PAC_BASE: &str = "http://127.0.0.1:8887/proxy.pac";
 /// Системные настройки прокси (соединение по умолчанию, LAN).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ProxyConf {
-    /// PROXY_TYPE_*: 1 — напрямую, 2 — прокси, 4 — PAC, 8 — автоопределение.
+    /// PROXY_TYPE_*: 1 - напрямую, 2 - прокси, 4 - PAC, 8 - автоопределение.
     pub flags: u32,
     pub server: Option<String>,
     pub bypass: Option<String>,
@@ -40,8 +40,8 @@ impl ProxyConf {
         self.flags & AUTO_URL != 0 && self.pac_url.as_deref().is_some_and(|u| u.starts_with(PAC_BASE))
     }
 
-    /// Чужая настройка, которую включение заменит, — человеку стоит знать.
-    /// Автоопределение (оно стоит в Windows по умолчанию) — не в счёт.
+    /// Чужая настройка, которую включение заменит, - человеку стоит знать.
+    /// Автоопределение (оно стоит в Windows по умолчанию) - не в счёт.
     pub fn foreign(&self) -> Option<String> {
         if self.is_ours() {
             return None;
@@ -59,7 +59,7 @@ impl ProxyConf {
         None
     }
 
-    /// Наш вариант: только PAC. Автоопределение (WPAD) выключаем — Windows и
+    /// Наш вариант: только PAC. Автоопределение (WPAD) выключаем - Windows и
     /// Chrome пробуют его раньше PAC, и каждый запуск ждали бы его тайм-аут.
     pub fn ours(url: &str) -> Self {
         Self { flags: DIRECT | AUTO_URL, server: None, bypass: None, pac_url: Some(url.to_string()) }
@@ -92,7 +92,7 @@ mod win {
     };
 
     fn option(id: u32) -> INTERNET_PER_CONN_OPTIONW {
-        // SAFETY: POD-структура WinInet; нули — валидное «пустое» значение.
+        // SAFETY: POD-структура WinInet; нули - валидное «пустое» значение.
         let mut o: INTERNET_PER_CONN_OPTIONW = unsafe { std::mem::zeroed() };
         o.dwOption = id;
         o
@@ -101,7 +101,7 @@ mod win {
     fn list(options: &mut [INTERNET_PER_CONN_OPTIONW]) -> INTERNET_PER_CONN_OPTION_LISTW {
         INTERNET_PER_CONN_OPTION_LISTW {
             dwSize: std::mem::size_of::<INTERNET_PER_CONN_OPTION_LISTW>() as u32,
-            // NULL — соединение по умолчанию (LAN), как в «Параметрах».
+            // NULL - соединение по умолчанию (LAN), как в «Параметрах».
             pszConnection: std::ptr::null_mut(),
             dwOptionCount: options.len() as u32,
             dwOptionError: 0,
@@ -136,7 +136,7 @@ mod win {
         if ok == 0 {
             return Err(format!("Не прочитать настройки прокси Windows: {}", std::io::Error::last_os_error()));
         }
-        // SAFETY: для FLAGS заполнен dwValue, для остальных — pszValue.
+        // SAFETY: для FLAGS заполнен dwValue, для остальных - pszValue.
         unsafe {
             Ok(ProxyConf {
                 flags: opts[0].Value.dwValue,
@@ -180,9 +180,9 @@ mod win {
 pub use win::{read, write};
 
 /// macOS: системные настройки прокси каждой сети («Настройки → Сеть →
-/// Подробнее → Прокси»), через networksetup — без пароля администратора.
+/// Подробнее → Прокси»), через networksetup - без пароля администратора.
 /// Chrome, Edge, Brave, Safari и большинство программ берут прокси отсюда.
-/// Читаем действующие (scutil --proxy — то, что видят программы), пишем во
+/// Читаем действующие (scutil --proxy - то, что видят программы), пишем во
 /// все включённые сети: при переходе Wi-Fi ⇄ VPN настройка не теряется.
 #[cfg(target_os = "macos")]
 mod mac {
@@ -202,7 +202,7 @@ mod mac {
         Ok(text)
     }
 
-    /// Включённые сетевые службы (строки со «*» — выключены).
+    /// Включённые сетевые службы (строки со «*» - выключены).
     pub fn services() -> Result<Vec<String>, String> {
         let text = networksetup(&["-listallnetworkservices"])?;
         Ok(text
@@ -213,7 +213,7 @@ mod mac {
             .collect())
     }
 
-    /// Разбор `scutil --proxy` (словарь «Ключ : значение», списки — по строкам).
+    /// Разбор `scutil --proxy` (словарь «Ключ : значение», списки - по строкам).
     pub fn parse_scutil(text: &str) -> ProxyConf {
         let mut flags = DIRECT;
         let (mut host, mut port, mut pac, mut exceptions) = (None, None, None, Vec::new());
@@ -328,7 +328,7 @@ pub fn write(_: &ProxyConf) -> Result<(), String> {
 pub struct SystemPacStatus {
     pub supported: bool,
     pub enabled: bool,
-    /// В Windows сейчас стоит наш PAC. enabled && !active — настройку
+    /// В Windows сейчас стоит наш PAC. enabled && !active - настройку
     /// сбросила другая программа (VPN, «Параметры»).
     pub active: bool,
     /// Чужая настройка прокси в системе (её заменит включение / она стоит
@@ -355,13 +355,13 @@ pub fn enable() -> Result<SystemPacStatus, String> {
     Ok(status())
 }
 
-/// Выключить: вернуть то, что было до нас. Если наш PAC уже кто-то заменил —
+/// Выключить: вернуть то, что было до нас. Если наш PAC уже кто-то заменил -
 /// его настройку не трогаем.
 pub fn disable() -> Result<SystemPacStatus, String> {
     let saved = crate::settings::load().system_pac_saved;
     if read()?.is_ours() {
-        // Без сохранённого — системное по умолчанию: на Windows «Автоматически
-        // определять параметры» включено, на macOS — нет.
+        // Без сохранённого - системное по умолчанию: на Windows «Автоматически
+        // определять параметры» включено, на macOS - нет.
         let default_flags = if cfg!(target_os = "windows") { DIRECT | AUTO_DETECT } else { DIRECT };
         let restore = saved.unwrap_or(ProxyConf { flags: default_flags, ..Default::default() });
         write(&restore)?;
@@ -374,7 +374,7 @@ pub fn disable() -> Result<SystemPacStatus, String> {
 /// Идёт запись «Подсмотреть»: PAC ведёт через мост весь трафик браузеров.
 static PEEK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Перечитать PAC браузерами (сайты изменились). Только если наш PAC стоит —
+/// Перечитать PAC браузерами (сайты изменились). Только если наш PAC стоит -
 /// чужой не перезаписываем. Режим записи «Подсмотреть» сохраняется.
 pub fn refresh() -> Result<(), String> {
     if !crate::settings::load().system_pac || !read()?.is_ours() {
@@ -384,10 +384,10 @@ pub fn refresh() -> Result<(), String> {
 }
 
 /// Сколько длится запись «Подсмотреть». В режиме записи весь трафик браузеров
-/// идёт через мост, а Chrome держит к одному прокси не больше 32 соединений —
+/// идёт через мост, а Chrome держит к одному прокси не больше 32 соединений -
 /// всё браузерное тянется через эти 32 и тормозит. Поэтому запись кончается
 /// сама: окно «Подсмотреть» могли не закрыть (спрятали программу в трей),
-/// и режим оставался включённым часами — «остальные сайты плохо работают».
+/// и режим оставался включённым часами - «остальные сайты плохо работают».
 pub const PEEK_LIMIT: std::time::Duration = std::time::Duration::from_secs(180);
 
 /// Номер записи: таймер выключает только ту запись, которую он завёл.
@@ -431,12 +431,12 @@ mod tests {
         assert!(pac_url(true).contains("all=1"));
         let wpad_only = ProxyConf { flags: DIRECT | AUTO_DETECT, ..Default::default() };
         assert!(!wpad_only.is_ours());
-        assert_eq!(wpad_only.foreign(), None, "автоопределение Windows по умолчанию — не чужой прокси");
+        assert_eq!(wpad_only.foreign(), None, "автоопределение Windows по умолчанию - не чужой прокси");
         let manual = ProxyConf { flags: DIRECT | MANUAL, server: Some("127.0.0.1:2080".into()), ..Default::default() };
         assert_eq!(manual.foreign().as_deref(), Some("прокси 127.0.0.1:2080"));
         let corp = ProxyConf { flags: DIRECT | AUTO_URL, pac_url: Some("http://corp/wpad.dat".into()), ..Default::default() };
         assert!(corp.foreign().unwrap().contains("corp"));
-        // Флаг ручного прокси без адреса — не чужая настройка.
+        // Флаг ручного прокси без адреса - не чужая настройка.
         assert_eq!(ProxyConf { flags: DIRECT | MANUAL, ..Default::default() }.foreign(), None);
     }
 

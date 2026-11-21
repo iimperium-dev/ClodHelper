@@ -6,7 +6,7 @@
 .DESCRIPTION
     ВАЖНО про Cursor: флаг Chromium --proxy-server НЕ заворачивает AI-трафик
     Cursor (он идёт своим Node/HTTP-стеком). Поэтому реальный фикс региона
-    («This model provider is not supported in your region») — прописать
+    («This model provider is not supported in your region») - прописать
     http.proxy в settings.json Cursor. По умолчанию у Cursor
     http.proxySupport = "override" и http.proxy пустой → он игнорирует и
     системный прокси, и env, и --proxy-server. Заполняем http.proxy явно.
@@ -14,7 +14,7 @@
       1. Патчит %APPDATA%\Cursor\User\settings.json (с бэкапом):
            http.proxy / https.proxy → мост, proxyStrictSSL=false,
            proxySupport=override, disableHttp2=true.
-      2. Создаёт ярлык «Cursor (proxy)» на рабочем столе (просто лаунчер —
+      2. Создаёт ярлык «Cursor (proxy)» на рабочем столе (просто лаунчер -
          прокси теперь живёт в настройках, применяется к любому запуску).
 
 .PARAMETER Port
@@ -102,7 +102,7 @@ function Save-CursorSettings {
     $dir = Split-Path $Path
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
     $json = $Settings | ConvertTo-Json -Depth 100
-    # UTF-8 без BOM — как пишет сам VS Code/Cursor.
+    # UTF-8 без BOM - как пишет сам VS Code/Cursor.
     [System.IO.File]::WriteAllText($Path, $json, (New-Object System.Text.UTF8Encoding $false))
 }
 
@@ -118,7 +118,7 @@ if ($Uninstall) {
     Write-Step 1 2 "Убираю proxy-ключи из settings.json..."
     $s = Read-CursorSettings -Path $SettingsPath
     if ($null -eq $s) {
-        Write-Warn "settings.json не парсится — оставил как есть. Уберите http.proxy вручную."
+        Write-Warn "settings.json не парсится - оставил как есть. Уберите http.proxy вручную."
     } else {
         Copy-Item $SettingsPath "$SettingsPath.clodhelper.bak" -Force -ErrorAction SilentlyContinue
         foreach ($k in $ProxyKeys) { if ($s.Contains($k)) { $s.Remove($k) } }
@@ -141,7 +141,7 @@ Write-Host "  Пропишу http.proxy = $BridgeUrl в настройках Cur
 Write-Host "  Это чинит регион-блок AI (--proxy-server для Cursor не работает)."
 Write-Host ""
 
-# Шаг 1 — найти Cursor (для ярлыка и как sanity-check).
+# Шаг 1 - найти Cursor (для ярлыка и как sanity-check).
 Write-Step 1 3 "Ищу Cursor на этом ПК..."
 $cursorExe = Find-CursorExe
 if (-not $cursorExe) {
@@ -152,7 +152,7 @@ if (-not $cursorExe) {
 }
 Write-Ok "найден ($cursorExe)"
 
-# Шаг 2 — патчим settings.json.
+# Шаг 2 - патчим settings.json.
 Write-Step 2 3 "Прописываю прокси в settings.json..."
 $s = Read-CursorSettings -Path $SettingsPath
 if ($null -eq $s) {
@@ -170,13 +170,13 @@ if ($null -eq $s) {
     $s['https.proxy'] = $BridgeUrl
     $s['http.proxyStrictSSL'] = $false
     $s['http.proxySupport'] = 'override'
-    # HTTP/2 часто ломается через прокси — отключаем (если ещё не).
+    # HTTP/2 часто ломается через прокси - отключаем (если ещё не).
     if (-not $s.Contains('cursor.general.disableHttp2')) { $s['cursor.general.disableHttp2'] = $true }
     Save-CursorSettings -Path $SettingsPath -Settings $s
     Write-Ok "прокси прописан (бэкап: settings.json.clodhelper.bak)"
 }
 
-# Шаг 3 — ярлык-лаунчер на рабочем столе.
+# Шаг 3 - ярлык-лаунчер на рабочем столе.
 Write-Step 3 3 "Создаю ярлык 'Cursor (proxy)' на рабочем столе..."
 $wsh = New-Object -ComObject WScript.Shell
 $sc = $wsh.CreateShortcut($DesktopShortcut)
@@ -195,6 +195,6 @@ Write-Host "│  Готово!                                        │" -Fore
 Write-Host "└─────────────────────────────────────────────────┘" -ForegroundColor Green
 Write-Host ""
 Write-Host "  ВАЖНО: полностью закрой Cursor (все окна и из трея)," -ForegroundColor White
-Write-Host "  потом открой заново — настройки прокси применятся при старте." -ForegroundColor White
-Write-Host "  Cursor — single-instance: пока висит старый процесс, прокси не применится." -ForegroundColor DarkGray
+Write-Host "  потом открой заново - настройки прокси применятся при старте." -ForegroundColor White
+Write-Host "  Cursor - single-instance: пока висит старый процесс, прокси не применится." -ForegroundColor DarkGray
 Write-Host ""

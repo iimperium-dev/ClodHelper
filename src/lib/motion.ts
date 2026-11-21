@@ -4,7 +4,7 @@ import type { Transition, Variants } from "framer-motion";
   Motion-пресеты по дизайн-скиллам (apple-design / impeccable / emil):
   - Springs с двумя параметрами (bounce + duration), НЕ физика mass/stiffness.
   - Дефолт bounce:0 (критич. демпфирование, без overshoot). Bounce только там,
-    где жест нёс моментум — в этом приложении нигде, поэтому bounce везде 0.
+    где жест нёс моментум - в этом приложении нигде, поэтому bounce везде 0.
   - Enter из opacity+translate(малый), НИКОГДА из scale(0).
   - Exit быстрее enter (~75%).
   - Только transform+opacity (GPU). Никаких bounce/elastic.
@@ -17,7 +17,7 @@ export const springBase: Transition = {
   duration: 0.4,
 };
 
-/** Спринг снаппи — для мелких быстрых реакций (toggle, chip). */
+/** Спринг снаппи - для мелких быстрых реакций (toggle, chip). */
 export const springSnappy: Transition = {
   type: "spring",
   bounce: 0,
@@ -36,7 +36,7 @@ export const easeExit: Transition = {
   ease: [0.22, 1, 0.36, 1],
 };
 
-/** Появление карточки/секции снизу — enter из translateY, exit быстрее. */
+/** Появление карточки/секции снизу - enter из translateY, exit быстрее. */
 export const fadeInUp: Variants = {
   hidden: { opacity: 0, y: 8 },
   show: {
@@ -58,7 +58,7 @@ export const fadeIn: Variants = {
   exit: { opacity: 0, transition: easeExit },
 };
 
-/** Контейнер со stagger детей (30–80ms между элементами). */
+/** Контейнер со stagger детей (30-80ms между элементами). */
 export const staggerContainer: Variants = {
   hidden: {},
   show: {

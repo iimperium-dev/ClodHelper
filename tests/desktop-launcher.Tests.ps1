@@ -229,7 +229,7 @@ public sealed class ClaudeHealthFixture : IDisposable {
     Assert-Equal $script:ObservedPort 8890 'Old shortcut migrates to the dedicated Claude port'
     Assert-Equal $rejected $true 'Missing policy prevents launching Claude with a partial configuration'
 
-    # Store: прямой запуск exe из WindowsApps запрещён («Access is denied») —
+    # Store: прямой запуск exe из WindowsApps запрещён («Access is denied») -
     # запуск пакета штатно; у обычной установки ошибка не глотается.
     function Test-ClaudeDesktopProxyPolicy { param([int]$Port) return $true }
     function Test-ClaudeDesktopRunning { param($Installation) return $false }

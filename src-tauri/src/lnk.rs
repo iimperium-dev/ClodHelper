@@ -1,10 +1,10 @@
 //! Ярлыки Windows (.lnk, формат MS-SHLLINK) без COM и PowerShell: что
-//! запускает ярлык — для поиска программ в меню «Пуск». Разбор занимает
-//! микросекунды; WScript.Shell через PowerShell — секунды на каждый запрос.
+//! запускает ярлык - для поиска программ в меню «Пуск». Разбор занимает
+//! микросекунды; WScript.Shell через PowerShell - секунды на каждый запрос.
 //!
 //! Цель ярлыка, по убыванию надёжности:
 //!   1. блок переменных окружения («%ProgramFiles%\…», всегда UTF-16);
-//!   2. LinkInfo — локальный путь (UTF-16, если есть, иначе ANSI);
+//!   2. LinkInfo - локальный путь (UTF-16, если есть, иначе ANSI);
 //!   3. относительный путь от папки ярлыка.
 
 use std::path::{Component, Path, PathBuf};
@@ -65,7 +65,7 @@ fn decode_ansi(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-/// Разобрать ярлык; `dir` — его папка (для относительного пути цели).
+/// Разобрать ярлык; `dir` - его папка (для относительного пути цели).
 pub fn parse(d: &[u8], dir: &Path) -> Option<Shortcut> {
     if u32_at(d, 0)? != 0x4C {
         return None;
@@ -116,7 +116,7 @@ pub fn parse(d: &[u8], dir: &Path) -> Option<Shortcut> {
         pos += len;
         strings[i] = Some(if unicode { utf16(bytes) } else { decode_ansi(bytes) });
     }
-    // ExtraData: цель с переменными окружения (TargetUnicode — после
+    // ExtraData: цель с переменными окружения (TargetUnicode - после
     // 260 байт TargetAnsi).
     let mut env_target = None;
     while let Some(size) = u32_at(d, pos) {
@@ -206,7 +206,7 @@ mod tests {
             let mut body = Vec::new();
             let base_off = header as usize;
             if unicode {
-                // ANSI-поля пустые, пути — в UTF-16 после них.
+                // ANSI-поля пустые, пути - в UTF-16 после них.
                 let ansi_base = base_off;
                 let ansi_suffix = ansi_base + 1;
                 let uni_base = ansi_suffix + 1;
@@ -278,7 +278,7 @@ mod tests {
         let mut d = lnk(Some(("C:\\a.exe", false)), None, None);
         d.truncate(0x50); // LinkInfo обрезан
         assert_eq!(parse(&d, Path::new("x")), None);
-        // Ярлык без цели (только заголовок) — не программа.
+        // Ярлык без цели (только заголовок) - не программа.
         let mut d = vec![0u8; 0x50];
         d[0..4].copy_from_slice(&0x4Cu32.to_le_bytes());
         assert_eq!(parse(&d, Path::new("x")), None);

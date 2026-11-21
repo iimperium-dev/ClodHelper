@@ -14,7 +14,7 @@ interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {
   - press-feedback scale(0.97) на :active, 120ms ease-out-quint
   - только transform+opacity в переходах
   - focus-visible ring наследуется из base-стилей (index.css)
-  - акцент (emerald) редок — variant=primary только для одного CTA на экран
+  - акцент (emerald) редок - variant=primary только для одного CTA на экран
 */
 export const Button = forwardRef<HTMLButtonElement, Props>(function Button(
   { variant = "primary", size = "md", className, children, ...rest },
@@ -32,6 +32,9 @@ export const Button = forwardRef<HTMLButtonElement, Props>(function Button(
         size === "md" && "px-4 py-2.5 text-[14px]",
         variant === "primary" &&
           "bg-vb-emerald text-black hover:bg-vb-emerald-bright shadow-[0_2px_12px_var(--color-vb-emerald-glow)]",
+        // Неактивная главная кнопка - спокойная серая, а не мутно-зелёная.
+        variant === "primary" &&
+          "disabled:bg-vb-surface-2 disabled:text-vb-silver-faint disabled:shadow-none disabled:opacity-100 disabled:hover:bg-vb-surface-2",
         variant === "secondary" &&
           "bg-vb-surface-2 text-vb-silver border border-vb-border hover:border-vb-border-strong hover:bg-vb-surface-2/80",
         variant === "ghost" &&

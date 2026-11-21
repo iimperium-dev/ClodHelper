@@ -1,27 +1,27 @@
 //! Автозапуск моста через Планировщик задач Windows (Scheduled Task).
 //!
 //! Зачем: .vbs в Startup-папке запускал мост ОДИН раз при логине; если процесс
-//! падал — поднять его мог только watchdog внутри GUI хелпера. GUI закрыт →
+//! падал - поднять его мог только watchdog внутри GUI хелпера. GUI закрыт →
 //! мост лежит до ручного вмешательства.
 //!
 //! Механика: задача запускает wscript.exe с runner-vbs-СУПЕРВИЗОРОМ, который
 //! в бесконечном цикле стартует clod-bridge.exe СКРЫТО (окна нет), ждёт его
 //! завершения и через 5 секунд перезапускает. Падение моста лечится за ~5с
 //! на уровне ОС, без нашего GUI. Прямой запуск console-exe из задачи показал
-//! бы окно консоли при логине — поэтому wscript.
+//! бы окно консоли при логине - поэтому wscript.
 //!
 //! Почему цикл в vbs, а не RestartOnFailure Планировщика: проверено вживую на
-//! Win11 — у Interactive-задачи ненулевой код выхода НЕ триггерит рестарт
+//! Win11 - у Interactive-задачи ненулевой код выхода НЕ триггерит рестарт
 //! (задача умирает молча). RestartOnFailure оставлен в настройках задачи как
 //! best-effort на случай гибели самого wscript, но рассчитывать на него нельзя.
 //!
 //! Остановка: Stop-ScheduledTask убивает супервизор (иначе цикл поднимет мост
-//! через 5с после kill) — см. stop_ignore_errors и shim::stop.
+//! через 5с после kill) - см. stop_ignore_errors и shim::stop.
 //!
 //! Регистрация НЕ требует админа: задача в пользовательской папке, LogonType
 //! Interactive, RunLevel Limited (проверено вживую на Win11).
 //!
-//! macOS: вместо задачи — LaunchAgent `ru.iimperium.clodbridge` в
+//! macOS: вместо задачи - LaunchAgent `ru.iimperium.clodbridge` в
 //! `~/Library/LaunchAgents` с KeepAlive (модуль `launchd` ниже). launchd сам
 //! перезапускает упавший мост, поэтому `--supervise` там не используется.
 
@@ -38,11 +38,11 @@ pub const TASK_NAME: &str = "ClodBridge";
 /// Runner-vbs в папке установки моста (%LOCALAPPDATA%\ClaudeDesktopProxy).
 #[cfg(target_os = "windows")]
 const RUNNER_VBS: &str = "clod-bridge-task.vbs";
-/// Правила маршрутизации моста (mode smart/all) — читает clod-bridge при старте.
+/// Правила маршрутизации моста (mode smart/all) - читает clod-bridge при старте.
 const RULES_FILE: &str = "bridge-rules.json";
-/// Сайты пользователя — мост перечитывает этот файл на лету (≥1.9).
+/// Сайты пользователя - мост перечитывает этот файл на лету (≥1.9).
 const SITES_FILE: &str = "bridge-sites.json";
-/// Вход сайтов моста ≥1.9: браузер в режиме «только сайты» — через прокси
+/// Вход сайтов моста ≥1.9: браузер в режиме «только сайты» - через прокси
 /// только AI и сайты пользователя, остальное напрямую. Порты моста: 8887
 /// сайты, 8889 общий, 8890 строгий (Claude), 8891 SOCKS, 8892+N закреплённые.
 pub const SITES_PORT: u16 = 8887;
@@ -91,14 +91,14 @@ pub fn bridge_supports_sites(exe: &std::path::Path) -> bool {
 
 /// Вход сайтов реально слушается (лёгкий TCP-коннект). Версии exe мало:
 /// мост 1.9 мог быть поставлен поверх с задачей, зарегистрированной со
-/// старыми аргументами, — тогда браузер на 8887 остался бы без сети.
+/// старыми аргументами, - тогда браузер на 8887 остался бы без сети.
 pub fn sites_listener_up() -> bool {
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], SITES_PORT));
     std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(400)).is_ok()
 }
 
 /// Мост работает, умеет сайты, но запущен без входа сайтов (устаревшие
-/// аргументы задачи) — нужна перерегистрация.
+/// аргументы задачи) - нужна перерегистрация.
 pub fn sites_args_stale() -> bool {
     let Some(exe) = shim::bridge_exe_path().filter(|p| p.exists()) else { return false };
     let main = std::net::SocketAddr::from(([127, 0, 0, 1], crate::shim::LISTEN_PORT));
@@ -106,7 +106,7 @@ pub fn sites_args_stale() -> bool {
     bridge_up && bridge_supports_sites(&exe) && !sites_listener_up()
 }
 
-/// Аргументы сайтов для моста ≥1.9 (без кавычек — вызывающий оборачивает путь).
+/// Аргументы сайтов для моста ≥1.9 (без кавычек - вызывающий оборачивает путь).
 fn sites_args(exe: &std::path::Path) -> Result<Option<(PathBuf, String)>, String> {
     if !bridge_supports_sites(exe) {
         return Ok(None);
@@ -118,7 +118,7 @@ fn sites_args(exe: &std::path::Path) -> Result<Option<(PathBuf, String)>, String
 #[derive(Debug, Clone, Serialize)]
 pub struct BridgeTaskStatus {
     pub registered: bool,
-    /// Ready / Running / Disabled — как отдаёт Планировщик.
+    /// Ready / Running / Disabled - как отдаёт Планировщик.
     pub state: Option<String>,
 }
 
@@ -165,7 +165,7 @@ pub const SERVICE_GROUPS: &[(&str, &[&str])] = &[
     ),
     // Telegram ходит по IP дата-центров через SOCKS-вход моста: тот берёт
     // прокси, назначенный «telegram.org» (bridge socks_upstream). Остальные
-    // домены — веб-версия и ссылки в браузере через общий вход.
+    // домены - веб-версия и ссылки в браузере через общий вход.
     (
         "telegram",
         &["telegram.org", "t.me", "telegram.me", "telesco.pe", "tdesktop.com", "telegra.ph"],
@@ -173,11 +173,11 @@ pub const SERVICE_GROUPS: &[(&str, &[&str])] = &[
 ];
 
 /// Телеметрия Claude, которую мост не выпускает (тумблер в настройках
-/// Claude Desktop). Список — из таблицы адресов самого Claude Desktop
-/// (Sentry — организация Anthropic; Datadog — логи Claude Code и сборщики
+/// Claude Desktop). Список - из таблицы адресов самого Claude Desktop
+/// (Sentry - организация Anthropic; Datadog - логи Claude Code и сборщики
 /// замеров интерфейса). Флаги экспериментов (GrowthBook) не трогаем: без
 /// них Claude может работать не так. Замеры и события, которые идут через
-/// сам claude.ai (/api/v2/rum, /api/event_logging), по адресу не отличить —
+/// сам claude.ai (/api/v2/rum, /api/event_logging), по адресу не отличить -
 /// их мост не видит, не вскрывая шифрование.
 pub const CLAUDE_TELEMETRY_DOMAINS: &[&str] = &[
     "o1158394.ingest.us.sentry.io",
@@ -191,7 +191,7 @@ pub const CLAUDE_TELEMETRY_DOMAINS: &[&str] = &[
     "browser-intake-ddog-gov.com",
 ];
 
-/// Реклама и счётчики Google — из открытого списка v2fly/domain-list-community
+/// Реклама и счётчики Google - из открытого списка v2fly/domain-list-community
 /// (`geosite:google@ads`, им же блокируют рекламу Happ, Hiddify и Xray).
 /// Без сайтов, куда ходят сами люди (adsense.com, analytics.google.com,
 /// marketingplatform.google.com): их блокировка ломала бы кабинеты.
@@ -220,7 +220,7 @@ pub const GOOGLE_ADS_DOMAINS: &[&str] = &[
     "partnerad.l.google.com",
 ];
 
-/// Что мост не выпускает никуда: телеметрия Claude и реклама Google — по тумблерам.
+/// Что мост не выпускает никуда: телеметрия Claude и реклама Google - по тумблерам.
 fn block_domains(s: &crate::settings::Settings) -> Vec<&'static str> {
     let mut v: Vec<&str> = Vec::new();
     if crate::settings::claude_telemetry_blocked(s) {
@@ -263,7 +263,7 @@ pub fn write_rules_file_if_changed() -> Result<(PathBuf, bool), String> {
         }
     }
 
-    // Все домены сервисов — через прокси и в умном режиме: у моста свой
+    // Все домены сервисов - через прокси и в умном режиме: у моста свой
     // встроенный список AI-доменов, а сюда попадают и новые (телеметрия).
     let mut proxy_domains: Vec<&str> = SERVICE_GROUPS.iter().flat_map(|(_, d)| d.iter().copied()).collect();
     proxy_domains.sort_unstable();
@@ -291,8 +291,8 @@ pub fn write_rules_file_if_changed() -> Result<(PathBuf, bool), String> {
         return Ok((path, false));
     }
     // Атомарно (tmp + rename): мост читает этот файл при старте, а супервизор
-    // может перезапустить его в любой момент — полузаписанный JSON для моста
-    // 1.2.0 означает отказ запуска (fail-fast), для старых — потерю правил.
+    // может перезапустить его в любой момент - полузаписанный JSON для моста
+    // 1.2.0 означает отказ запуска (fail-fast), для старых - потерю правил.
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, text).map_err(|e| format!("write {}: {e}", tmp.display()))?;
     std::fs::rename(&tmp, &path).map_err(|e| format!("replace {}: {e}", path.display()))?;
@@ -305,13 +305,13 @@ pub fn is_registered() -> bool {
 }
 
 /// Все прокси пула → повторяемые `--upstream`. ПОРЯДОК СВЯЩЕНЕН: индексы
-/// assignments в rules-файле считаются по этому же списку — перестановка
+/// assignments в rules-файле считаются по этому же списку - перестановка
 /// без пересчёта rules увела бы закреплённый сервис на другой прокси
 /// (другой выходной IP). Поэтому пул берём как есть из настроек;
-/// proxy_url — только fallback для пустого пула (легаси-установка).
+/// proxy_url - только fallback для пустого пула (легаси-установка).
 fn upstream_pool(proxy_url: &str) -> Vec<String> {
     let s = crate::settings::load();
-    // Пул, затем резервы (в конце — индексы пула не сдвигаются).
+    // Пул, затем резервы (в конце - индексы пула не сдвигаются).
     let list = crate::settings::bridge_upstreams(&s);
     if list.is_empty() {
         vec![proxy_url.to_string()]
@@ -321,16 +321,16 @@ fn upstream_pool(proxy_url: &str) -> Vec<String> {
 }
 
 /// Сколько закреплённых входов (8892+N) нужно: по одному на прокси пула.
-/// Резервам своих входов не положено — они в списке моста после пула.
+/// Резервам своих входов не положено - они в списке моста после пула.
 fn pin_count(upstreams: &[String]) -> usize {
     let parents = crate::settings::effective_proxies(&crate::settings::load()).len().max(1);
     parents.min(upstreams.len())
 }
 
-/// Задача — по её ключу в кэше Планировщика (HKLM): сам ключ закрыт для
+/// Задача - по её ключу в кэше Планировщика (HKLM): сам ключ закрыт для
 /// чтения, но «нет доступа» ≠ «нет ключа», а этого достаточно. Без
 /// PowerShell: Get-ScheduledTask стоил ~2 с, а проверка нужна при каждом
-/// запуске моста. Состояние — по файлу задачи и живому процессу моста.
+/// запуске моста. Состояние - по файлу задачи и живому процессу моста.
 #[cfg(target_os = "windows")]
 pub fn status() -> BridgeTaskStatus {
     let tree = format!(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tree\{TASK_NAME}");
@@ -400,7 +400,7 @@ fn status_via_powershell() -> BridgeTaskStatus {
 /// Понимает ли установленный мост новые флаги (--rules)?
 ///
 /// КРИТИЧНО: старый PyInstaller-мост на неизвестный аргумент падает (argparse
-/// exit 2) — супервизор вечно рестартил бы мёртвый мост, и прокси лежал бы
+/// exit 2) - супервизор вечно рестартил бы мёртвый мост, и прокси лежал бы
 /// НАМЕРТВО. Проба: `--version` есть только у Rust-моста (exit 0); старый
 /// на него падает → пишем легаси-набор аргументов без --rules.
 fn bridge_supports_rules(exe: &std::path::Path) -> bool {
@@ -415,7 +415,7 @@ fn bridge_supports_rules(exe: &std::path::Path) -> bool {
     cmd.output().map(|o| o.status.success()).unwrap_or(false)
 }
 
-/// Версия моста по `--version` ("clod-bridge 1.5.0" → "1.5.0"). None —
+/// Версия моста по `--version` ("clod-bridge 1.5.0" → "1.5.0"). None -
 /// легаси-python или exe не запускается.
 pub fn exe_version(exe: &std::path::Path) -> Option<String> {
     let mut cmd = std::process::Command::new(exe);
@@ -439,9 +439,9 @@ pub fn parse_version(v: &str) -> Option<(u32, u32, u32)> {
     Some((it.next()??, it.next()??, it.next().flatten().unwrap_or(0)))
 }
 
-/// `bridge-upstreams.txt` (атомарно; на macOS — 0600, на Windows профиль
+/// `bridge-upstreams.txt` (атомарно; на macOS - 0600, на Windows профиль
 /// пользователя и так закрыт от других учёток): по URL в строке, порядок
-/// пула сохраняется — индексы assignments считаются по нему.
+/// пула сохраняется - индексы assignments считаются по нему.
 pub fn write_upstream_file(pool: &[String]) -> Result<PathBuf, String> {
     let path = shim::install_dir()
         .map(|d| d.join("bridge-upstreams.txt"))
@@ -489,15 +489,15 @@ fn bridge_supports_upstream_file(exe: &std::path::Path) -> bool {
         .is_some_and(|v| v >= (1, 5, 0))
 }
 
-/// Кэш пробы установленного exe. Ключ — mtime файла: после «Обновить мост»
+/// Кэш пробы установленного exe. Ключ - mtime файла: после «Обновить мост»
 /// mtime меняется и кэш сбрасывается сам. Проба PyInstaller-exe стоит
-/// секунды (распаковка onefile) — без кэша UI-поллинг был бы болью.
+/// секунды (распаковка onefile) - без кэша UI-поллинг был бы болью.
 static EXE_PROBE_CACHE: std::sync::Mutex<Option<(std::time::SystemTime, bool)>> =
     std::sync::Mutex::new(None);
 
 /// Понимает ли мост режим `--supervise` (1.3.0+)? Проба: `--supervise
-/// --version` — новый мост ставит флаг и выходит 0 на --version, старый
-/// падает на неизвестном аргументе. Если да — задача Планировщика вешается
+/// --version` - новый мост ставит флаг и выходит 0 на --version, старый
+/// падает на неизвестном аргументе. Если да - задача Планировщика вешается
 /// ПРЯМО на exe (без VBS/wscript: малварь-паттерн для антивирусов, WSH
 /// отключаем политиками, VBScript депрекейтнут в Win11 24H2+).
 #[cfg(target_os = "windows")]
@@ -513,7 +513,7 @@ fn bridge_supports_supervise(exe: &std::path::Path) -> bool {
     cmd.output().map(|o| o.status.success()).unwrap_or(false)
 }
 
-/// Установленный мост — легаси (старый PyInstaller-python, без /healthz и
+/// Установленный мост - легаси (старый PyInstaller-python, без /healthz и
 /// --rules)? По этому флагу UI показывает «Обновить мост» вместо вечного
 /// спиннера. false, если exe не найден вовсе.
 pub fn bridge_exe_is_legacy() -> bool {
@@ -539,12 +539,12 @@ pub fn bridge_exe_is_legacy() -> bool {
 
 /// Зарегистрировать (или перерегистрировать) задачу автозапуска моста.
 ///
-/// Пишет runner-vbs с актуальным upstream-URL, регистрирует задачу и — только
-/// ПОСЛЕ успешной регистрации — удаляет легаси .vbs из Startup (порядок важен:
+/// Пишет runner-vbs с актуальным upstream-URL, регистрирует задачу и - только
+/// ПОСЛЕ успешной регистрации - удаляет легаси .vbs из Startup (порядок важен:
 /// если регистрация упала, старый автозапуск остаётся рабочим fallback'ом).
 #[cfg(target_os = "windows")]
 pub fn register(proxy_url: &str) -> Result<(), String> {
-    // Файл моста пропал (антивирус) — вернуть до регистрации: задаче нужен exe.
+    // Файл моста пропал (антивирус) - вернуть до регистрации: задаче нужен exe.
     crate::bridge_file::ensure(false)?;
     let exe = shim::bridge_exe_path()
         .ok_or_else(|| "Не нашёл папку ClaudeDesktopProxy".to_string())?;
@@ -562,10 +562,10 @@ pub fn register(proxy_url: &str) -> Result<(), String> {
     let supports_rules = bridge_supports_rules(&exe);
     let supports_supervise = supports_rules && bridge_supports_supervise(&exe);
 
-    // Действие задачи: мост 1.3.0+ супервизорит себя сам — задача вешается
+    // Действие задачи: мост 1.3.0+ супервизорит себя сам - задача вешается
     // ПРЯМО на exe, VBS/wscript исчезают (антивирусный малварь-паттерн
     // «exe пишет VBS + задача на wscript» + депрекация VBScript).
-    // Старые мосты — прежний VBS-путь, до первого «Обновить мост».
+    // Старые мосты - прежний VBS-путь, до первого «Обновить мост».
     let (execute_e, argument_e) = if supports_supervise {
         let rules_path = write_rules_file()?;
         let mut parts: Vec<String> = vec![
@@ -574,7 +574,7 @@ pub fn register(proxy_url: &str) -> Result<(), String> {
             format!("127.0.0.1:{LISTEN_PORT}"),
         ];
         if bridge_supports_upstream_file(&exe) {
-            // Пароль прокси — в файле, а не в аргументах задачи (их видно в
+            // Пароль прокси - в файле, а не в аргументах задачи (их видно в
             // Планировщике и в списке процессов).
             let file = write_upstream_file(&pool)?;
             parts.push("--upstream-file".into());
@@ -600,7 +600,7 @@ pub fn register(proxy_url: &str) -> Result<(), String> {
             parts.push("--sites-listen".into());
             parts.push(listen);
         }
-        // Старый runner-vbs больше не нужен — подчищаем, чтобы не смущал AV.
+        // Старый runner-vbs больше не нужен - подчищаем, чтобы не смущал AV.
         if vbs_path.exists() {
             let _ = std::fs::remove_file(&vbs_path);
         }
@@ -609,7 +609,7 @@ pub fn register(proxy_url: &str) -> Result<(), String> {
             parts.join(" ").replace('\'', "''"),
         )
     } else {
-        // Легаси: runner-СУПЕРВИЗОР на VBS — скрытый запуск, перезапуск через
+        // Легаси: runner-СУПЕРВИЗОР на VBS - скрытый запуск, перезапуск через
         // 5с. --rules только для Rust-моста (см. bridge_supports_rules).
         let args_expr = if supports_rules {
             let rules_path = write_rules_file()?;
@@ -632,7 +632,7 @@ pub fn register(proxy_url: &str) -> Result<(), String> {
             .collect();
         let vbs = format!(
             "' Clod bridge supervisor: держит мост запущенным; упавший процесс\r\n\
-             ' перезапускается через 5 секунд. Остановка — Stop-ScheduledTask.\r\n\
+             ' перезапускается через 5 секунд. Остановка - Stop-ScheduledTask.\r\n\
              Set sh = CreateObject(\"WScript.Shell\")\r\n\
              Do\r\n\
              code = sh.Run(Chr(34) & \"{exe}\" & Chr(34){upstreams} & {args}, 0, True)\r\n\
@@ -643,7 +643,7 @@ pub fn register(proxy_url: &str) -> Result<(), String> {
             args = args_expr,
         );
         // UTF-16LE с BOM: wscript без BOM читает .vbs в ANSI-кодировке системы,
-        // и кириллический путь профиля превращается в кракозябры — мост не
+        // и кириллический путь профиля превращается в кракозябры - мост не
         // стартовал бы ни при одном логине.
         let vbs_utf16: Vec<u8> = [0xFF_u8, 0xFE]
             .into_iter()
@@ -684,8 +684,8 @@ pub fn register(proxy_url: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Запустить задачу (мост поднимется скрыто). schtasks — десятки
-/// миллисекунд против ~2 с у Start-ScheduledTask; при отказе — PowerShell
+/// Запустить задачу (мост поднимется скрыто). schtasks - десятки
+/// миллисекунд против ~2 с у Start-ScheduledTask; при отказе - PowerShell
 /// ради понятного текста ошибки.
 #[cfg(target_os = "windows")]
 pub fn start() -> Result<(), String> {
@@ -704,7 +704,7 @@ pub fn start() -> Result<(), String> {
     }
 }
 
-/// schtasks.exe без окна; true — код выхода 0.
+/// schtasks.exe без окна; true - код выхода 0.
 #[cfg(target_os = "windows")]
 fn schtasks(args: &[&str]) -> bool {
     use std::os::windows::process::CommandExt;
@@ -719,18 +719,18 @@ fn schtasks(args: &[&str]) -> bool {
 
 /// Остановить задачу. ОБЯЗАТЕЛЬНО вызывать ПЕРЕД kill процессов моста:
 /// runner-супервизор перезапустил бы убитый мост через 5с, и «Остановить»
-/// в UI не работало бы. Stop-ScheduledTask убивает супервизор (wscript) —
+/// в UI не работало бы. Stop-ScheduledTask убивает супервизор (wscript) -
 /// после этого мост можно гасить спокойно. Ошибки глотаем (задачи может
 /// не быть на легаси-установке).
 #[cfg(target_os = "windows")]
 pub fn stop_ignore_errors() {
-    // Не запущена / нет задачи — ненулевой код, это нормально.
+    // Не запущена / нет задачи - ненулевой код, это нормально.
     let _ = schtasks(&["/End", "/TN", TASK_NAME]);
 }
 
 /// Миграция старой установки: есть легаси .vbs в Startup, задачи ещё нет,
 /// upstream известен из settings → регистрируем задачу (она удалит .vbs).
-/// Вызывается фоново при старте приложения; все ошибки — в лог, не наружу.
+/// Вызывается фоново при старте приложения; все ошибки - в лог, не наружу.
 #[cfg(target_os = "windows")]
 pub fn migrate_from_startup_vbs() {
     let legacy_exists = shim::startup_vbs_path().map(|p| p.exists()).unwrap_or(false);
@@ -816,10 +816,10 @@ mod launchd {
     }
 
     /// Записать plist агента с актуальным пулом и правилами. launchd читает
-    /// plist только при bootstrap, поэтому загруженный агент выгружаем —
+    /// plist только при bootstrap, поэтому загруженный агент выгружаем -
     /// вызывающие сразу делают shim::start/restart (как с задачей на Windows).
     pub fn register(proxy_url: &str) -> Result<(), String> {
-    // Файл моста пропал (антивирус) — вернуть до регистрации: задаче нужен exe.
+    // Файл моста пропал (антивирус) - вернуть до регистрации: задаче нужен exe.
     crate::bridge_file::ensure(false)?;
         let exe = shim::bridge_exe_path()
             .ok_or_else(|| "Не нашёл папку ClaudeDesktopProxy".to_string())?;
@@ -845,7 +845,7 @@ mod launchd {
         let pins = pin_count(&pool);
         let modern = bridge_supports_upstream_file(&exe);
         if modern {
-            // Пул — файлом 0600: argv процесса видит любой пользователь Mac
+            // Пул - файлом 0600: argv процесса видит любой пользователь Mac
             // через ps, а в URL лежит пароль прокси.
             let file = write_upstream_file(&pool)?;
             args.push("--upstream-file".into());
@@ -873,7 +873,7 @@ mod launchd {
         }
 
         let plist = plist_path().ok_or_else(|| "Не нашёл домашнюю папку".to_string())?;
-        // stderr моста (в --quiet — только ошибки) — для диагностики. launchd
+        // stderr моста (в --quiet - только ошибки) - для диагностики. launchd
         // дописывает бесконечно: мост ≥1.5 сам ротирует файл (`--log`, 1 МБ →
         // .1); для старого моста обрезаем при каждой перерегистрации.
         let log = shim::install_dir().map(|d| d.join("bridge.log"));
@@ -916,7 +916,7 @@ mod launchd {
         macos::bootstrap(LABEL, &plist)
     }
 
-    /// Выгрузить агент — иначе KeepAlive поднял бы убитый мост через 5 секунд.
+    /// Выгрузить агент - иначе KeepAlive поднял бы убитый мост через 5 секунд.
     pub fn stop_ignore_errors() {
         macos::bootout(LABEL);
     }
@@ -930,7 +930,7 @@ mod launchd {
         let _ = write_upstream_file(&[]);
     }
 
-    /// На macOS легаси-автозапуска (.vbs) не было — мигрировать нечего.
+    /// На macOS легаси-автозапуска (.vbs) не было - мигрировать нечего.
     pub fn migrate_from_startup_vbs() {}
 }
 
@@ -963,7 +963,7 @@ mod block_tests {
         assert!(block_domains(&s).is_empty());
         s.block_google_ads = Some(true);
         assert_eq!(block_domains(&s), GOOGLE_ADS_DOMAINS);
-        // Кабинеты, куда люди ходят сами, не трогаем; YouTube и Google — тоже.
+        // Кабинеты, куда люди ходят сами, не трогаем; YouTube и Google - тоже.
         for d in ["adsense.com", "analytics.google.com", "youtube.com", "google.com", "googlevideo.com"] {
             assert!(!GOOGLE_ADS_DOMAINS.contains(&d), "{d}");
         }

@@ -1,8 +1,8 @@
 //! Автозапуск GUI при входе в систему (в трей, `--tray`).
 //!
-//! Windows — tauri-plugin-autostart (ключ Run в реестре), как раньше.
+//! Windows - tauri-plugin-autostart (ключ Run в реестре), как раньше.
 //!
-//! macOS 13+ — SMAppService: агент `ru.iimperium.clodhelper.autostart.plist`
+//! macOS 13+ - SMAppService: агент `ru.iimperium.clodhelper.autostart.plist`
 //! лежит ВНУТРИ бандла (Contents/Library/LaunchAgents), поэтому «Объекты
 //! входа» показывают его как Clod Helper с иконкой, а не как LaunchAgent
 //! «Clod Helper.plist» с пробелом в метке, который писал плагин.
@@ -13,7 +13,7 @@
 //! SMAppService.unregister() (выключение тумблера) убивал бы открытое окно,
 //! а register() (включение) поднимал бы вторую копию приложения.
 //!
-//! macOS 11–12 (SMAppService ещё нет) — тот же `--login-item` через свой
+//! macOS 11-12 (SMAppService ещё нет) - тот же `--login-item` через свой
 //! LaunchAgent в ~/Library/LaunchAgents; он подхватится при следующем входе.
 
 use serde::Serialize;
@@ -33,7 +33,7 @@ pub struct AutostartState {
 pub const LOGIN_ITEM_FLAG: &str = "--login-item";
 
 /// `clod-helper --login-item`: открыть приложение в трее через LaunchServices
-/// и выйти. None — это не наш режим.
+/// и выйти. None - это не наш режим.
 #[cfg(target_os = "macos")]
 pub fn login_item_cli(args: &[String]) -> Option<i32> {
     if args.get(1).map(String::as_str) != Some(LOGIN_ITEM_FLAG) {
@@ -105,10 +105,10 @@ mod mac {
         macos::launch_agents_dir().map(|d| d.join(name))
     }
 
-    /// Агент SMAppService; None — macOS < 13 (класса ещё нет).
+    /// Агент SMAppService; None - macOS < 13 (класса ещё нет).
     fn service() -> Option<Retained<SMAppService>> {
         AnyClass::get(c"SMAppService")?;
-        // SAFETY: класс есть (проверено выше); имя — валидный NSString.
+        // SAFETY: класс есть (проверено выше); имя - валидный NSString.
         Some(unsafe { SMAppService::agentServiceWithPlistName(&NSString::from_str(PLIST_NAME)) })
     }
 
@@ -117,7 +117,7 @@ mod mac {
         unsafe { svc.status() }
     }
 
-    /// Свой LaunchAgent для macOS 11–12 (и запасной путь, если SMAppService
+    /// Свой LaunchAgent для macOS 11-12 (и запасной путь, если SMAppService
     /// отказал): та же команда `--login-item`, грузится при следующем входе.
     fn write_fallback_agent() -> Result<(), String> {
         let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;

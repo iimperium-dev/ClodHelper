@@ -134,5 +134,5 @@ pub fn detect_python() -> PythonInfo {
     }
 }
 
-// Примечание: detect_python_cmd удалён — мост стал самостоятельным exe,
+// Примечание: detect_python_cmd удалён - мост стал самостоятельным exe,
 // Python для автозапуска больше не нужен (detect_python остался для визарда).

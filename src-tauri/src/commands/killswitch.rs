@@ -83,7 +83,7 @@ pub async fn leak_guard_status() -> Result<crate::leak_guard::LeakGuardStatus, S
         .map_err(|e| format!("Внутренняя ошибка: {e}"))?
 }
 
-/// Включить для выбранных сервисов (пустой список — снять). Пароль Mac / окно UAC.
+/// Включить для выбранных сервисов (пустой список - снять). Пароль Mac / окно UAC.
 #[tauri::command]
 pub async fn leak_guard_set(services: Vec<String>) -> Result<crate::leak_guard::LeakGuardStatus, String> {
     let list = crate::leak_guard::normalize(&services)?;

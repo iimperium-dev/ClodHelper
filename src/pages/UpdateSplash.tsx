@@ -10,12 +10,12 @@ type State = "installing" | "starting" | "started" | "failed";
 const TEXT: Record<State, string> = {
   installing: "Устанавливаю новую версию…",
   starting: "Запускаю новую версию…",
-  started: "Готово — открываю",
+  started: "Готово - открываю",
   failed: "Новая версия не запустилась. Откройте Clod Helper из меню «Пуск»",
 };
 
 /*
-  Заставка на время установки обновления (Windows, отдельный процесс —
+  Заставка на время установки обновления (Windows, отдельный процесс -
   update_splash.rs): вместо белого окна установщика. Логотип в бегущем
   кольце, шиммер-полоска, статус. Уходит сама, когда новая версия стартовала.
 */
@@ -32,7 +32,7 @@ export function UpdateSplash() {
 
   return (
     <div className="flex h-screen w-screen items-center justify-center p-4">
-      {/* На «started» карточка сама тает (animate) — процесс закроется следом. */}
+      {/* На «started» карточка сама тает (animate) - процесс закроется следом. */}
       <motion.div
             data-tauri-drag-region
             initial={{ opacity: 0, scale: 0.94, y: 10 }}

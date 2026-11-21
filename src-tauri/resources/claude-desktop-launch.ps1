@@ -223,7 +223,7 @@ function Invoke-ClaudeDesktopProxy {
     } catch {
         # Store-версия: на части систем Windows запрещает запускать exe из
         # WindowsApps напрямую («Access is denied»). Прокси уже задан политикой
-        # (проверена выше) — запускаем штатно, как из меню «Пуск».
+        # (проверена выше) - запускаем штатно, как из меню «Пуск».
         if (-not $installation.app_id) { throw }
         Start-ClaudeDesktopPackage -AppId $installation.app_id
         return
@@ -259,7 +259,7 @@ try {
     if ($ShowError) {
         try {
             Add-Type -AssemblyName PresentationFramework
-            [Windows.MessageBox]::Show($message, 'Claude Desktop — прокси', 'OK', 'Warning') | Out-Null
+            [Windows.MessageBox]::Show($message, 'Claude Desktop - прокси', 'OK', 'Warning') | Out-Null
         } catch {}
     }
     exit 1

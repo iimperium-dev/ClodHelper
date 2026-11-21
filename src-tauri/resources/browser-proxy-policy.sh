@@ -6,19 +6,19 @@
 # через мост, даже открытый из Dock, а WebRTC не раскрывает настоящий IP.
 #   ProxySettings      = { ProxyMode = fixed_servers; ProxyServer = <вход моста> }
 #   WebRtcIPHandling   = disable_non_proxied_udp
-# Режим «Сайты только в выбранных браузерах» — сервер «pac:<адрес PAC моста>»:
+# Режим «Сайты только в выбранных браузерах» - сервер «pac:<адрес PAC моста>»:
 #   ProxySettings      = { ProxyMode = pac_script; ProxyPacUrl = <адрес> }
 #   (WebRTC не трогаем: через мост идут только сайты из списка)
 #
-# Запись владения (что ключей не было) — в root-папке ClodHelper; чужие
+# Запись владения (что ключей не было) - в root-папке ClodHelper; чужие
 # значения этих ключей не перезаписываются (конфликт). Enable ставит службу
 # (LaunchDaemon), которая возвращает настройку, если macOS сотрёт Managed
 # Preferences; Disable убирает и ключи, и службу.
 #
 # Использование: sh browser-proxy-policy.sh Status|Enable|Disable|Restore <домен> [сервер]
-#   домен  — com.google.Chrome | com.brave.Browser | com.microsoft.Edge | org.chromium.Chromium
-#   сервер — 127.0.0.1:8890 или pac:http://127.0.0.1:8887/proxy.pac (Enable)
-# Enable/Disable/Restore требуют root. Результат — одна строка JSON в stdout.
+#   домен  - com.google.Chrome | com.brave.Browser | com.microsoft.Edge | org.chromium.Chromium
+#   сервер - 127.0.0.1:8890 или pac:http://127.0.0.1:8887/proxy.pac (Enable)
+# Enable/Disable/Restore требуют root. Результат - одна строка JSON в stdout.
 
 ACTION="${1:-Status}"
 DOMAIN="$2"
@@ -45,7 +45,7 @@ owner_server() { [ -e "$OWNER" ] && sed -n 's/^ClodHelper 1 \(.*\)$/\1/p' "$OWNE
 # PAC-режим: сервер вида pac:http://127.0.0.1:порт/proxy.pac.
 is_pac() { case "$1" in pac:http://127.0.0.1:*/proxy.pac) return 0 ;; esac; return 1; }
 
-# ours — наши ключи; absent — ни одного; foreign — что-то чужое.
+# ours - наши ключи; absent - ни одного; foreign - что-то чужое.
 # В PAC-режиме WebRtcIPHandling не наш и в счёт не идёт.
 state() {
     srv=$(owner_server)
@@ -72,7 +72,7 @@ status_json() {
     configured=false; [ "$st" = ours ] && configured=true
     managed=false; [ -n "$(owner_server)" ] && managed=true
     conflict=null
-    [ "$st" = foreign ] && conflict='"У браузера уже есть чужая политика прокси — Clod Helper её не меняет."'
+    [ "$st" = foreign ] && conflict='"У браузера уже есть чужая политика прокси - Clod Helper её не меняет."'
     restore=false; [ -f "$DAEMON" ] && [ -f "$SELF" ] && restore=true
     n=null; [ -n "$NOTICE" ] && n="\"$NOTICE\""
     printf '{"ok":true,"status":{"configured":%s,"managed":%s,"conflict":%s,"auto_restore":%s,"server":"%s","notice":%s},"error":null}\n' \
@@ -144,7 +144,7 @@ case "$ACTION" in
     Restore)
         [ "$(/usr/bin/id -u)" = 0 ] || exit 0
         srv=$(owner_server)
-        # Только откат «к пустому» (macOS стёр настройку); чужое — не трогаем.
+        # Только откат «к пустому» (macOS стёр настройку); чужое - не трогаем.
         [ -n "$srv" ] && [ "$(state)" = absent ] && write_ours "$srv"
         exit 0 ;;
     Enable|Disable)
@@ -159,16 +159,16 @@ if [ "$ACTION" = Enable ]; then
         *) fail "Ожидался вход моста 127.0.0.1:порт." ;;
     esac
     st=$(state)
-    [ "$st" = foreign ] && fail "У браузера уже есть чужая политика прокси — Clod Helper её не меняет."
+    [ "$st" = foreign ] && fail "У браузера уже есть чужая политика прокси - Clod Helper её не меняет."
     /bin/mkdir -p "$OWNER_DIR" && /bin/chmod 755 "$OWNER_DIR" || fail "Не удалось создать папку записи владения."
     printf 'ClodHelper 1 %s' "$SERVER" > "$OWNER" && /bin/chmod 644 "$OWNER" || fail "Не удалось сохранить запись владения."
     write_ours "$SERVER"
     [ "$(state)" = ours ] || fail "Не удалось подтвердить политику браузера."
     if is_pac "$SERVER"; then
         install_daemon
-        NOTICE="Готово. Сайты из списка — через мост в этом браузере."
+        NOTICE="Готово. Сайты из списка - через мост в этом браузере."
     elif install_daemon; then
-        NOTICE="Готово. Перезапустите браузер — дальше он всегда идёт через мост."
+        NOTICE="Готово. Перезапустите браузер - дальше он всегда идёт через мост."
     else
         NOTICE="Готово. Перезапустите браузер. Автовосстановление не установилось."
     fi

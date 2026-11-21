@@ -1,5 +1,5 @@
 //! «Всегда через мост» для Chromium-браузеров: политика ProxySettings +
-//! WebRtcIPHandling. Главнее параметров запуска и расширений — браузер идёт
+//! WebRtcIPHandling. Главнее параметров запуска и расширений - браузер идёт
 //! через мост, даже открытый из Dock или меню «Пуск».
 //!   - macOS: управляемые настройки (resources/browser-proxy-policy.sh),
 //!     одна системная просьба пароля, как у Claude;
@@ -35,7 +35,7 @@ struct ScriptResult {
 }
 
 /// Браузер по пути к нему: домен управляемых настроек macOS (по имени
-/// бандла) — он же ключ браузера на Windows (по имени exe). None — браузер
+/// бандла) - он же ключ браузера на Windows (по имени exe). None - браузер
 /// без политик. Разбор пути без учёта ОС: тесты гоняются и на macOS.
 pub fn policy_domain(app_path: &str) -> Option<&'static str> {
     let leaf = app_path.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next()?;
@@ -46,7 +46,7 @@ pub fn policy_domain(app_path: &str) -> Option<&'static str> {
         .unwrap_or(&lower);
     Some(match stem {
         "google chrome" => "com.google.Chrome",
-        // Windows: chrome.exe — и у Google Chrome, и у сборок Chromium.
+        // Windows: chrome.exe - и у Google Chrome, и у сборок Chromium.
         "chrome" if app_path.to_ascii_lowercase().contains("\\chromium\\") => "org.chromium.Chromium",
         "chrome" => "com.google.Chrome",
         "brave browser" | "brave" => "com.brave.Browser",
@@ -59,7 +59,7 @@ pub fn policy_domain(app_path: &str) -> Option<&'static str> {
 /// PAC моста для режима «Сайты только в выбранных браузерах».
 pub const PAC_SERVER: &str = "pac:http://127.0.0.1:8887/proxy.pac";
 
-/// Вход моста для политики — только локальный 127.0.0.1:порт или PAC моста.
+/// Вход моста для политики - только локальный 127.0.0.1:порт или PAC моста.
 fn valid_server(srv: &str) -> Result<(), String> {
     if srv == PAC_SERVER {
         return Ok(());
@@ -98,7 +98,7 @@ pub fn status(domain: &str) -> Result<BrowserPolicyStatus, String> {
 }
 
 /// Включить/снять с правами администратора (одно системное окно пароля).
-/// Enable кладёт копию скрипта в root-папку — её запускает служба
+/// Enable кладёт копию скрипта в root-папку - её запускает служба
 /// автовосстановления; пользовательский процесс подменить её не может.
 #[cfg(not(target_os = "windows"))]
 pub fn set(domain: &str, server: Option<&str>) -> Result<BrowserPolicyStatus, String> {
@@ -130,7 +130,7 @@ pub fn set(domain: &str, server: Option<&str>) -> Result<BrowserPolicyStatus, St
         return Err("Запрос пароля отменён".into());
     }
     let r = parse(&String::from_utf8_lossy(&out.stdout))?;
-    // Не верим выводу root-процесса на слово — перечитываем фактическое состояние.
+    // Не верим выводу root-процесса на слово - перечитываем фактическое состояние.
     let real = status(domain)?;
     if server.is_some() && !real.configured {
         return Err("Не удалось подтвердить политику браузера".into());
@@ -163,11 +163,11 @@ const OWNER_KEY: &str = r"SOFTWARE\ClodHelper\BrowserProxyPolicy";
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 const WEBRTC: &str = "disable_non_proxied_udp";
 /// Отдельные политики прокси прежних версий: ProxySettings их перекрывает,
-/// поэтому любая из них — признак чужой настройки.
+/// поэтому любая из них - признак чужой настройки.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 const LEGACY_PROXY: [&str; 5] = ["ProxyMode", "ProxyServerMode", "ProxyServer", "ProxyPacUrl", "ProxyBypassList"];
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-const FOREIGN: &str = "У браузера уже есть чужая политика прокси — Clod Helper её не меняет.";
+const FOREIGN: &str = "У браузера уже есть чужая политика прокси - Clod Helper её не меняет.";
 
 /// Значение ProxySettings, которое пишет Helper (байт в байт как скрипт).
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -179,7 +179,7 @@ fn proxy_settings(server: &str) -> String {
 }
 
 /// Исходное значение, которое Helper вправе заменить и потом вернуть:
-/// ProxySettings — нет или пустая строка, WebRtcIPHandling — нет или уже наш.
+/// ProxySettings - нет или пустая строка, WebRtcIPHandling - нет или уже наш.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn original_ok(v: &RegValue, proxy_settings: bool) -> bool {
     match v {
@@ -189,7 +189,7 @@ fn original_ok(v: &RegValue, proxy_settings: bool) -> bool {
     }
 }
 
-/// Состояние по значениям реестра — те же правила, что Get-BrowserPolicyStatus
+/// Состояние по значениям реестра - те же правила, что Get-BrowserPolicyStatus
 /// в browser-proxy-policy.ps1 (запись по-прежнему делает скрипт с правами).
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn status_from(proxy: &RegValue, webrtc: &RegValue, legacy: bool, owner: &RegValue) -> Result<BrowserPolicyStatus, String> {
@@ -214,8 +214,8 @@ fn status_from(proxy: &RegValue, webrtc: &RegValue, legacy: bool, owner: &RegVal
             Some((server, orig_proxy, orig_webrtc))
         }
     };
-    // PAC («Сайты» в этом браузере) WebRTC не трогает — наше там значение
-    // исходное; «весь трафик» — запрет UDP мимо прокси (как в скрипте).
+    // PAC («Сайты» в этом браузере) WebRTC не трогает - наше там значение
+    // исходное; «весь трафик» - запрет UDP мимо прокси (как в скрипте).
     let ours = state.as_ref().is_some_and(|(server, _, ow)| {
         proxy.is_str(&proxy_settings(server)) && if server == PAC_SERVER { webrtc == ow } else { webrtc.is_str(WEBRTC) }
     });
@@ -240,7 +240,7 @@ fn status_from(proxy: &RegValue, webrtc: &RegValue, legacy: bool, owner: &RegVal
     })
 }
 
-/// Windows: политика HKLM читается без прав администратора — прямо из
+/// Windows: политика HKLM читается без прав администратора - прямо из
 /// реестра (PowerShell стоил бы секунды на каждое открытие окна).
 #[cfg(target_os = "windows")]
 pub fn status(domain: &str) -> Result<BrowserPolicyStatus, String> {
@@ -256,7 +256,7 @@ pub fn status(domain: &str) -> Result<BrowserPolicyStatus, String> {
     )
 }
 
-/// Windows: «Сайты» (PAC моста) — включить одним браузерам и снять с других
+/// Windows: «Сайты» (PAC моста) - включить одним браузерам и снять с других
 /// за ОДНО окно UAC. Проверяет фактический результат по реестру.
 #[cfg(target_os = "windows")]
 pub fn apply_pac(enable: &[&str], disable: &[&str]) -> Result<(), String> {
@@ -294,7 +294,7 @@ pub fn apply_pac(enable: &[&str], disable: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
-/// macOS: «Сайты только в выбранных браузерах» — PAC моста политикой
+/// macOS: «Сайты только в выбранных браузерах» - PAC моста политикой
 /// одним браузерам и снятие с других за ОДНО окно пароля. Результат
 /// проверяется по фактическим Managed Preferences, а не по выводу root.
 #[cfg(not(target_os = "windows"))]
@@ -307,7 +307,7 @@ pub fn apply_pac(enable: &[&str], disable: &[&str]) -> Result<(), String> {
         return Err("Неизвестный браузер".into());
     }
     let enc = base64::engine::general_purpose::STANDARD.encode(SCRIPT);
-    // Домены — из белого списка, сервер — константа: в shell ничего чужого.
+    // Домены - из белого списка, сервер - константа: в shell ничего чужого.
     let mut shell = String::new();
     if !enable.is_empty() {
         shell.push_str(&format!(
@@ -354,7 +354,7 @@ pub fn set(domain: &str, server: Option<&str>) -> Result<BrowserPolicyStatus, St
     if policy_domain_known(domain).is_none() {
         return Err("Неизвестный браузер".into());
     }
-    // Домен и вход моста проверены — в командную строку ничего чужого.
+    // Домен и вход моста проверены - в командную строку ничего чужого.
     let arguments = match server {
         Some(srv) => {
             valid_server(srv)?;
@@ -374,7 +374,7 @@ pub fn set(domain: &str, server: Option<&str>) -> Result<BrowserPolicyStatus, St
         .result
         .ok_or_else(|| "Не удалось изменить политику браузера с правами администратора".to_string())?;
     let r = parse(&payload)?;
-    // Не верим выводу elevated-процесса — перечитываем фактическое состояние.
+    // Не верим выводу elevated-процесса - перечитываем фактическое состояние.
     let real = status(domain)?;
     if server.is_some() && !real.configured {
         return Err("Не удалось подтвердить политику браузера".into());
@@ -412,7 +412,7 @@ mod tests {
         assert_eq!(d("D:\\Telegram Desktop\\Telegram.exe"), None);
     }
 
-    /// Статус из реестра — те же случаи, что в tests/browser-proxy-policy.Tests.ps1.
+    /// Статус из реестра - те же случаи, что в tests/browser-proxy-policy.Tests.ps1.
     #[test]
     fn registry_status_matches_policy_script_rules() {
         use RegValue::{Absent, Other, Str};
@@ -435,18 +435,18 @@ mod tests {
         assert_eq!(st.server, "127.0.0.1:8890");
         assert_eq!(ours, r#"{"ProxyMode":"fixed_servers","ProxyServer":"127.0.0.1:8890","ProxyBypassList":"<local>"}"#);
 
-        // Чужое — конфликт: прокси, старые политики, WebRTC с другим значением.
+        // Чужое - конфликт: прокси, старые политики, WebRTC с другим значением.
         assert_eq!(status_from(&s(r#"{"ProxyMode":"direct"}"#), &Absent, false, &Absent).unwrap().conflict.as_deref(), Some(FOREIGN));
         assert_eq!(status_from(&Absent, &Absent, true, &Absent).unwrap().conflict.as_deref(), Some(FOREIGN));
         assert_eq!(status_from(&Absent, &s("default"), false, &Absent).unwrap().conflict.as_deref(), Some(FOREIGN));
         assert!(status_from(&Other("DWord".into()), &Absent, false, &Absent).unwrap().conflict.is_some());
-        // Заменимые исходные значения — не конфликт.
+        // Заменимые исходные значения - не конфликт.
         assert!(status_from(&s(""), &s(WEBRTC), false, &Absent).unwrap().conflict.is_none());
-        // Старая политика рядом с нашей — не «настроено».
+        // Старая политика рядом с нашей - не «настроено».
         let st = status_from(&s(&ours), &s(WEBRTC), true, &owner(absent, absent)).unwrap();
         assert!(!st.configured && st.conflict.is_some());
 
-        // Изменено вне Helper — конфликт; вернулось к исходному — нет.
+        // Изменено вне Helper - конфликт; вернулось к исходному - нет.
         let changed = status_from(&s(r#"{"ProxyMode":"direct"}"#), &s(WEBRTC), false, &owner(absent, absent)).unwrap();
         assert!(changed.conflict.unwrap().contains("изменена вне"));
         assert!(status_from(&s(""), &s(WEBRTC), false, &owner(empty, ours_webrtc)).unwrap().conflict.is_none());
@@ -473,7 +473,7 @@ mod tests {
         assert!(ps.contains(&format!("'{OWNER_KEY}'")));
         assert!(ps.contains(&format!("'{WEBRTC}'")));
         assert!(LEGACY_PROXY.iter().all(|n| ps.contains(&format!("'{n}'"))));
-        assert!(ps.contains("'У браузера уже есть чужая политика прокси — Clod Helper её не меняет.'"));
+        assert!(ps.contains("'У браузера уже есть чужая политика прокси - Clod Helper её не меняет.'"));
     }
 
     #[test]
@@ -489,7 +489,7 @@ mod tests {
         }
     }
 
-    /// PAC-режим: та же логика, что в скрипте — WebRTC остаётся исходным.
+    /// PAC-режим: та же логика, что в скрипте - WebRTC остаётся исходным.
     #[test]
     fn pac_policy_status() {
         use RegValue::{Absent, Str};
@@ -501,7 +501,7 @@ mod tests {
         let st = status_from(&Str(pac.clone()), &Absent, false, &owner).unwrap();
         assert!(st.configured && st.conflict.is_none());
         assert_eq!(st.server, PAC_SERVER);
-        // Наш WebRTC-запрет при PAC — не «настроено» (так не должно остаться).
+        // Наш WebRTC-запрет при PAC - не «настроено» (так не должно остаться).
         assert!(!status_from(&Str(pac), &Str(WEBRTC.into()), false, &owner).unwrap().configured);
         // Скрипт строит ту же строку.
         let ps = include_str!("../resources/browser-proxy-policy.ps1");

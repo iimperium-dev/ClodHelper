@@ -1,7 +1,7 @@
 //! Telegram через мост (macOS и Windows).
 //!
 //! Telegram для macOS (ru.keepcoder.Telegram) не читает HTTP_PROXY и не умеет
-//! HTTP-прокси вовсе — только SOCKS5/MTProto. Поэтому мост (≥1.6) держит
+//! HTTP-прокси вовсе - только SOCKS5/MTProto. Поэтому мост (≥1.6) держит
 //! SOCKS5-вход 127.0.0.1:8891, где всё идёт только через upstream.
 //!
 //! Записать прокси в настройки Telegram снаружи нельзя (они в его базе), но
@@ -10,8 +10,8 @@
 //! Telegram Desktop (Qt-версия).
 //!
 //! Факт «идёт ли через мост» берём не из настроек, а из живых соединений
-//! процесса (lsof; на Windows — netstat): есть сокеты к 127.0.0.1:8891 —
-//! через мост; есть сокеты наружу мимо него — напрямую.
+//! процесса (lsof; на Windows - netstat): есть сокеты к 127.0.0.1:8891 -
+//! через мост; есть сокеты наружу мимо него - напрямую.
 
 use serde::Serialize;
 
@@ -20,7 +20,7 @@ pub const SOCKS_PORT: u16 = 8891;
 
 #[derive(Debug, Serialize, Default)]
 pub struct TelegramStatus {
-    /// Настройку можно выполнить (macOS — всегда, Windows — найден Telegram Desktop).
+    /// Настройку можно выполнить (macOS - всегда, Windows - найден Telegram Desktop).
     pub supported: bool,
     /// Путь к Telegram.app / Telegram Desktop.app, если установлен.
     pub app_path: Option<String>,
@@ -52,7 +52,7 @@ pub fn status() -> TelegramStatus {
     }
 }
 
-/// Windows: Telegram Desktop, соединения — из общего снимка (netstat). Путь —
+/// Windows: Telegram Desktop, соединения - из общего снимка (netstat). Путь -
 /// из профиля (его видит и меняет пользователь), иначе детект.
 #[cfg(target_os = "windows")]
 pub fn status() -> TelegramStatus {
@@ -94,8 +94,8 @@ pub fn setup() -> Result<TelegramStatus, String> {
         mark_prompted();
         wait_via_bridge()?;
     }
-    // Telegram уже идёт через мост — теперь защита ему не мешает. Одно окно
-    // прав администратора; отказ не мешает подключению — защиту можно
+    // Telegram уже идёт через мост - теперь защита ему не мешает. Одно окно
+    // прав администратора; отказ не мешает подключению - защиту можно
     // включить позже в настройках Telegram.
     let _ = crate::leak_guard::add("telegram");
     Ok(status())
@@ -112,16 +112,16 @@ fn wait_via_bridge() -> Result<(), String> {
     }
     Err(if crate::leak_guard::guards("telegram") {
         // Защита осталась с прошлой настройки: без прокси Telegram без связи.
-        "Telegram не подключился к мосту — в его окне «Прокси» нажмите «Подключить». \
+        "Telegram не подключился к мосту - в его окне «Прокси» нажмите «Подключить». \
          Пока прокси не подключён, Telegram без связи: в его настройках можно выключить «Не пускать мимо прокси»"
     } else {
-        "Telegram не подключился к мосту — в его окне «Прокси» нажмите «Подключить». \
+        "Telegram не подключился к мосту - в его окне «Прокси» нажмите «Подключить». \
          Прямой доступ Telegram не закрыт"
     }
     .into())
 }
 
-/// Telegram найден и мост принимает SOCKS — можно открывать окно прокси.
+/// Telegram найден и мост принимает SOCKS - можно открывать окно прокси.
 fn ready() -> Result<TelegramStatus, String> {
     let st = status();
     if st.app_path.is_none() {
@@ -134,7 +134,7 @@ fn ready() -> Result<TelegramStatus, String> {
     }
     if !st.socks_ready {
         return Err(
-            "Мост ещё не умеет SOCKS для Telegram — нажмите «Обновить мост» в Обзоре.".into(),
+            "Мост ещё не умеет SOCKS для Telegram - нажмите «Обновить мост» в Обзоре.".into(),
         );
     }
     Ok(st)
@@ -155,10 +155,10 @@ fn open_proxy_window(_app: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Windows: та же ссылка, но аргументом самого Telegram — так ссылки отдаёт
+/// Windows: та же ссылка, но аргументом самого Telegram - так ссылки отдаёт
 /// ему и система («Telegram.exe -- %1»); запущенному Telegram её передаёт
 /// новый процесс. Через `start tg://…` она ушла бы тому, кто последним
-/// записался обработчиком tg://, — при втором аккаунте (копия Telegram в своей
+/// записался обработчиком tg://, - при втором аккаунте (копия Telegram в своей
 /// папке) это копия, а не основной. Запущенные копии получают ссылку тоже:
 /// защита от утечек закрывает Telegram мимо моста всем, прокси нужен каждой.
 #[cfg(target_os = "windows")]
@@ -177,18 +177,17 @@ fn open_proxy_window(main: &str) -> Result<(), String> {
 
 /// Запомнить, что окно прокси Telegram уже показывали.
 fn mark_prompted() {
-    let mut s = crate::settings::load();
-    if !s.telegram_prompted {
+    let _ = crate::settings::with_settings_strict(|s| {
         s.telegram_prompted = true;
-        let _ = crate::settings::save(&s);
-    }
+        Ok(())
+    });
 }
 
 /// Автонастройка: один раз, когда Telegram впервые замечен идущим напрямую
 /// при готовом SOCKS-входе, сами открываем его окно «Добавить прокси». Telegram
-/// не позволяет менять прокси снаружи — нажатие «Подключить» остаётся за
+/// не позволяет менять прокси снаружи - нажатие «Подключить» остаётся за
 /// пользователем, но искать настройку ему не нужно. Дальше не навязываемся.
-/// Прав администратора (защита от утечек) здесь не просим: их окно — только
+/// Прав администратора (защита от утечек) здесь не просим: их окно - только
 /// по действию пользователя («Подключить»).
 pub fn auto_prompt_once() {
     if crate::settings::load().telegram_prompted {
@@ -201,7 +200,7 @@ pub fn auto_prompt_once() {
     }
     if open_proxy_window(st.app_path.as_deref().unwrap_or_default()).is_ok() {
         mark_prompted();
-        tracing::info!("Telegram идёт мимо моста — показал окно «Добавить прокси»");
+        tracing::info!("Telegram идёт мимо моста - показал окно «Добавить прокси»");
     }
 }
 

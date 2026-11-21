@@ -1,4 +1,4 @@
-//! clod-bridge — локальный HTTP-прокси-мост (Rust-реинкарнация local-proxy.py).
+//! clod-bridge - локальный HTTP-прокси-мост (Rust-реинкарнация local-proxy.py).
 //!
 //! Слушает 127.0.0.1:8889 без auth и решает, куда отправить каждое соединение:
 //!   - AI-домены (Anthropic, OpenAI, …) → купленный upstream-прокси с auth
@@ -7,13 +7,13 @@
 //!
 //! Зачем Rust вместо PyInstaller-python: один статический exe ~1МБ без
 //! антивирусных фолспозитивов и медленной распаковки onefile; и мост стал
-//! достаточно умным для маршрутизации/failover — на python это уже боль.
+//! достаточно умным для маршрутизации/failover - на python это уже боль.
 //!
 //! Возможности сверх старого моста:
-//!   - domain-routing (режимы: all — всё через upstream, как раньше;
-//!     smart — через upstream только AI-домены);
+//!   - domain-routing (режимы: all - всё через upstream, как раньше;
+//!     smart - через upstream только AI-домены);
 //!   - несколько --upstream с passive failover (упавший в отлёжке 30с);
-//!   - GET /healthz на самом мосте — живые счётчики для Dashboard.
+//!   - GET /healthz на самом мосте - живые счётчики для Dashboard.
 //!
 //! CLI совместим со старым мостом: --upstream URL (повторяемый), --listen
 //! HOST:PORT, --quiet. Новое: --rules FILE (JSON: mode/proxy_domains/
@@ -21,14 +21,14 @@
 //! Дополнительно слушает 127.0.0.1:8890 (--strict-listen): этот вход всегда
 //! отправляет запросы через upstream, независимо от rules, без DIRECT.
 //!
-//! Ещё один вход — SOCKS5 на 127.0.0.1:8891 (--socks-listen, "off" — выкл):
+//! Ещё один вход - SOCKS5 на 127.0.0.1:8891 (--socks-listen, "off" - выкл):
 //! для приложений, которые умеют только SOCKS (Telegram для macOS). Всё,
 //! что пришло туда, идёт ТОЛЬКО через upstream (как строгий вход), без DIRECT.
 //!
-//! --supervise: режим самосупервизии — процесс перезапускает сам себя как
+//! --supervise: режим самосупервизии - процесс перезапускает сам себя как
 //! воркер и поднимает упавшего через 5с. Задача Планировщика вешается прямо
 //! на exe: VBS/wscript-цикл (малварь-паттерн для антивирусов + депрекация
-//! VBScript в Win11 24H2+) больше не нужен. windows_subsystem="windows" —
+//! VBScript в Win11 24H2+) больше не нужен. windows_subsystem="windows" -
 //! окна консоли нет ни у супервизора, ни у воркера.
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
@@ -39,12 +39,14 @@ use std::time::{Duration, Instant};
 
 use base64::Engine;
 use serde::Deserialize;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use std::pin::Pin as IoPin;
+use std::task::{Context, Poll};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
 
-/// Потолок одновременных соединений — защита от пика деплоя (см. историю
+/// Потолок одновременных соединений - защита от пика деплоя (см. историю
 /// python-моста: без лимита too-many-threads ронял процесс и SSE-стрим).
 const MAX_CONNECTIONS: usize = 256;
 /// Максимум байтов заголовков первого запроса.
@@ -52,11 +54,11 @@ const HEAD_LIMIT: usize = 65536;
 /// Таймаут установки прямого (DIRECT) TCP-соединения.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 /// Таймаут TCP-коннекта к upstream'у. Короче DIRECT: живой прокси отвечает
-/// за десятки миллисекунд, а зависший SYN раньше съедал 20с — дольше, чем
+/// за десятки миллисекунд, а зависший SYN раньше съедал 20с - дольше, чем
 /// клиент готов ждать, и 502 приходил уже в закрытый сокет.
 const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(4);
 /// Сколько ждём ответа upstream'а на CONNECT. Прокси, принявший TCP, но
-/// молчащий на CONNECT, — главный источник «зависших на 15с» запросов.
+/// молчащий на CONNECT, - главный источник «зависших на 15с» запросов.
 const UPSTREAM_REPLY_TIMEOUT: Duration = if cfg!(test) {
     Duration::from_millis(300)
 } else {
@@ -66,7 +68,7 @@ const UPSTREAM_REPLY_TIMEOUT: Duration = if cfg!(test) {
 /// ещё ничего не отвечено, а выходной IP тот же (прокси тот же).
 const UPSTREAM_ATTEMPTS: usize = 2;
 /// Подряд идущих отказов, после которых upstream считается нездоровым в
-/// /healthz. Одиночный сбой — не повод красить дашборд в красный.
+/// /healthz. Одиночный сбой - не повод красить дашборд в красный.
 const UNHEALTHY_STREAK: u64 = 3;
 /// Таймаут чтения заголовков от клиента.
 const HEAD_TIMEOUT: Duration = Duration::from_secs(30);
@@ -74,8 +76,8 @@ const HEAD_TIMEOUT: Duration = Duration::from_secs(30);
 const UPSTREAM_COOLDOWN: Duration = Duration::from_secs(30);
 
 /// AI-домены по умолчанию для режима smart (матч точный или по суффиксу
-/// ".domain"). Лучше перебдеть: лишний домен через upstream — копейки, а
-/// пропущенный — обрыв доступа из-за гео-блока.
+/// ".domain"). Лучше перебдеть: лишний домен через upstream - копейки, а
+/// пропущенный - обрыв доступа из-за гео-блока.
 const DEFAULT_PROXY_DOMAINS: &[&str] = &[
     // Anthropic / Claude
     "anthropic.com",
@@ -124,14 +126,14 @@ impl Mode {
 enum RoutingPolicy {
     Rules,
     UpstreamOnly,
-    /// SOCKS5-вход (Telegram): только upstream; прокси — назначенный группе
+    /// SOCKS5-вход (Telegram): только upstream; прокси - назначенный группе
     /// «telegram.org», иначе основной (№0).
     Socks,
     /// Закреплённый вход (--pin-listen ADDR=N): всё только через upstream №N.
     /// Так приложение (браузер и т.п.) получает «свой» прокси из пула.
     Fixed(usize),
     /// Вход сайтов (--sites-listen): правила как у общего входа, но режим
-    /// всегда smart — через прокси только AI-домены и сайты пользователя,
+    /// всегда smart - через прокси только AI-домены и сайты пользователя,
     /// остальное напрямую, что бы ни стояло в глобальном режиме. Запоминает
     /// хосты для «Подсмотреть» (GET /hosts).
     Sites,
@@ -154,9 +156,9 @@ impl RoutingPolicy {
 }
 
 /// Сайты пользователя (`--sites FILE`, bridge-sites.json): домен → прокси
-/// (None — «Авто»). Отдельно от rules-файла: таблица перечитывается на лету
-/// (см. watch_sites), и добавление сайта не перезапускает мост — стримы
-/// Claude Code не рвутся. Порядок — длина домена ↓: первый матч самый точный.
+/// (None - «Авто»). Отдельно от rules-файла: таблица перечитывается на лету
+/// (см. watch_sites), и добавление сайта не перезапускает мост - стримы
+/// Claude Code не рвутся. Порядок - длина домена ↓: первый матч самый точный.
 type SiteTable = Vec<(String, Option<usize>)>;
 
 #[derive(Deserialize, Default)]
@@ -164,7 +166,7 @@ struct SitesFile {
     #[serde(default)]
     sites: Vec<SiteFileEntry>,
     /// Программы, которые Clod Helper не трогает: папки, в которых лежат их
-    /// exe (антидетект-браузер с кучей профилей — одна папка на всех).
+    /// exe (антидетект-браузер с кучей профилей - одна папка на всех).
     /// Соединение от такой программы на входе сайтов идёт напрямую.
     #[serde(default)]
     bypass_apps: Vec<String>,
@@ -254,7 +256,7 @@ mod procmap {
                 continue;
             }
             let count = u32::from_ne_bytes(buf[..4].try_into().ok()?) as usize;
-            // Строки идут сразу за dwNumEntries (выравнивание — 4 байта).
+            // Строки идут сразу за dwNumEntries (выравнивание - 4 байта).
             let rows = buf[4..].as_ptr().cast::<MIB_TCPROW_OWNER_PID>();
             for i in 0..count {
                 // SAFETY: count строк в пределах буфера, который заполнил WinAPI.
@@ -291,7 +293,7 @@ mod procmap {
         };
         if let Ok(mut c) = CACHE.lock() {
             let c = c.get_or_insert_with(HashMap::new);
-            // PID переиспользуются — кэш небольшой и время от времени сбрасывается.
+            // PID переиспользуются - кэш небольшой и время от времени сбрасывается.
             if c.len() > 256 {
                 c.clear();
             }
@@ -305,11 +307,11 @@ mod procmap {
     }
 }
 
-/// macOS: владелец соединения ищется через libproc — сначала по пути
+/// macOS: владелец соединения ищется через libproc - сначала по пути
 /// отбираются процессы исключённых программ (дёшево), и только у них
 /// перебираются TCP-сокеты: локальный порт = порт клиента, удалённый =
 /// наш вход. Разметка struct socket_fdinfo (<sys/proc_info.h>) одинакова на
-/// arm64 и x86_64 — смещения сверены компилятором.
+/// arm64 и x86_64 - смещения сверены компилятором.
 #[cfg(target_os = "macos")]
 mod procmap {
     use std::ffi::c_void;
@@ -357,7 +359,7 @@ mod procmap {
     }
 
     fn port(raw: &[u8], off: usize) -> u16 {
-        // insi_lport/insi_fport — int, порт в сетевом порядке в младших 16 битах.
+        // insi_lport/insi_fport - int, порт в сетевом порядке в младших 16 битах.
         let v = i32::from_ne_bytes(raw[off..off + 4].try_into().unwrap_or_default());
         u16::from_be(v as u16)
     }
@@ -446,10 +448,10 @@ struct SeenHost {
     site: Option<String>,
 }
 
-/// Сколько хостов помним для «Подсмотреть»: дольше — вытесняем самый давний.
+/// Сколько хостов помним для «Подсмотреть»: дольше - вытесняем самый давний.
 const SEEN_CAP: usize = 1000;
 
-/// JSON rules-файла (`bridge-rules.json`). Все поля опциональны — отсутствие
+/// JSON rules-файла (`bridge-rules.json`). Все поля опциональны - отсутствие
 /// файла или поля означает дефолты (mode=all, встроенный список доменов).
 #[derive(Deserialize, Default)]
 struct RulesFile {
@@ -462,7 +464,7 @@ struct RulesFile {
     /// прокси №0, ChatGPT через №1». Матч по суффиксу, самый длинный
     /// выигрывает. Индекс за пределами пула игнорируется.
     ///
-    /// Назначение — СТРОГОЕ закрепление: используется ТОЛЬКО назначенный
+    /// Назначение - СТРОГОЕ закрепление: используется ТОЛЬКО назначенный
     /// прокси, без failover на другие. Смена выходного IP опаснее короткого
     /// простоя: AI-сервисы (особенно Anthropic) флагают аккаунты за скачки
     /// IP. Failover работает только для доменов без назначения («Авто»).
@@ -476,7 +478,7 @@ struct RulesFile {
 
 // ─── Блокировка (телеметрия) ─────────────────────────────────────
 
-/// Заблокированные домены — общие для всех входов, меняются на лету.
+/// Заблокированные домены - общие для всех входов, меняются на лету.
 static BLOCKED: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(Vec::new());
 
 fn blocked_domains() -> Vec<String> {
@@ -487,7 +489,7 @@ fn is_blocked(host: &str) -> bool {
     BLOCKED.read().map(|b| b.iter().any(|d| host_matches(host, d))).unwrap_or(false)
 }
 
-/// block_domains из rules-файла; None — файл не читается/битый (оставляем прежнее).
+/// block_domains из rules-файла; None - файл не читается/битый (оставляем прежнее).
 fn load_blocked(path: &str) -> Option<Vec<String>> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
@@ -530,24 +532,24 @@ struct Upstream {
     port: u16,
     /// base64(login:pass) для Proxy-Authorization, если в URL был auth.
     auth: Option<String>,
-    /// Логин/пароль как есть — для SOCKS5 (RFC 1929).
+    /// Логин/пароль как есть - для SOCKS5 (RFC 1929).
     user: Option<(String, String)>,
-    /// Сглаженное время подключения, мс (0 — ещё не мерили): «Авто»
+    /// Сглаженное время подключения, мс (0 - ещё не мерили): «Авто»
     /// пробует сначала быстрые и стабильные прокси.
     ewma_ms: AtomicU64,
-    /// URL с замаскированным паролем — для логов и /healthz.
+    /// URL с замаскированным паролем - для логов и /healthz.
     masked: String,
     ok: AtomicU64,
     fail: AtomicU64,
     /// Отказов подряд (сбрасывается первым успехом).
     streak: AtomicU64,
     /// Отлёжка после фейла коннекта: до этого момента upstream пропускается
-    /// (passive failover). None — здоров.
+    /// (passive failover). None - здоров.
     bad_until: Mutex<Option<Instant>>,
-    /// Резервы этого прокси (индексы в пуле) по порядку — их задаёт
+    /// Резервы этого прокси (индексы в пуле) по порядку - их задаёт
     /// пользователь явно. Закреплённое за прокси (сервис, сайт, приложение)
     /// уходит на резерв, пока прокси не работает, и возвращается, когда он
-    /// оживёт. Пусто — строгое закрепление, как раньше: IP не меняется.
+    /// оживёт. Пусто - строгое закрепление, как раньше: IP не меняется.
     backups: Vec<usize>,
     /// Сам резерв чьего-то прокси: в «Авто» идёт после всех обычных.
     is_backup: bool,
@@ -575,7 +577,7 @@ impl Upstream {
         let new = if old == 0 { ms } else { (old * 7 + ms * 3) / 10 };
         self.ewma_ms.store(new.max(1), Ordering::Relaxed);
     }
-    /// Продлить отлёжку без счёта отказа (фоновая проверка — не трафик
+    /// Продлить отлёжку без счёта отказа (фоновая проверка - не трафик
     /// пользователя, в статистику ok/fail её не пишем).
     fn extend_cooling(&self) {
         if let Ok(mut g) = self.bad_until.lock() {
@@ -599,19 +601,21 @@ struct State {
     routing_policy: RoutingPolicy,
     proxy_domains: Vec<String>,
     direct_domains: Vec<String>,
-    /// (домен, индекс upstream'а) — привязка сервисов к конкретным прокси.
+    /// (домен, индекс upstream'а) - привязка сервисов к конкретным прокси.
     assignments: Vec<(String, usize)>,
-    /// Сайты пользователя — общие для всех входов, меняются на лету.
+    /// Сайты пользователя - общие для всех входов, меняются на лету.
     sites: Arc<Sites>,
-    /// Хосты для «Подсмотреть» — только у входа сайтов.
+    /// Хосты для «Подсмотреть» - только у входа сайтов.
     seen: Option<Mutex<std::collections::HashMap<String, SeenHost>>>,
     upstreams: Arc<Vec<Upstream>>,
     total: AtomicU64,
+    /// Байты через туннели этого входа (см. tunnel).
+    bytes: AtomicU64,
     active: AtomicU64,
     via_upstream: AtomicU64,
     via_direct: AtomicU64,
     errors: AtomicU64,
-    /// Последние ошибки (секунды-от-старта, текст) — отдаются в /healthz,
+    /// Последние ошибки (секунды-от-старта, текст) - отдаются в /healthz,
     /// чтобы Dashboard мог показать пользователю ЧТО именно ломалось
     /// (супервизор запускает мост скрыто, stderr некуда смотреть).
     last_errors: Mutex<std::collections::VecDeque<(u64, String)>>,
@@ -680,7 +684,7 @@ mod logfile {
         PathBuf::from(p)
     }
 
-    /// Переименовать журнал в `.1`, если он больше `limit`. true — ротировали.
+    /// Переименовать журнал в `.1`, если он больше `limit`. true - ротировали.
     pub fn rotate_if_needed(path: &Path, limit: u64) -> std::io::Result<bool> {
         match std::fs::metadata(path) {
             Ok(m) if m.len() > limit => {
@@ -707,7 +711,7 @@ mod logfile {
     }
 
     /// Включить собственный журнал. На Windows stderr моста никуда не пишется
-    /// (задача Планировщика без перенаправления) — флаг принимается, но no-op.
+    /// (задача Планировщика без перенаправления) - флаг принимается, но no-op.
     pub fn init(path: &str) -> Result<(), String> {
         #[cfg(unix)]
         {
@@ -721,7 +725,7 @@ mod logfile {
         Ok(())
     }
 
-    /// Вызывается перед каждой записью в журнал: stat — копейки на фоне сети.
+    /// Вызывается перед каждой записью в журнал: stat - копейки на фоне сети.
     pub fn maybe_rotate() {
         #[cfg(unix)]
         if let Some(path) = PATH.get() {
@@ -733,7 +737,7 @@ mod logfile {
     }
 }
 
-/// Текущее время UTC «YYYY-MM-DD HH:MM:SSZ» — без chrono: журнал launchd
+/// Текущее время UTC «YYYY-MM-DD HH:MM:SSZ» - без chrono: журнал launchd
 /// иначе не сопоставить с жалобой пользователя («отвалилось в 4:20»).
 fn wall_clock() -> String {
     let secs = std::time::SystemTime::now()
@@ -807,8 +811,8 @@ fn parse_upstream(raw: &str) -> Result<Upstream, String> {
     })
 }
 
-/// Резервы из rules-файла: `"fallbacks": {"0": [2, 3]}` — у прокси №0
-/// резервы №2 и №3. Отсутствие файла/поля — резервов нет. Битый файл сюда
+/// Резервы из rules-файла: `"fallbacks": {"0": [2, 3]}` - у прокси №0
+/// резервы №2 и №3. Отсутствие файла/поля - резервов нет. Битый файл сюда
 /// не доходит: load_rules уже отказался запускаться.
 fn load_fallbacks(path: Option<&str>) -> Vec<(usize, Vec<usize>)> {
     let Some(text) = path.and_then(|p| std::fs::read_to_string(p).ok()) else {
@@ -828,7 +832,7 @@ fn load_fallbacks(path: Option<&str>) -> Vec<(usize, Vec<usize>)> {
 }
 
 /// Привязать резервы к прокси пула. Чужие индексы, ссылки на себя и дубли
-/// отбрасываются; резерв не может иметь своих резервов (цепочка — один
+/// отбрасываются; резерв не может иметь своих резервов (цепочка - один
 /// уровень: так предсказуемо, куда уйдёт трафик).
 fn apply_fallbacks(ups: &mut [Upstream], fallbacks: &[(usize, Vec<usize>)]) {
     let n = ups.len();
@@ -860,9 +864,9 @@ const PROBE_HEAD: &[u8] = b"CONNECT cp.cloudflare.com:443 HTTP/1.1\r\nHost: cp.c
 const PROBE_INTERVAL: Duration = Duration::from_secs(15);
 
 /// Фоновая перепроверка упавших прокси. Без неё возврат на ожившего ждал
-/// бы живого клиента — и тот платил бы таймаутом за каждую проверку.
+/// бы живого клиента - и тот платил бы таймаутом за каждую проверку.
 /// Пока прокси мёртв, его отлёжка продлевается (трафик идёт через резерв
-/// или другой прокси, никто не ждёт); ожил — отлёжка снимается, и
+/// или другой прокси, никто не ждёт); ожил - отлёжка снимается, и
 /// закреплённое за ним сразу возвращается на свой IP.
 async fn probe_loop(state: Arc<State>) {
     loop {
@@ -897,11 +901,11 @@ fn load_rules(path: Option<&str>) -> (Mode, Vec<String>, Vec<String>, Vec<(Strin
         return (mode, proxy, direct, assignments);
     };
 
-    // Отсутствие файла — легальный кейс (правил нет). А вот битый/нечитаемый
+    // Отсутствие файла - легальный кейс (правил нет). А вот битый/нечитаемый
     // файл дефолтами закрывать НЕЛЬЗЯ: дефолты = пустые assignments, т.е.
     // закреплённый Claude тихо уйдёт в failover на другой выходной IP. Смена
     // IP опаснее простоя, поэтому: ретраи (запись дашборда могла совпасть с
-    // нашим стартом), затем fail-fast — супервизор перезапустит с целым файлом.
+    // нашим стартом), затем fail-fast - супервизор перезапустит с целым файлом.
     let mut last_err = String::new();
     for attempt in 0..5 {
         if attempt > 0 {
@@ -934,7 +938,7 @@ fn load_rules(path: Option<&str>) -> (Mode, Vec<String>, Vec<String>, Vec<(Strin
                 }
                 // Нормализация + детерминированный порядок (длина ↓, имя, индекс):
                 // HashMap-порядок случаен, и при дублях-тезках победитель менялся
-                // бы от рестарта к рестарту — а это скачок выходного IP.
+                // бы от рестарта к рестарту - а это скачок выходного IP.
                 let mut v: Vec<(String, usize)> = r
                     .assignments
                     .unwrap_or_default()
@@ -955,7 +959,7 @@ fn load_rules(path: Option<&str>) -> (Mode, Vec<String>, Vec<String>, Vec<(Strin
         }
     }
     eprintln!(
-        "ERROR: rules file {p} {last_err} — отказ запуска: потеря закреплений опаснее простоя"
+        "ERROR: rules file {p} {last_err} - отказ запуска: потеря закреплений опаснее простоя"
     );
     std::process::exit(2);
 }
@@ -968,14 +972,14 @@ enum Route {
     Upstream,
 }
 
-/// Хвостовая точка FQDN ("claude.ai.") и регистр нормализуются — иначе
+/// Хвостовая точка FQDN ("claude.ai.") и регистр нормализуются - иначе
 /// канонические имена обходили бы и роутинг, и закрепление.
 fn normalize_host(host: &str) -> String {
     host.trim_end_matches('.').to_ascii_lowercase()
 }
 
 /// Матч по суффиксу: "api.anthropic.com" матчится на "anthropic.com".
-/// Оба аргумента уже нормализованы (normalize_host) — без аллокаций на
+/// Оба аргумента уже нормализованы (normalize_host) - без аллокаций на
 /// каждое сравнение: решение принимается на каждом соединении.
 fn host_matches(host: &str, domain: &str) -> bool {
     host == domain
@@ -985,7 +989,7 @@ fn host_matches(host: &str, domain: &str) -> bool {
 }
 
 /// Сети Anthropic и Telegram (официальные диапазоны). Клиенты, идущие по
-/// IP без имени (Telegram — к своим DC), иначе попадали бы в «напрямую»:
+/// IP без имени (Telegram - к своим DC), иначе попадали бы в «напрямую»:
 /// правила умного режима сопоставляются по доменам.
 const SERVICE_NETS: &[(&str, u8)] = &[
     ("160.79.104.0", 21),
@@ -1116,11 +1120,11 @@ fn find_head_end(buf: &[u8]) -> Option<usize> {
 }
 
 /// Убрать hop-by-hop proxy-заголовки; опционально добавить Proxy-Authorization.
-/// Работает и для CONNECT, и для обычного запроса — правится только блок
+/// Работает и для CONNECT, и для обычного запроса - правится только блок
 /// заголовков до \r\n\r\n, остальные байты (начало тела) не трогаются.
 ///
 /// `force_close`: мы форвардим ТОЛЬКО первый запрос соединения, дальше идёт
-/// слепой pipe — keep-alive для plain-HTTP через мост опасен (второй запрос
+/// слепой pipe - keep-alive для plain-HTTP через мост опасен (второй запрос
 /// ушёл бы без auth и/или на сокет первого хоста). Поэтому не-CONNECT
 /// запросы принудительно закрываются: клиент откроет новое соединение.
 /// HTTPS (CONNECT-туннели) это не касается.
@@ -1177,7 +1181,7 @@ fn rewrite_head(
 /// Результат поиска назначения для хоста.
 #[derive(Clone, Copy, PartialEq)]
 enum Pin {
-    /// Назначения нет — обычный маршрут и failover.
+    /// Назначения нет - обычный маршрут и failover.
     None,
     /// Закреплён за живым индексом пула.
     Pinned(usize),
@@ -1247,7 +1251,7 @@ fn site_for(state: &State, host: &str) -> Option<(String, Option<usize>)> {
 
 /// Куда отправить соединение: назначения сервисов (закрепления Claude)
 /// главнее всего; затем сайты пользователя (через прокси, даже если домен в
-/// direct_domains); затем обычные правила режима. Сайт с выбранным прокси —
+/// direct_domains); затем обычные правила режима. Сайт с выбранным прокси -
 /// строгое закрепление, как у сервисов: прокси вне пула = отказ, не failover.
 fn route_plan(state: &State, host: &str) -> (Pin, Route, Option<String>) {
     let pin = request_upstream(state, host);
@@ -1267,7 +1271,7 @@ fn route_plan(state: &State, host: &str) -> (Pin, Route, Option<String>) {
     (Pin::None, decide(state, host), None)
 }
 
-/// Разобрать bridge-sites.json в таблицу. Пустой/отсутствующий файл — пусто.
+/// Разобрать bridge-sites.json в таблицу. Пустой/отсутствующий файл - пусто.
 fn parse_sites(text: &str) -> Result<SiteTable, String> {
     let f: SitesFile = serde_json::from_str(text.trim_start_matches('\u{feff}'))
         .map_err(|e| format!("не парсится: {e}"))?;
@@ -1295,7 +1299,7 @@ fn load_sites(path: &str) -> Result<SiteTable, String> {
     }
 }
 
-/// Исключённые программы из файла сайтов; ошибка — пусто (их таблица сайтов
+/// Исключённые программы из файла сайтов; ошибка - пусто (их таблица сайтов
 /// при битом файле и так остаётся прежней, см. watch_sites).
 fn load_bypass(path: &str) -> Vec<String> {
     std::fs::read_to_string(path).ok().and_then(|t| parse_bypass(&t).ok()).unwrap_or_default()
@@ -1305,8 +1309,8 @@ fn file_mtime(path: &str) -> Option<std::time::SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
-/// Перечитывать сайты при изменении файла (раз в 2с по mtime). Битый файл —
-/// оставляем прежнюю таблицу: в отличие от rules, падать тут нельзя — это
+/// Перечитывать сайты при изменении файла (раз в 2с по mtime). Битый файл -
+/// оставляем прежнюю таблицу: в отличие от rules, падать тут нельзя - это
 /// уронило бы и Claude, и всё остальное.
 async fn watch_sites(path: String, sites: Arc<Sites>, log: Arc<State>) {
     let mut seen = file_mtime(&path);
@@ -1323,7 +1327,7 @@ async fn watch_sites(path: String, sites: Arc<Sites>, log: Arc<State>) {
                 sites.set(t);
                 sites.set_bypass(load_bypass(&path));
             }
-            Err(e) => log.log_err(&format!("файл сайтов {path} {e} — оставляю прежний список")),
+            Err(e) => log.log_err(&format!("файл сайтов {path} {e} - оставляю прежний список")),
         }
     }
 }
@@ -1348,7 +1352,7 @@ fn note_host(state: &State, host: &str, upstream: bool, site: Option<String>) {
     map.insert(host.to_string(), SeenHost { count: 1, first_ms: now, last_ms: now, upstream, site });
 }
 
-/// GET /hosts[?since=MS] — хосты с last ≥ since, свежие первыми.
+/// GET /hosts[?since=MS] - хосты с last ≥ since, свежие первыми.
 fn hosts_json(state: &State, since: u64) -> String {
     let now = state.started.elapsed().as_millis() as u64;
     let mut hosts: Vec<serde_json::Value> = Vec::new();
@@ -1372,7 +1376,7 @@ fn hosts_json(state: &State, since: u64) -> String {
     serde_json::json!({ "now_ms": now, "hosts": hosts }).to_string()
 }
 
-/// Telegram ходит по IP дата-центров, а не по доменам — назначение берём для
+/// Telegram ходит по IP дата-центров, а не по доменам - назначение берём для
 /// группы целиком (по «telegram.org»), иначе основной прокси. Один прокси на
 /// все соединения: Telegram, как и Claude, не любит скачков IP.
 fn socks_upstream(state: &State) -> Pin {
@@ -1385,7 +1389,7 @@ fn socks_upstream(state: &State) -> Pin {
 
 /// Установленный через upstream канал: сокет + ответ upstream'а на CONNECT
 /// (его отдаём клиенту как есть; для plain HTTP ответ придёт через pipe).
-/// Поток к цели через прокси: TCP, TLS (HTTPS-прокси) — для остального кода одно и то же.
+/// Поток к цели через прокси: TCP, TLS (HTTPS-прокси) - для остального кода одно и то же.
 trait Duplex: AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + tokio::io::AsyncWrite + Unpin + Send> Duplex for T {}
 type BoxStream = Box<dyn Duplex>;
@@ -1395,8 +1399,8 @@ struct UpstreamConn {
     reply: Option<Vec<u8>>,
 }
 
-/// Одна попытка: TCP-коннект, отправка первого запроса с auth и — для
-/// CONNECT — ожидание ответа прокси. Ошибка = клиенту ещё ничего не ушло,
+/// Одна попытка: TCP-коннект, отправка первого запроса с auth и - для
+/// CONNECT - ожидание ответа прокси. Ошибка = клиенту ещё ничего не ушло,
 /// попытку можно безопасно повторить.
 async fn attempt_upstream(u: &Upstream, head: &[u8], is_connect: bool) -> Result<UpstreamConn, String> {
     let t0 = Instant::now();
@@ -1421,7 +1425,7 @@ async fn attempt_upstream(u: &Upstream, head: &[u8], is_connect: bool) -> Result
     }
 }
 
-/// HTTP(S)-прокси: первый запрос с Proxy-Authorization; для CONNECT — ждём ответ.
+/// HTTP(S)-прокси: первый запрос с Proxy-Authorization; для CONNECT - ждём ответ.
 async fn http_upstream(
     u: &Upstream,
     mut stream: BoxStream,
@@ -1434,7 +1438,7 @@ async fn http_upstream(
         .await
         .map_err(|e| format!("запись запроса: {e}"))?;
     if !is_connect {
-        // Ответ на обычный HTTP — это ответ origin'а, он может думать долго
+        // Ответ на обычный HTTP - это ответ origin'а, он может думать долго
         // (стрим LLM): таймаут на него вешать нельзя.
         return Ok(UpstreamConn { stream, reply: None });
     }
@@ -1478,9 +1482,9 @@ async fn tls_connect(
         .map_err(|e| format!("TLS к прокси: {e}"))
 }
 
-/// SOCKS5-прокси (RFC 1928/1929): CONNECT к цели по имени (резолвит прокси —
+/// SOCKS5-прокси (RFC 1928/1929): CONNECT к цели по имени (резолвит прокси -
 /// DNS не утекает). Клиенту на CONNECT отвечаем сами «200», хвост запроса
-/// (ранний ClientHello) уходит цели; обычный HTTP — в origin-form.
+/// (ранний ClientHello) уходит цели; обычный HTTP - в origin-form.
 async fn socks5_upstream(
     u: &Upstream,
     mut tcp: TcpStream,
@@ -1559,7 +1563,7 @@ async fn socks5_upstream(
 }
 
 /// «GET http://host/path HTTP/1.1» → «GET /path HTTP/1.1» без прокси-заголовков,
-/// с Connection: close (дальше слепой pipe) — для отправки прямо серверу.
+/// с Connection: close (дальше слепой pipe) - для отправки прямо серверу.
 fn origin_form(head: &[u8]) -> Vec<u8> {
     let clean = rewrite_head(head, None, true, true);
     let Some(line_end) = clean.windows(2).position(|w| w == b"\r\n") else {
@@ -1581,7 +1585,7 @@ fn origin_form(head: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Попытки к upstream'у №i с учётом статистики. `retry` — повторить один раз
+/// Попытки к upstream'у №i с учётом статистики. `retry` - повторить один раз
 /// тот же прокси (IP не меняется), прежде чем сдаться.
 async fn try_upstream(
     state: &State,
@@ -1598,14 +1602,14 @@ async fn try_upstream(
         match attempt_upstream(u, head, is_connect).await {
             Ok(conn) => {
                 match conn.reply.as_deref().map(status_code) {
-                    // 2xx (или plain HTTP) — прокси жив и пустил нас.
+                    // 2xx (или plain HTTP) - прокси жив и пустил нас.
                     None | Some(Some(200..=299)) => u.mark_ok(),
-                    // 5xx — прокси ЖИВ, но не достучался до сайта (видеосервер
+                    // 5xx - прокси ЖИВ, но не достучался до сайта (видеосервер
                     // YouTube, недоступный из страны прокси, и т.п.). Это беда
-                    // сайта, не прокси: здоровье прокси не трогаем — иначе
+                    // сайта, не прокси: здоровье прокси не трогаем - иначе
                     // пара недоступных адресов красила весь дашборд в красный
                     // при работающем Claude. Повторяем один раз; ответ отдаём
-                    // клиенту как есть — молча менять IP нельзя.
+                    // клиенту как есть - молча менять IP нельзя.
                     Some(Some(code @ 500..=599)) => {
                         if attempt + 1 < attempts {
                             last_err = format!("ответил {code}");
@@ -1614,13 +1618,13 @@ async fn try_upstream(
                         let host = parse_request(head).map(|r| r.host).unwrap_or_default();
                         state.log(&format!("прокси {}: {host} недоступен ({code})", u.masked));
                     }
-                    // Прокси отказал сам (407 — логин/пароль и т.п.) — это его беда.
+                    // Прокси отказал сам (407 - логин/пароль и т.п.) - это его беда.
                     Some(code) => {
                         u.mark_fail();
                         let code = code.map(|c| c.to_string()).unwrap_or_else(|| "?".into());
                         if code == "407" {
                             state.log_err(&format!(
-                                "прокси {} отклонил логин/пароль (407) — проверьте данные прокси",
+                                "прокси {} отклонил логин/пароль (407) - проверьте данные прокси",
                                 u.masked
                             ));
                         } else {
@@ -1639,22 +1643,22 @@ async fn try_upstream(
     u.mark_fail();
     state.log_err(&if pinned {
         format!(
-            "назначенный прокси {} не отвечает ({last_err}) — жду восстановления, IP не меняю",
+            "назначенный прокси {} не отвечает ({last_err}) - жду восстановления, IP не меняю",
             u.masked
         )
     } else {
-        format!("прокси {} не отвечает ({last_err}) — пробую следующий", u.masked)
+        format!("прокси {} не отвечает ({last_err}) - пробую следующий", u.masked)
     });
     None
 }
 
 /// Выбрать живой upstream и подключиться.
-/// `pinned` (назначенный домену прокси) — СТРОГО: пробуем только его, на
-/// другие НЕ уходим — выходной IP сервиса не должен прыгать. Зато ему (как и
+/// `pinned` (назначенный домену прокси) - СТРОГО: пробуем только его, на
+/// другие НЕ уходим - выходной IP сервиса не должен прыгать. Зато ему (как и
 /// единственному прокси в пуле) положен повтор: зависание одного TCP-коннекта
-/// к прокси — частый сбой, и второй коннект обычно проходит.
-/// Без назначения — passive failover: первый проход пропускает остывающих,
-/// второй шанс даётся ТОЛЬКО пропущенным (повторять только что упавших —
+/// к прокси - частый сбой, и второй коннект обычно проходит.
+/// Без назначения - passive failover: первый проход пропускает остывающих,
+/// второй шанс даётся ТОЛЬКО пропущенным (повторять только что упавших -
 /// удвоение таймаута для клиента без шанса на успех).
 async fn connect_upstream(
     state: &State,
@@ -1664,20 +1668,20 @@ async fn connect_upstream(
 ) -> Option<(UpstreamConn, usize)> {
     let n = state.upstreams.len();
     let (order, is_pin): (Vec<usize>, bool) = match pinned {
-        // Закреплённый с резервами — цепочка: сам, затем резервы по порядку.
+        // Закреплённый с резервами - цепочка: сам, затем резервы по порядку.
         Some(p) if p < n && !state.upstreams[p].backups.is_empty() => {
             return connect_chain(state, p, head, is_connect).await;
         }
         Some(p) if p < n => (vec![p], true),
-        Some(_) => return None, // битый индекс — сюда не должен дойти (Pin::Broken отсекается раньше)
+        Some(_) => return None, // битый индекс - сюда не должен дойти (Pin::Broken отсекается раньше)
         None => {
-            // «Авто»: сначала стабильные (меньше отказов подряд), среди них —
-            // быстрые (сглаженное время подключения; ещё не мерянные — после).
+            // «Авто»: сначала стабильные (меньше отказов подряд), среди них -
+            // быстрые (сглаженное время подключения; ещё не мерянные - после).
             let mut idx: Vec<usize> = (0..n).collect();
             idx.sort_by_key(|&i| {
                 let u = &state.upstreams[i];
                 let ms = u.ewma_ms.load(Ordering::Relaxed);
-                // Резервы — после всех обычных прокси: они для своих «хозяев».
+                // Резервы - после всех обычных прокси: они для своих «хозяев».
                 (u.is_backup, u.streak.load(Ordering::Relaxed).min(UNHEALTHY_STREAK), if ms == 0 { u64::MAX / 2 } else { ms }, i)
             });
             (idx, false)
@@ -1709,10 +1713,10 @@ async fn connect_upstream(
 }
 
 /// Закреплённый прокси с резервами: сам, затем резервы по порядку.
-/// Остывающих (недавно упавших) пропускаем — соединение сразу идёт через
+/// Остывающих (недавно упавших) пропускаем - соединение сразу идёт через
 /// живой резерв, без таймаута на мёртвом; фоновая проверка вернёт трафик,
-/// когда прокси оживёт. Остыли все — пробуем всех по порядку. Повтор (тот
-/// же IP) — только у самого прокси: случайное зависание одного коннекта не
+/// когда прокси оживёт. Остыли все - пробуем всех по порядку. Повтор (тот
+/// же IP) - только у самого прокси: случайное зависание одного коннекта не
 /// должно уводить сервис на другой IP.
 async fn connect_chain(
     state: &State,
@@ -1739,11 +1743,59 @@ async fn connect_chain(
     None
 }
 
+// ─── счётчик байт ────────────────────────────────────────────────
+
+/// Байты, прошедшие через туннели одного входа (в обе стороны), считаются в
+/// `State::bytes`. Растут по ходу передачи, а не в конце соединения: по ним
+/// программа видит долгий ответ в уже открытом соединении (/healthz, поле
+/// "bytes"). Счётчик у каждого входа свой: вход Telegram с его пингами не
+/// должен мешать судить о трафике Claude.
+
+/// Обёртка клиентского сокета: считает всё прочитанное и записанное.
+struct Counted<'a, S>(S, &'a AtomicU64);
+
+impl<S: AsyncRead + Unpin> AsyncRead for Counted<'_, S> {
+    fn poll_read(mut self: IoPin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<std::io::Result<()>> {
+        let before = buf.filled().len();
+        let r = IoPin::new(&mut self.0).poll_read(cx, buf);
+        if let Poll::Ready(Ok(())) = &r {
+            self.1.fetch_add((buf.filled().len() - before) as u64, Ordering::Relaxed);
+        }
+        r
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for Counted<'_, S> {
+    fn poll_write(mut self: IoPin<&mut Self>, cx: &mut Context<'_>, data: &[u8]) -> Poll<std::io::Result<usize>> {
+        let r = IoPin::new(&mut self.0).poll_write(cx, data);
+        if let Poll::Ready(Ok(n)) = &r {
+            self.1.fetch_add(*n as u64, Ordering::Relaxed);
+        }
+        r
+    }
+    fn poll_flush(mut self: IoPin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        IoPin::new(&mut self.0).poll_flush(cx)
+    }
+    fn poll_shutdown(mut self: IoPin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        IoPin::new(&mut self.0).poll_shutdown(cx)
+    }
+}
+
+/// Слепой туннель клиент <-> сервер с подсчётом байт.
+async fn tunnel<A, B>(client: &mut A, server: &mut B, bytes: &AtomicU64)
+where
+    A: AsyncRead + AsyncWrite + Unpin,
+    B: AsyncRead + AsyncWrite + Unpin + ?Sized,
+{
+    let mut counted = Counted(client, bytes);
+    let _ = tokio::io::copy_bidirectional(&mut counted, server).await;
+}
+
 // ─── /healthz ────────────────────────────────────────────────────
 
 fn healthz_json(state: &State) -> String {
     // serde_json вместо ручной сборки: в last_errors живой текст (имена хостов,
-    // ошибки ОС) — экранирование должно быть железным.
+    // ошибки ОС) - экранирование должно быть железным.
     let ups: Vec<serde_json::Value> = state
         .upstreams
         .iter()
@@ -1787,6 +1839,7 @@ fn healthz_json(state: &State) -> String {
         "strict_failover_allowed": false,
         "active": state.active.load(Ordering::Relaxed),
         "total": state.total.load(Ordering::Relaxed),
+        "bytes": state.bytes.load(Ordering::Relaxed),
         "via_upstream": state.via_upstream.load(Ordering::Relaxed),
         "via_direct": state.via_direct.load(Ordering::Relaxed),
         "errors": state.errors.load(Ordering::Relaxed),
@@ -1797,12 +1850,12 @@ fn healthz_json(state: &State) -> String {
 }
 
 /// PAC-файл для системной автонастройки прокси («Сайты во всех браузерах»):
-/// через вход сайтов — ровно то, что он сам отправил бы в прокси (AI-домены,
+/// через вход сайтов - ровно то, что он сам отправил бы в прокси (AI-домены,
 /// закреплённые сервисы, сайты пользователя), остальное браузер ведёт
 /// напрямую, мимо моста. Без «; DIRECT» в конце: упавший мост не должен
 /// пускать Claude и сайты из списка с настоящего IP.
-/// `all` — на время «Подсмотреть»: весь трафик через вход, иначе мост не
-/// увидел бы адресов, которых ещё нет в списке (решает он же: чужое — напрямую).
+/// `all` - на время «Подсмотреть»: весь трафик через вход, иначе мост не
+/// увидел бы адресов, которых ещё нет в списке (решает он же: чужое - напрямую).
 fn pac_js(state: &State, all: bool) -> String {
     let proxy = format!("PROXY {}", state.listen);
     let local = "if (isPlainHostName(host) || host === \"localhost\" || /^127\\./.test(host)) return \"DIRECT\";";
@@ -1822,7 +1875,7 @@ fn pac_js(state: &State, all: bool) -> String {
         .collect();
     domains.sort();
     domains.dedup();
-    // Сети сервисов (Telegram и Anthropic ходят и по IP) — только IPv4:
+    // Сети сервисов (Telegram и Anthropic ходят и по IP) - только IPv4:
     // isInNet с именем хоста резолвил бы DNS на каждом запросе.
     let nets: Vec<(String, String)> = SERVICE_NETS
         .iter()
@@ -1858,9 +1911,9 @@ async fn serve_local(client: &mut TcpStream, path: &str, state: &State) {
         return;
     }
     let (code, body) = if path == "/hosts" && state.seen.is_some() {
-        // «Подсмотреть» начинает запись с чистого листа: тогда first_ms —
+        // «Подсмотреть» начинает запись с чистого листа: тогда first_ms -
         // когда хост появился ПОСЛЕ старта записи, и по нему видно, какие
-        // адреса пришли вместе со страницей сайта, а какие — фон.
+        // адреса пришли вместе со страницей сайта, а какие - фон.
         if query.split('&').any(|kv| kv == "reset=1") {
             if let Some(Ok(mut map)) = state.seen.as_ref().map(|m| m.lock()) {
                 map.clear();
@@ -1912,7 +1965,7 @@ fn parse_request(head: &[u8]) -> Result<Parsed, String> {
     if method.eq_ignore_ascii_case("CONNECT") {
         let (host, port_s) = target.rsplit_once(':').ok_or("CONNECT without port")?;
         let port: u16 = port_s.parse().map_err(|_| "bad CONNECT port")?;
-        // IPv6-литерал приходит в скобках ("[::1]:443") — для connect() их надо снять.
+        // IPv6-литерал приходит в скобках ("[::1]:443") - для connect() их надо снять.
         let host = host.trim_start_matches('[').trim_end_matches(']');
         return Ok(Parsed {
             is_connect: true,
@@ -1932,7 +1985,7 @@ fn parse_request(head: &[u8]) -> Result<Parsed, String> {
     }
     // absolute-form: GET http://host:port/path
     let u = url::Url::parse(&target).map_err(|e| format!("bad absolute-URI: {e}"))?;
-    // host_str() для IPv6 отдаёт хост СО скобками — для connect() их надо снять.
+    // host_str() для IPv6 отдаёт хост СО скобками - для connect() их надо снять.
     let host = u
         .host_str()
         .ok_or("absolute-URI without host")?
@@ -1975,19 +2028,19 @@ async fn handle(mut client: TcpStream, state: Arc<State>, sem: Arc<Semaphore>) {
         }
     };
 
-    // Запрос к самому мосту (healthz/stats) — метрики НЕ трогаем: поллинг
+    // Запрос к самому мосту (healthz/stats) - метрики НЕ трогаем: поллинг
     // дашборда раз в 5с иначе рисует тысячи фантомных «соединений» за ночь.
     if let Some(path) = req.local_path {
         serve_local(&mut client, &path, &state).await;
         return;
     }
 
-    // Лимит — только на проксируемые соединения: /healthz отвечает даже при
+    // Лимит - только на проксируемые соединения: /healthz отвечает даже при
     // забитом пуле, и дашборд видит «мост жив, но перегружен», а не «мёртв».
     let _permit = match sem.try_acquire_owned() {
         Ok(p) => p,
         Err(_) => {
-            state.log_err(&format!("лимит {MAX_CONNECTIONS} соединений — отбиваю запрос, сервер жив"));
+            state.log_err(&format!("лимит {MAX_CONNECTIONS} соединений - отбиваю запрос, сервер жив"));
             let _ = client
                 .write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
                 .await;
@@ -1996,7 +2049,7 @@ async fn handle(mut client: TcpStream, state: Arc<State>, sem: Arc<Semaphore>) {
     };
     req.host = normalize_host(&req.host);
 
-    // Заблокированное (телеметрия) не уходит никуда — ни через прокси, ни напрямую.
+    // Заблокированное (телеметрия) не уходит никуда - ни через прокси, ни напрямую.
     if is_blocked(&req.host) {
         let _ = client
             .write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
@@ -2019,10 +2072,10 @@ async fn handle(mut client: TcpStream, state: Arc<State>, sem: Arc<Semaphore>) {
 
     // Назначение сильнее режима: закреплённый домен идёт через свой upstream,
     // даже если smart-режим отправил бы его напрямую (или домен попал в
-    // direct_domains) — иначе он утёк бы с реальным IP пользователя.
-    // Сайты пользователя — следом за назначениями (см. route_plan).
+    // direct_domains) - иначе он утёк бы с реальным IP пользователя.
+    // Сайты пользователя - следом за назначениями (см. route_plan).
     // Исключённая программа (антидетект-браузер и т.п.): Clod Helper её не
-    // трогает — напрямую, без прокси, закреплений и записи в «Подсмотреть».
+    // трогает - напрямую, без прокси, закреплений и записи в «Подсмотреть».
     let (pin, route, site) = if client_bypassed(&state, &client) {
         (Pin::None, Route::Direct, None)
     } else {
@@ -2038,7 +2091,7 @@ async fn handle(mut client: TcpStream, state: Arc<State>, sem: Arc<Semaphore>) {
         Pin::Broken => {
             state.errors.fetch_add(1, Ordering::Relaxed);
             state.log_err(&format!(
-                "назначение для {} указывает на прокси вне пула — отказываю (IP менять нельзя)",
+                "назначение для {} указывает на прокси вне пула - отказываю (IP менять нельзя)",
                 req.host
             ));
             let _ = client
@@ -2051,7 +2104,7 @@ async fn handle(mut client: TcpStream, state: Arc<State>, sem: Arc<Semaphore>) {
 
     // Устанавливаем исходящее соединение. Для Upstream запоминаем auth ИМЕННО
     // того прокси, к которому реально подключились (failover мог выбрать не первый).
-    // via_* считаем только по факту успешного коннекта — неудачи идут в errors.
+    // via_* считаем только по факту успешного коннекта - неудачи идут в errors.
     let (mut server, upstream_reply): (BoxStream, Option<Vec<u8>>) = match route {
         Route::Direct => {
             match timeout(
@@ -2108,7 +2161,7 @@ async fn handle(mut client: TcpStream, state: Arc<State>, sem: Arc<Semaphore>) {
     match route {
         Route::Direct => {
             if req.is_connect {
-                // Туннель установлен нами — отвечаем клиенту сами.
+                // Туннель установлен нами - отвечаем клиенту сами.
                 if client
                     .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
                     .await
@@ -2117,7 +2170,7 @@ async fn handle(mut client: TcpStream, state: Arc<State>, sem: Arc<Semaphore>) {
                     return;
                 }
                 // Клиент мог оптимистично прислать TLS ClientHello одним write
-                // с CONNECT — хвост за \r\n\r\n обязан уйти серверу, иначе
+                // с CONNECT - хвост за \r\n\r\n обязан уйти серверу, иначе
                 // TLS-handshake зависнет до таймаута.
                 if let Some(end) = find_head_end(&head) {
                     let tail = &head[end + 4..];
@@ -2135,7 +2188,7 @@ async fn handle(mut client: TcpStream, state: Arc<State>, sem: Arc<Semaphore>) {
         }
         Route::Upstream => {
             // Первый запрос с auth уже ушёл upstream'у (connect_upstream).
-            // Ответ на CONNECT прочитан там же — отдаём клиенту как есть,
+            // Ответ на CONNECT прочитан там же - отдаём клиенту как есть,
             // вместе с данными, пришедшими следом.
             if let Some(reply) = upstream_reply {
                 if client.write_all(&reply).await.is_err() {
@@ -2145,7 +2198,7 @@ async fn handle(mut client: TcpStream, state: Arc<State>, sem: Arc<Semaphore>) {
         }
     }
 
-    let _ = tokio::io::copy_bidirectional(&mut client, &mut server).await;
+    tunnel(&mut client, &mut server, &state.bytes).await;
 }
 
 // ─── SOCKS5 (Telegram) ───────────────────────────────────────────
@@ -2159,7 +2212,7 @@ const SOCKS_COMMAND_NOT_SUPPORTED: u8 = 0x07;
 const SOCKS_ADDRESS_NOT_SUPPORTED: u8 = 0x08;
 
 async fn socks_reply(client: &mut TcpStream, code: u8) -> std::io::Result<()> {
-    // BND.ADDR/PORT клиентам не нужны (Telegram их не читает) — нули.
+    // BND.ADDR/PORT клиентам не нужны (Telegram их не читает) - нули.
     client.write_all(&[5, code, 0, 1, 0, 0, 0, 0, 0, 0]).await
 }
 
@@ -2176,7 +2229,7 @@ async fn socks_handshake(client: &mut TcpStream) -> Result<(String, u16), String
     client.read_exact(&mut methods).await.map_err(|e| format!("methods: {e}"))?;
     if !methods.contains(&0) {
         let _ = client.write_all(&[5, 0xFF]).await;
-        return Err("клиент требует аутентификацию — вход без пароля".into());
+        return Err("клиент требует аутентификацию - вход без пароля".into());
     }
     client.write_all(&[5, 0]).await.map_err(|e| format!("greeting reply: {e}"))?;
 
@@ -2227,7 +2280,7 @@ async fn handle_socks(mut client: TcpStream, state: Arc<State>, sem: Arc<Semapho
         Err(_) => return,
     };
     let Ok(_permit) = sem.try_acquire_owned() else {
-        state.log_err(&format!("лимит {MAX_CONNECTIONS} соединений SOCKS — отбиваю запрос"));
+        state.log_err(&format!("лимит {MAX_CONNECTIONS} соединений SOCKS - отбиваю запрос"));
         let _ = socks_reply(&mut client, SOCKS_GENERAL_FAILURE).await;
         return;
     };
@@ -2242,7 +2295,7 @@ async fn handle_socks(mut client: TcpStream, state: Arc<State>, sem: Arc<Semapho
     }
     let Pin::Pinned(i) = request_upstream(&state, &host) else {
         state.errors.fetch_add(1, Ordering::Relaxed);
-        state.log_err("SOCKS: назначенный Telegram прокси вне пула — отказываю (IP менять нельзя)");
+        state.log_err("SOCKS: назначенный Telegram прокси вне пула - отказываю (IP менять нельзя)");
         let _ = socks_reply(&mut client, SOCKS_GENERAL_FAILURE).await;
         return;
     };
@@ -2268,7 +2321,7 @@ async fn handle_socks(mut client: TcpStream, state: Arc<State>, sem: Arc<Semapho
     if socks_reply(&mut client, SOCKS_OK).await.is_err() {
         return;
     }
-    // Байты, пришедшие от сервера вместе с «200» от прокси, — клиенту.
+    // Байты, пришедшие от сервера вместе с «200» от прокси, - клиенту.
     if let Some(end) = find_head_end(&reply) {
         let tail = &reply[end + 4..];
         if !tail.is_empty() && client.write_all(tail).await.is_err() {
@@ -2276,7 +2329,7 @@ async fn handle_socks(mut client: TcpStream, state: Arc<State>, sem: Arc<Semapho
         }
     }
     enable_keepalive(&client);
-    let _ = tokio::io::copy_bidirectional(&mut client, &mut server).await;
+    tunnel(&mut client, &mut server, &state.bytes).await;
 }
 
 async fn serve_socks_listener(listener: TcpListener, state: Arc<State>, sem: Arc<Semaphore>) {
@@ -2286,7 +2339,7 @@ async fn serve_socks_listener(listener: TcpListener, state: Arc<State>, sem: Arc
                 tokio::spawn(handle_socks(client, state.clone(), sem.clone()));
             }
             Err(e) => {
-                state.log_err(&format!("socks accept: {e} — продолжаю слушать"));
+                state.log_err(&format!("socks accept: {e} - продолжаю слушать"));
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
         }
@@ -2299,13 +2352,13 @@ struct Args {
     upstreams: Vec<String>,
     listen: String,
     strict_listen: String,
-    /// SOCKS5-вход для Telegram; None — выключен (`--socks-listen off`).
+    /// SOCKS5-вход для Telegram; None - выключен (`--socks-listen off`).
     socks_listen: Option<String>,
     /// Закреплённые входы: (адрес, индекс upstream'а).
     pin_listen: Vec<(String, usize)>,
     /// Файл сайтов пользователя (перечитывается на лету).
     sites: Option<String>,
-    /// Вход сайтов для браузера; None — выключен.
+    /// Вход сайтов для браузера; None - выключен.
     sites_listen: Option<String>,
     quiet: bool,
     rules: Option<String>,
@@ -2343,7 +2396,7 @@ fn parse_args_from(argv: Vec<String>) -> Result<Args, String> {
             }
             "--upstream-file" => {
                 // Файл (0600) вместо argv: аргументы процесса видит любой
-                // пользователь машины через ps, а с ними — пароль прокси.
+                // пользователь машины через ps, а с ними - пароль прокси.
                 i += 1;
                 let path = argv.get(i).ok_or("--upstream-file requires FILE")?;
                 a.upstreams.extend(read_upstream_file(path)?);
@@ -2353,7 +2406,7 @@ fn parse_args_from(argv: Vec<String>) -> Result<Args, String> {
                 a.listen = argv.get(i).ok_or("--listen requires HOST:PORT")?.clone();
             }
             "--pin-listen" => {
-                // 127.0.0.1:8892=1 — вход, где всё идёт только через upstream №1.
+                // 127.0.0.1:8892=1 - вход, где всё идёт только через upstream №1.
                 i += 1;
                 let v = argv.get(i).ok_or("--pin-listen requires IP:PORT=INDEX")?;
                 let (addr, idx) = v.rsplit_once('=').ok_or("--pin-listen requires IP:PORT=INDEX")?;
@@ -2408,7 +2461,7 @@ fn parse_args_from(argv: Vec<String>) -> Result<Args, String> {
     if !strict_addr.ip().is_loopback() || strict_addr.port() == 0 {
         return Err("--strict-listen must use a loopback IP and a non-zero port".into());
     }
-    // Вход без пароля — только на loopback, иначе это открытый прокси в сеть.
+    // Вход без пароля - только на loopback, иначе это открытый прокси в сеть.
     for (addr, _) in &a.pin_listen {
         let sa = addr
             .parse::<SocketAddr>()
@@ -2425,7 +2478,7 @@ fn parse_args_from(argv: Vec<String>) -> Result<Args, String> {
             return Err("--sites-listen must use a loopback IP and a non-zero port".into());
         }
     }
-    // SOCKS без пароля — только на loopback, иначе это открытый прокси в сеть.
+    // SOCKS без пароля - только на loopback, иначе это открытый прокси в сеть.
     if let Some(socks) = &a.socks_listen {
         let addr = socks
             .parse::<SocketAddr>()
@@ -2469,7 +2522,7 @@ fn raise_fd_limit() {
 
 /// Цикл самосупервизии: спавним себя-воркера (те же argv минус --supervise),
 /// ждём завершения, через 5с поднимаем заново. Замена VBS/wscript-циклу.
-/// Один супервизор на exe — эксклюзивный lock-файл (share_mode 0).
+/// Один супервизор на exe - эксклюзивный lock-файл (share_mode 0).
 fn run_supervisor() -> ! {
     let exe = match std::env::current_exe() {
         Ok(p) => p,
@@ -2489,7 +2542,7 @@ fn run_supervisor() -> ! {
         {
             Ok(f) => f,
             // Лок занят → супервизор уже работает (задача + watchdog GUI
-            // могли стартовать одновременно) — тихо уходим, дубли не плодим.
+            // могли стартовать одновременно) - тихо уходим, дубли не плодим.
             Err(_) => std::process::exit(0),
         }
     };
@@ -2499,7 +2552,7 @@ fn run_supervisor() -> ! {
         .collect();
     loop {
         match std::process::Command::new(&exe).args(&child_args).status() {
-            Ok(s) => eprintln!("supervisor: мост завершился ({s}) — перезапуск через 5с"),
+            Ok(s) => eprintln!("supervisor: мост завершился ({s}) - перезапуск через 5с"),
             Err(e) => eprintln!("supervisor: не удалось запустить воркер: {e}"),
         }
         std::thread::sleep(Duration::from_secs(5));
@@ -2550,7 +2603,7 @@ async fn main() {
     }
     apply_fallbacks(&mut upstreams, &load_fallbacks(args.rules.as_deref()));
     let sites = Arc::new(Sites::default());
-    // Битый файл сайтов при старте — не повод не стартовать (см. watch_sites).
+    // Битый файл сайтов при старте - не повод не стартовать (см. watch_sites).
     let sites_err = match args.sites.as_deref().map(load_sites) {
         Some(Ok(t)) => {
             sites.set(t);
@@ -2574,6 +2627,7 @@ async fn main() {
         seen: None,
         upstreams: Arc::new(upstreams),
         total: AtomicU64::new(0),
+        bytes: AtomicU64::new(0),
         active: AtomicU64::new(0),
         via_upstream: AtomicU64::new(0),
         via_direct: AtomicU64::new(0),
@@ -2595,6 +2649,7 @@ async fn main() {
         seen: None,
         upstreams: state.upstreams.clone(),
         total: AtomicU64::new(0),
+        bytes: AtomicU64::new(0),
         active: AtomicU64::new(0),
         via_upstream: AtomicU64::new(0),
         via_direct: AtomicU64::new(0),
@@ -2616,6 +2671,7 @@ async fn main() {
         seen: None,
         upstreams: state.upstreams.clone(),
         total: AtomicU64::new(0),
+        bytes: AtomicU64::new(0),
         active: AtomicU64::new(0),
         via_upstream: AtomicU64::new(0),
         via_direct: AtomicU64::new(0),
@@ -2650,7 +2706,7 @@ async fn main() {
 
     tokio::spawn(probe_loop(state.clone()));
 
-    // Семафор — как в python-мосте: лишние соединения не валят процесс.
+    // Семафор - как в python-мосте: лишние соединения не валят процесс.
     // Свой пул у каждого входа: браузерный трафик на общем входе не должен
     // выедать слоты Claude Desktop на строгом. Accept-цикл НИКОГДА не падает.
     let sem = Arc::new(Semaphore::new(MAX_CONNECTIONS));
@@ -2670,6 +2726,7 @@ async fn main() {
         seen: None,
         upstreams: state.upstreams.clone(),
             total: AtomicU64::new(0),
+        bytes: AtomicU64::new(0),
             active: AtomicU64::new(0),
             via_upstream: AtomicU64::new(0),
             via_direct: AtomicU64::new(0),
@@ -2682,12 +2739,12 @@ async fn main() {
                 pin_state.log(&format!("pinned listener on {addr} → upstream #{idx}"));
                 tokio::spawn(serve_listener(l, pin_state, Arc::new(Semaphore::new(MAX_CONNECTIONS))));
             }
-            Err(e) => state.log_err(&format!("cannot bind pinned listener {addr} — {e}")),
+            Err(e) => state.log_err(&format!("cannot bind pinned listener {addr} - {e}")),
         }
     }
 
     if let Some(e) = sites_err {
-        state.log_err(&format!("файл сайтов {} {e} — сайты пока не применены", args.sites.as_deref().unwrap_or("")));
+        state.log_err(&format!("файл сайтов {} {e} - сайты пока не применены", args.sites.as_deref().unwrap_or("")));
     }
     if let Some(path) = args.sites.clone() {
         tokio::spawn(watch_sites(path, sites.clone(), state.clone()));
@@ -2710,6 +2767,7 @@ async fn main() {
             seen: Some(Mutex::new(std::collections::HashMap::new())),
             upstreams: state.upstreams.clone(),
             total: AtomicU64::new(0),
+        bytes: AtomicU64::new(0),
             active: AtomicU64::new(0),
             via_upstream: AtomicU64::new(0),
             via_direct: AtomicU64::new(0),
@@ -2722,7 +2780,7 @@ async fn main() {
                 sites_state.log(&format!("sites listener on {addr} | сайтов: {}", sites.get().len()));
                 tokio::spawn(serve_listener(l, sites_state, Arc::new(Semaphore::new(MAX_CONNECTIONS))));
             }
-            Err(e) => state.log_err(&format!("cannot bind sites listener {addr} — {e}")),
+            Err(e) => state.log_err(&format!("cannot bind sites listener {addr} - {e}")),
         }
     }
 
@@ -2738,7 +2796,7 @@ async fn main() {
                 ));
             }
             Err(e) => state.log_err(&format!(
-                "cannot bind SOCKS listener {addr} — {e}; Telegram через мост недоступен"
+                "cannot bind SOCKS listener {addr} - {e}; Telegram через мост недоступен"
             )),
         }
     }
@@ -2769,10 +2827,10 @@ async fn bind_listeners(
 ) -> Result<(TcpListener, Result<TcpListener, String>), String> {
     let regular = TcpListener::bind(listen)
         .await
-        .map_err(|e| format!("cannot bind {listen} — {e}"))?;
+        .map_err(|e| format!("cannot bind {listen} - {e}"))?;
     let strict = TcpListener::bind(strict_listen)
         .await
-        .map_err(|e| format!("cannot bind strict listener {strict_listen} — {e}"));
+        .map_err(|e| format!("cannot bind strict listener {strict_listen} - {e}"));
     Ok((regular, strict))
 }
 
@@ -2781,7 +2839,7 @@ async fn serve_listener(listener: TcpListener, state: Arc<State>, sem: Arc<Semap
         let (client, _addr) = match listener.accept().await {
             Ok(x) => x,
             Err(e) => {
-                state.log_err(&format!("accept: {e} — продолжаю слушать"));
+                state.log_err(&format!("accept: {e} - продолжаю слушать"));
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 continue;
             }
@@ -2794,7 +2852,7 @@ async fn serve_listener(listener: TcpListener, state: Arc<State>, sem: Arc<Semap
 
 #[cfg(all(test, target_os = "macos"))]
 mod procmap_tests {
-    /// Владелец локального соединения находится по портам — это сам тест.
+    /// Владелец локального соединения находится по портам - это сам тест.
     #[test]
     fn finds_own_connection_owner() {
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -2804,7 +2862,7 @@ mod procmap_tests {
         let client = c.local_addr().unwrap().port();
         let me = std::env::current_exe().unwrap().to_string_lossy().replace('/', "\\").to_lowercase();
         assert_eq!(super::procmap::owner_path(client, ours).as_deref(), Some(me.as_str()));
-        // client_in пропускает свой процесс (мост сам себе не клиент) — поэтому
+        // client_in пропускает свой процесс (мост сам себе не клиент) - поэтому
         // проверяем отбор через чужую папку: ни один процесс там не держит сокет.
         assert!(!super::procmap::client_in(client, ours, &["\\nonexistent\\".into()]));
     }
@@ -2839,6 +2897,7 @@ mod tests {
             seen: None,
             upstreams: Arc::new(upstreams),
             total: AtomicU64::new(0),
+        bytes: AtomicU64::new(0),
             active: AtomicU64::new(0),
             via_upstream: AtomicU64::new(0),
             via_direct: AtomicU64::new(0),
@@ -2850,7 +2909,7 @@ mod tests {
 
     /// Сколько ждём ответа моста в тестах. С запасом: на Windows коннект к
     /// закрытому локальному порту («мёртвый» прокси) отклоняется не сразу, а
-    /// после повторов SYN — около 2 с на попытку, а попыток у моста две.
+    /// после повторов SYN - около 2 с на попытку, а попыток у моста две.
     const IO_WAIT: Duration = Duration::from_secs(15);
 
     async fn single_request(state: Arc<State>, request: String) -> Vec<u8> {
@@ -3113,7 +3172,7 @@ mod tests {
     #[tokio::test]
     async fn https_upstream_never_sends_plaintext_credentials() {
         // «Прокси», который не умеет TLS: мост начинает TLS-рукопожатие, оно
-        // проваливается — и логин/пароль так и не уходят открытым текстом.
+        // проваливается - и логин/пароль так и не уходят открытым текстом.
         let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = upstream.local_addr().unwrap();
         let seen = tokio::spawn(async move {
@@ -3313,7 +3372,7 @@ mod tests {
         }
     }
 
-    /// Фейковый прокси: на i-е соединение отвечает replies[i] (None — молчит,
+    /// Фейковый прокси: на i-е соединение отвечает replies[i] (None - молчит,
     /// держа сокет). Возвращает адрес и счётчик принятых соединений.
     async fn scripted_proxy(replies: Vec<Option<&'static [u8]>>) -> (SocketAddr, Arc<AtomicU64>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -3327,7 +3386,7 @@ mod tests {
                 counter.fetch_add(1, Ordering::Relaxed);
                 let _ = read_head_within(&mut stream, Duration::from_secs(3)).await;
                 match reply {
-                    // Ответил и закрыл — туннель завершится, клиент получит EOF.
+                    // Ответил и закрыл - туннель завершится, клиент получит EOF.
                     Some(r) => {
                         let _ = stream.write_all(r).await;
                     }
@@ -3341,7 +3400,7 @@ mod tests {
 
     #[tokio::test]
     async fn pinned_proxy_with_backup_fails_over_and_skips_the_dead_one_next_time() {
-        // №0 молчит (мёртв у провайдера), №1 — его резерв, отвечает.
+        // №0 молчит (мёртв у провайдера), №1 - его резерв, отвечает.
         let (dead, dead_accepted) = scripted_proxy(vec![None; 8]).await;
         let (alive, alive_accepted) = scripted_proxy(vec![
             Some(b"HTTP/1.1 200 Connection Established\r\n\r\none"),
@@ -3358,8 +3417,8 @@ mod tests {
         let req = "CONNECT claude.ai:443 HTTP/1.1\r\n\r\n";
         let first = String::from_utf8_lossy(&single_request(state.clone(), req.into()).await).to_string();
         assert!(first.starts_with("HTTP/1.1 200") && first.ends_with("one"), "{first}");
-        assert_eq!(dead_accepted.load(Ordering::Relaxed), 2, "свой прокси — с повтором (тот же IP)");
-        // Мёртвый остывает — следующее соединение сразу через резерв, без таймаута.
+        assert_eq!(dead_accepted.load(Ordering::Relaxed), 2, "свой прокси - с повтором (тот же IP)");
+        // Мёртвый остывает - следующее соединение сразу через резерв, без таймаута.
         let second = String::from_utf8_lossy(&single_request(state.clone(), req.into()).await).to_string();
         assert!(second.ends_with("two"), "{second}");
         assert_eq!(dead_accepted.load(Ordering::Relaxed), 2, "остывающий мёртвый не трогаем");
@@ -3391,7 +3450,7 @@ mod tests {
         apply_fallbacks(&mut ups, &fb);
         assert_eq!(ups[0].backups, vec![2], "дубли, ссылка на себя и чужой индекс отброшены");
         assert!(ups[2].backups.is_empty(), "резерв не может иметь своих резервов");
-        assert!(ups[1].backups.is_empty(), "№1 сам резерв (у №2) — своих резервов нет");
+        assert!(ups[1].backups.is_empty(), "№1 сам резерв (у №2) - своих резервов нет");
         assert!(ups[1].is_backup && ups[2].is_backup && ups[3].is_backup && !ups[0].is_backup);
     }
     #[tokio::test]
@@ -3430,7 +3489,7 @@ mod tests {
         assert_eq!(state.via_direct.load(Ordering::Relaxed), 0);
     }
 
-    /// Прокси ответил 502 — недоступен сайт, а не прокси: ответ клиенту как
+    /// Прокси ответил 502 - недоступен сайт, а не прокси: ответ клиенту как
     /// есть, но прокси остаётся здоровым, сколько бы таких сайтов ни было
     /// (видеосерверы YouTube красили дашборд в красный при живом Claude).
     #[tokio::test]
@@ -3447,7 +3506,7 @@ mod tests {
         }
         assert_eq!(accepted.load(Ordering::Relaxed), 8, "повтор 5xx один раз на запрос");
         let u = &state.upstreams[0];
-        assert!(u.healthy(), "сайт недоступен — прокси здоров");
+        assert!(u.healthy(), "сайт недоступен - прокси здоров");
         assert_eq!(u.fail.load(Ordering::Relaxed), 0);
         assert!(state.last_errors.lock().unwrap().is_empty(), "не «перебои» в дашборде");
     }
@@ -3463,7 +3522,7 @@ mod tests {
         let response = single_request(state.clone(), request.into()).await;
         assert!(response.starts_with(b"HTTP/1.1 502"));
         assert_eq!(accepted.load(Ordering::Relaxed), 2, "одна попытка + один повтор");
-        assert!(state.upstreams[0].healthy(), "один сбой — ещё не «нездоров»");
+        assert!(state.upstreams[0].healthy(), "один сбой - ещё не «нездоров»");
         for _ in 0..2 {
             single_request(state.clone(), request.into()).await;
         }
@@ -3502,7 +3561,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("clod-log-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("bridge.log");
-        assert!(!logfile::rotate_if_needed(&path, 10).unwrap(), "нет файла — не ошибка");
+        assert!(!logfile::rotate_if_needed(&path, 10).unwrap(), "нет файла - не ошибка");
         std::fs::write(&path, b"0123456789").unwrap();
         assert!(!logfile::rotate_if_needed(&path, 10).unwrap());
         std::fs::write(&path, b"0123456789ab").unwrap();
@@ -3511,7 +3570,7 @@ mod tests {
         let rotated = logfile::rotated_path(&path);
         assert_eq!(rotated.file_name().unwrap(), "bridge.log.1");
         assert_eq!(std::fs::read(&rotated).unwrap(), b"0123456789ab");
-        // Вторая ротация затирает старую копию — на диске максимум 2 файла.
+        // Вторая ротация затирает старую копию - на диске максимум 2 файла.
         std::fs::write(&path, b"new-content-xx").unwrap();
         assert!(logfile::rotate_if_needed(&path, 10).unwrap());
         assert_eq!(std::fs::read(&rotated).unwrap(), b"new-content-xx");
@@ -3537,7 +3596,7 @@ mod tests {
         client.write_all(&script).await.unwrap();
         let mut out = Vec::new();
         timeout(IO_WAIT, client.read_to_end(&mut out)).await.unwrap().unwrap();
-        // Туннель живёт, пока открыты обе стороны — закрываем клиентскую.
+        // Туннель живёт, пока открыты обе стороны - закрываем клиентскую.
         drop(client);
         timeout(IO_WAIT, server).await.unwrap().unwrap();
         out
@@ -3591,13 +3650,13 @@ mod tests {
     async fn socks_rejects_udp_auth_and_dead_upstream() {
         let (addr, _) = scripted_proxy(vec![]).await;
         let state = Arc::new(socks_state(vec![parse_upstream(&format!("http://{addr}")).unwrap()]));
-        // UDP ASSOCIATE (cmd 3) — не поддерживаем.
+        // UDP ASSOCIATE (cmd 3) - не поддерживаем.
         let out = socks_session(state.clone(), vec![5, 1, 0, 5, 3, 0, 1, 0, 0, 0, 0, 0, 0]).await;
         assert_eq!(&out[2..4], &[5, SOCKS_COMMAND_NOT_SUPPORTED]);
-        // Только логин/пароль (метод 2) — отказ 0xFF.
+        // Только логин/пароль (метод 2) - отказ 0xFF.
         let out = socks_session(state, vec![5, 1, 2]).await;
         assert_eq!(out, vec![5, 0xFF]);
-        // Мёртвый upstream — host unreachable, никаких прямых соединений.
+        // Мёртвый upstream - host unreachable, никаких прямых соединений.
         let dead = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let dead_addr = dead.local_addr().unwrap();
         drop(dead);
@@ -3649,7 +3708,7 @@ mod tests {
         assert!(response.starts_with(b"HTTP/1.1 200"));
         assert_eq!(accepted.load(Ordering::Relaxed), 1);
         assert_no_connection(&other).await;
-        // Индекс за пределами пула — отказ, а не другой прокси.
+        // Индекс за пределами пула - отказ, а не другой прокси.
         let st = test_state(RoutingPolicy::Fixed(5), vec![parse_upstream("http://127.0.0.1:1").unwrap()]);
         let response = single_request(Arc::new(st), "CONNECT 2ip.io:443 HTTP/1.1\r\n\r\n".into()).await;
         assert!(response.starts_with(b"HTTP/1.1 502"));
@@ -3723,7 +3782,7 @@ mod tests {
             r#"{"sites":[{"domains":["yt.invalid"],"proxy":1},{"domains":["gone.invalid"],"proxy":7}]}"#,
         );
         assert!(route_plan(&st, "a.yt.invalid").0 == Pin::Pinned(1));
-        assert!(route_plan(&st, "gone.invalid").0 == Pin::Broken, "прокси вне пула — отказ, не failover");
+        assert!(route_plan(&st, "gone.invalid").0 == Pin::Broken, "прокси вне пула - отказ, не failover");
     }
 
     #[test]
@@ -3747,7 +3806,7 @@ mod tests {
     fn sites_table_hot_reload() {
         let path = std::env::temp_dir().join(format!("clod-bridge-sites-test-{}.json", std::process::id()));
         let p = path.to_str().unwrap().to_string();
-        assert!(load_sites(&p).unwrap().is_empty(), "нет файла — пустой список");
+        assert!(load_sites(&p).unwrap().is_empty(), "нет файла - пустой список");
         std::fs::write(&path, r#"{"sites":[{"domains":["a.invalid"]}]}"#).unwrap();
         let st = test_state(RoutingPolicy::Rules, Vec::new());
         st.sites.set(load_sites(&p).unwrap());
@@ -3776,7 +3835,7 @@ mod tests {
         let len = st.seen.as_ref().unwrap().lock().unwrap().len();
         assert_eq!(len, SEEN_CAP);
         let v: serde_json::Value = serde_json::from_str(&hosts_json(&st, u64::MAX)).unwrap();
-        assert!(v["hosts"].as_array().unwrap().is_empty(), "since в будущем — пусто");
+        assert!(v["hosts"].as_array().unwrap().is_empty(), "since в будущем - пусто");
         assert!(v["now_ms"].is_u64());
     }
 
@@ -3805,7 +3864,7 @@ mod tests {
         assert!(is_blocked("blocked-telemetry.invalid"));
         assert!(is_blocked("o1.ingest.blocked-telemetry.invalid"), "поддомены тоже");
         assert!(!is_blocked("notblocked-telemetry.invalid"));
-        // PAC ведёт заблокированное в мост — иначе браузер пошёл бы напрямую.
+        // PAC ведёт заблокированное в мост - иначе браузер пошёл бы напрямую.
         let pac = pac_js(&sites_state(RoutingPolicy::Sites, r#"{"sites":[]}"#), false);
         assert!(pac.contains("\"blocked-telemetry.invalid\""), "{pac}");
         let st = Arc::new(test_state(RoutingPolicy::Rules, Vec::new()));
@@ -3817,7 +3876,7 @@ mod tests {
             assert!(String::from_utf8_lossy(&out).starts_with("HTTP/1.1 403"), "{}", String::from_utf8_lossy(&out));
         }
         assert_eq!(st.total.load(Ordering::Relaxed), 0, "в статистику не идёт");
-        // Битый файл — блок-лист прежний; без поля — пусто (тумблер выключен).
+        // Битый файл - блок-лист прежний; без поля - пусто (тумблер выключен).
         std::fs::write(&rules, "{oops").unwrap();
         assert!(load_blocked(&p).is_none());
         std::fs::write(&rules, r#"{"mode":"smart"}"#).unwrap();
@@ -3906,5 +3965,27 @@ mod tests {
         .unwrap();
         assert_eq!((a.sites.as_deref(), a.sites_listen.as_deref()), (Some("s.json"), Some("127.0.0.1:8887")));
         assert!(parse_args_from(["--upstream", "http://127.0.0.1:1", "--sites-listen", "0.0.0.0:8887"].iter().map(|s| s.to_string()).collect()).is_err());
+    }
+
+    #[tokio::test]
+    async fn tunnel_counts_bytes_in_both_directions_while_open() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (mut client_app, mut client_side) = tokio::io::duplex(1024);
+        let (mut server_app, mut server_side) = tokio::io::duplex(1024);
+        let bytes = std::sync::Arc::new(AtomicU64::new(0));
+        let counter = bytes.clone();
+        let task = tokio::spawn(async move { tunnel(&mut client_side, &mut server_side, &counter).await });
+        client_app.write_all(b"hello").await.unwrap();
+        let mut buf = [0u8; 5];
+        server_app.read_exact(&mut buf).await.unwrap();
+        server_app.write_all(b"world!!").await.unwrap();
+        let mut buf2 = [0u8; 7];
+        client_app.read_exact(&mut buf2).await.unwrap();
+        // Соединение ещё открыто, а счётчик уже вырос.
+        assert_eq!(bytes.load(Ordering::Relaxed), 12);
+        assert!(!task.is_finished());
+        drop(client_app);
+        drop(server_app);
+        let _ = task.await;
     }
 }

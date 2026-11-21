@@ -8,9 +8,9 @@ import { playChime } from "../lib/api";
 import { whatsNewItems } from "../lib/updateBus";
 
 /*
-  «Что нового» — первый запуск после обновления. Логотип с вспышкой искр,
+  «Что нового» - первый запуск после обновления. Логотип с вспышкой искр,
   версия и главные изменения из src/whats-new.json (тот же файл CI кладёт
-  в описание релиза). Звук — тот же «динь», что у уведомления.
+  в описание релиза). Звук - тот же «динь», что у уведомления.
 */
 export function WhatsNewModal({ version, onClose }: { version: string | null; onClose: () => void }) {
   const items = version ? whatsNewItems(version) : [];
@@ -101,7 +101,7 @@ export function WhatsNewModal({ version, onClose }: { version: string | null; on
   );
 }
 
-/** Логотип и разлетающиеся от него искры — один раз при открытии. */
+/** Логотип и разлетающиеся от него искры - один раз при открытии. */
 function Burst() {
   const sparks = useMemo(
     () =>

@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import { Loader2 } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
 import { Toggle } from "../components/Toggle";
+import { PrivacyCard } from "../components/PrivacyCard";
 import { UpdateBanner } from "../components/UpdateBanner";
 import { useStatus } from "../lib/status";
 import { autostartGet, autostartSet } from "../lib/api";
@@ -12,7 +13,7 @@ import { cn } from "../lib/cn";
 
 /*
   Настройки: автозапуск GUI и версии. Прокси-пул и назначения живут в
-  своём разделе «Прокси» (сайдбар) — здесь только системное.
+  своём разделе «Прокси» (сайдбар) - здесь только системное.
 */
 export function Settings() {
   const { health, task } = useStatus();
@@ -83,6 +84,7 @@ export function Settings() {
               onChange={handleAutostartToggle}
               disabled={autostartBusy}
               label="Автозапуск"
+              size="sm"
             />
           )}
         </div>
@@ -96,7 +98,11 @@ export function Settings() {
         )}
       </motion.section>
 
-      {/* ── Обновления ── */}
+      {/* ── Обновления и отчёты ── */}
+      <motion.div variants={fadeInUp}>
+        <PrivacyCard />
+      </motion.div>
+
       <motion.section variants={fadeInUp} className="mt-4">
         <UpdateBanner />
       </motion.section>
@@ -106,19 +112,19 @@ export function Settings() {
         <div className="flex items-center justify-between px-4 py-3">
           <span className="text-[13px] text-vb-silver-dim">Clod Helper</span>
           <span className="font-mono text-[12px] text-vb-silver">
-            {appVersion ? `v${appVersion}` : "—"}
+            {appVersion ? `v${appVersion}` : "-"}
           </span>
         </div>
         <div className="flex items-center justify-between px-4 py-3">
           <span className="text-[13px] text-vb-silver-dim">Мост</span>
           <span className="font-mono text-[12px] text-vb-silver">
-            {health ? `v${health.version}` : "—"}
+            {health ? `v${health.version}` : "-"}
           </span>
         </div>
         <div className="flex items-center justify-between px-4 py-3">
           <span className="text-[13px] text-vb-silver-dim">Мост запускается сам</span>
           <span className={cn("text-[12px]", task?.registered ? "text-vb-emerald" : "text-vb-warn")}>
-            {task === null ? "—" : task.registered ? "да" : "нет"}
+            {task === null ? "-" : task.registered ? "да" : "нет"}
           </span>
         </div>
       </motion.section>

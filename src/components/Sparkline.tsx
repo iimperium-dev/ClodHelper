@@ -10,7 +10,7 @@ interface Props {
 
 /*
   Мини-график трафика (соединений за тик). SVG-area, изумруд с прозрачной
-  заливкой. Сглаживания нет — честные данные, линии по точкам.
+  заливкой. Сглаживания нет - честные данные, линии по точкам.
 */
 export function Sparkline({ data, width = 160, height = 32, className }: Props) {
   const gradId = useId();

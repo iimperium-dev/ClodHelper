@@ -12,19 +12,38 @@ use serde::{Deserialize, Serialize};
 
 use crate::apps::AppProfile;
 
-/// Все мутации настроек — под одной блокировкой: tauri-команды конкурентны,
+/// Все мутации настроек - под одной блокировкой: tauri-команды конкурентны,
 /// а load-modify-save без неё теряет чужие изменения (второй писатель молча
 /// откатывает, например, только что сохранённый пул прокси).
 static SETTINGS_LOCK: Mutex<()> = Mutex::new(());
 
-fn with_settings<F>(f: F) -> Result<Settings, String>
+/// Прочитать-изменить-записать под общей блокировкой. Если файл настроек есть,
+/// но не читается или не разбирается, запись отменяется: иначе настройки по
+/// умолчанию затёрли бы прокси человека. Нет файла - не ошибка.
+pub fn with_settings<F>(f: F) -> Result<Settings, String>
+where
+    F: FnOnce(&mut Settings) -> Result<(), String>,
+{
+    with_settings_mode(false, f)
+}
+
+/// Для фоновых записей без действия человека (телеметрия, рассылки): при
+/// любой ошибке чтения файла запись отменяется, битый файл не трогаем.
+pub fn with_settings_strict<F>(f: F) -> Result<Settings, String>
+where
+    F: FnOnce(&mut Settings) -> Result<(), String>,
+{
+    with_settings_mode(true, f)
+}
+
+fn with_settings_mode<F>(strict: bool, f: F) -> Result<Settings, String>
 where
     F: FnOnce(&mut Settings) -> Result<(), String>,
 {
     let _g = SETTINGS_LOCK
         .lock()
         .map_err(|_| "settings lock poisoned".to_string())?;
-    let mut s = load();
+    let mut s = if strict { load_checked()? } else { load_recovering(&settings_path()?)? };
     f(&mut s)?;
     save(&s)?;
     Ok(s)
@@ -36,7 +55,7 @@ const APP_DIR: &str = "Clod Helper";
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Settings {
     /// URL купленного upstream-прокси `http://login:pass@ip:port`.
-    /// Хранится в открытом виде — это локальный файл пользователя.
+    /// Хранится в открытом виде - это локальный файл пользователя.
     #[serde(default)]
     pub proxy_url: Option<String>,
     /// Запускать Dashboard в трее при логине Windows.
@@ -51,24 +70,24 @@ pub struct Settings {
     #[serde(default)]
     pub killswitch_enabled: bool,
     /// Окно «Добавить прокси» в Telegram уже показывали (мастер, кнопка или
-    /// автоподсказка) — сами больше не открываем, решает пользователь.
+    /// автоподсказка) - сами больше не открываем, решает пользователь.
     #[serde(default)]
     pub telegram_prompted: bool,
     /// Раскладка «Приложений»: вид и папки с порядком (UI хранит как есть,
-    /// бэкенд не интерпретирует). None — умная раскладка по умолчанию.
+    /// бэкенд не интерпретирует). None - умная раскладка по умолчанию.
     #[serde(default)]
     pub apps_layout: Option<serde_json::Value>,
     /// Режим маршрутизации моста: "all" (всё через upstream, как раньше) |
     /// "smart" (через upstream только AI-домены, остальное напрямую).
-    /// None = "all" — консервативный дефолт для старых установок.
+    /// None = "all" - консервативный дефолт для старых установок.
     #[serde(default)]
     pub route_mode: Option<String>,
-    /// Прокси-пул (до 5). [0] — основной; proxy_url держится с ним в синхроне
+    /// Прокси-пул (до 5). [0] - основной; proxy_url держится с ним в синхроне
     /// для обратной совместимости (vbs/старый код читают proxy_url).
     /// Пустой список = легаси-установка, пул из одного proxy_url.
     #[serde(default)]
     pub proxies: Vec<String>,
-    /// Назначения «сервис → индекс прокси в пуле»: ключи — группы из
+    /// Назначения «сервис → индекс прокси в пуле»: ключи - группы из
     /// tasks::SERVICE_GROUPS ("anthropic", "openai", …). Отсутствие ключа =
     /// авто (основной + failover).
     #[serde(default)]
@@ -77,15 +96,15 @@ pub struct Settings {
     #[serde(default)]
     pub proxy_labels: std::collections::HashMap<String, String>,
     /// Не выпускать телеметрию Claude (отчёты об ошибках в Sentry, Datadog):
-    /// в них имя компьютера и железо. None — включено (по умолчанию).
+    /// в них имя компьютера и железо. None - включено (по умолчанию).
     #[serde(default)]
     pub block_claude_telemetry: Option<bool>,
     /// Не пускать рекламу и счётчики Google (doubleclick и т.п.) в браузерах
-    /// с «Сайтами». None — включено (по умолчанию).
+    /// с «Сайтами». None - включено (по умолчанию).
     #[serde(default)]
     pub block_google_ads: Option<bool>,
     /// Резервы прокси: URL прокси пула → его резервы по порядку (до 5).
-    /// Ключ — URL, а не индекс: при перестановке пула резервы едут вместе
+    /// Ключ - URL, а не индекс: при перестановке пула резервы едут вместе
     /// со своим прокси.
     #[serde(default)]
     pub proxy_backups: std::collections::HashMap<String, Vec<String>>,
@@ -94,13 +113,58 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub update_notified: Option<String>,
     /// Последняя запущенная версия приложения: запуск более новой = окно
-    /// «Что нового». None — сборки до этого поля (или первый запуск).
+    /// «Что нового». None - сборки до этого поля (или первый запуск).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_version_seen: Option<String>,
-    /// Рассылки разработчика (последний скачанный notices.json) — колокольчик
+    /// Случайный номер установки 0-99 для поэтапной раскатки обновлений
+    /// (auto_update.rs). Создаётся один раз и никуда не отправляется.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_rollout: Option<u8>,
+    /// Последний принятый `seq` подписанного манифеста: меньший отвергается.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_seq: Option<u64>,
+    /// С какого времени тихая установка ждёт эту версию (для запасного пути:
+    /// ждём больше 48 часов - обычное уведомление с кнопкой).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_seen: Option<UpdateSeen>,
+    /// Отметка «запустил установку версии X»: на следующем запуске по ней
+    /// видно, получилось ли.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_attempt: Option<UpdateAttempt>,
+    /// Неудачные установки подряд (для одной версии).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_failures: Option<UpdateFailures>,
+    /// Последнее событие установки для колокольчика («Обновлено до X» или
+    /// «Обновление до X не установилось»).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_notice: Option<UpdateNotice>,
+    /// Автообновление: новые версии ставятся сами. None - человека ещё не
+    /// спрашивали (установка до этой функции): после «Что нового» ему
+    /// один раз предлагают включить. Мастер первого запуска пишет явно.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_update: Option<bool>,
+    /// Отчёты о сбоях (без личных данных). None - включено: так и для
+    /// старых установок, они включаются с выпуском этой функции.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crash_reports: Option<bool>,
+    /// Анонимная статистика запусков (раз в сутки). None - включено.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_stats: Option<bool>,
+    /// Человек увидел переключатели или строку про отчёты (мастер, окно
+    /// предложения или плашка). Пока false, ничего автоматически не уходит.
+    #[serde(default)]
+    pub privacy_notice_seen: bool,
+    /// Что уже отправлено в статистику (см. telemetry.rs).
+    #[serde(default)]
+    pub telemetry: TelemetryState,
+    /// Рассылки разработчика (последний скачанный notices.json) - колокольчик
     /// виден и без сети.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notices_cache: Vec<crate::notices::Notice>,
+    /// Рассылки с сервера статистики: свой кэш, чтобы падение одного
+    /// источника не стирало записи другого.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notices_cache_server: Vec<crate::notices::Notice>,
     /// Прочитанные уведомления (id рассылок и «update-X.Y.Z»).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notices_read: Vec<String>,
@@ -108,7 +172,7 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notices_toasted: Vec<String>,
     /// «Сайты» только в выбранных браузерах (PAC их политикой), а не во всех
-    /// (системная автонастройка). Какие выбраны — видно по их политикам.
+    /// (системная автонастройка). Какие выбраны - видно по их политикам.
     #[serde(default)]
     pub sites_scope_selected: bool,
     /// Программы, которые «Сайты» не трогают (антидетект-браузеры и т.п.).
@@ -117,7 +181,7 @@ pub struct Settings {
     /// «Сайты во всех браузерах»: системная автонастройка прокси (PAC моста).
     #[serde(default)]
     pub system_pac: bool,
-    /// Системные настройки прокси до включения — вернуть при выключении.
+    /// Системные настройки прокси до включения - вернуть при выключении.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_pac_saved: Option<crate::system_pac::ProxyConf>,
     /// Чужие прокси-переменные (корпоративный прокси, свой VPN-тул), которые
@@ -131,13 +195,143 @@ pub struct Settings {
     pub sites: Vec<SiteEntry>,
 }
 
+/// Запущенная установка обновления: версия, время (unix, с) и способ
+/// ("auto" | "manual").
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UpdateAttempt {
+    pub version: String,
+    pub at: u64,
+    pub how: String,
+}
+
+/// Сколько установок версии `version` подряд не завершилось и когда была
+/// последняя неудача (unix, с).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UpdateFailures {
+    pub version: String,
+    pub count: u32,
+    pub last_at: u64,
+}
+
+/// Когда тихая установка впервые взялась за версию.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UpdateSeen {
+    pub version: String,
+    pub at: u64,
+}
+
+/// Итог установки для колокольчика: `ok` - обновились (тихо), иначе - не
+/// получилось.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UpdateNotice {
+    pub ok: bool,
+    pub version: String,
+    pub at: u64,
+}
+
+/// Состояние пинга статистики: что уже отправлено. Флаги пишутся только
+/// после ответа сервера 2xx.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TelemetryState {
+    pub first_sent: bool,
+    /// "YYYY-MM-DD" (UTC) последней отправки.
+    pub last_day: Option<String>,
+    /// День последнего пинга с w=1 ("YYYY-MM-DD"). Старые значения других
+    /// форматов при разборе отбрасываются.
+    pub last_w_day: Option<String>,
+    /// День последнего пинга с m=1.
+    pub last_m_day: Option<String>,
+    /// ISO-неделя первой отметки (ставится один раз).
+    pub install_week: Option<String>,
+    /// День, когда прокси реально работал.
+    pub used_day: Option<String>,
+    /// "auto" | "manual": как запущено обновление (пишет установщик).
+    pub pending_how: Option<String>,
+    /// Версия, для которой "how" уже отправлен.
+    pub how_version: Option<String>,
+    /// Обновились со старой версии (до статистики): не новая установка,
+    /// первый пинг идёт без first/iw/how.
+    pub legacy: bool,
+}
+
+pub fn crash_reports_on(s: &Settings) -> bool {
+    s.crash_reports != Some(false)
+}
+
+pub fn usage_stats_on(s: &Settings) -> bool {
+    s.usage_stats != Some(false)
+}
+
+pub fn set_crash_reports(on: bool) -> Result<Settings, String> {
+    with_settings(|s| {
+        s.crash_reports = Some(on);
+        Ok(())
+    })
+}
+
+pub fn set_usage_stats(on: bool) -> Result<Settings, String> {
+    with_settings(|s| {
+        s.usage_stats = Some(on);
+        Ok(())
+    })
+}
+
+/// Отметить, что человек увидел переключатели. Строгая запись: при битом
+/// файле флаг не ставится, и ничего не уходит.
+pub fn set_privacy_notice_seen() -> Result<Settings, String> {
+    with_settings_strict(|s| {
+        s.privacy_notice_seen = true;
+        Ok(())
+    })
+}
+
+/// Изменить состояние пинга под общей блокировкой.
+pub fn update_telemetry<F: FnOnce(&mut TelemetryState)>(f: F) -> Result<Settings, String> {
+    with_settings_strict(|s| {
+        f(&mut s.telemetry);
+        Ok(())
+    })
+}
+
+/// Переключатели приватности для интерфейса.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct PrivacyState {
+    pub auto_update: bool,
+    pub crash_reports: bool,
+    pub usage_stats: bool,
+    /// Предложить автообновление (как в AutoUpdateState).
+    pub offer: bool,
+    /// Переключатели или строка про отчёты уже были показаны.
+    pub notice_seen: bool,
+    /// Установка с версии до статистики: для неё плашка говорит «С этой версии».
+    pub legacy: bool,
+}
+
+pub fn privacy_state(s: &Settings) -> PrivacyState {
+    let a = auto_update_state(s);
+    PrivacyState {
+        auto_update: a.enabled,
+        crash_reports: crash_reports_on(s),
+        usage_stats: usage_stats_on(s),
+        offer: a.offer,
+        notice_seen: s.privacy_notice_seen,
+        legacy: s.telemetry.legacy,
+    }
+}
+
+/// Папка данных программы (рядом с settings.json).
+pub fn data_dir() -> Option<PathBuf> {
+    settings_path().ok()?.parent().map(|p| p.to_path_buf())
+}
+
 /// Сайт пользователя: имя, его домены (с поддоменами) и прокси.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct SiteEntry {
     pub id: String,
     pub name: String,
     pub domains: Vec<String>,
-    /// Индекс прокси в пуле; None — «Авто» (основной + failover).
+    /// Индекс прокси в пуле; None - «Авто» (основной + failover).
     #[serde(default)]
     pub proxy: Option<usize>,
     #[serde(default = "default_true")]
@@ -148,7 +342,7 @@ fn default_true() -> bool {
     true
 }
 
-/// Полный пул прокси: proxies, а для легаси-установок — единственный proxy_url.
+/// Полный пул прокси: proxies, а для легаси-установок - единственный proxy_url.
 pub fn effective_proxies(s: &Settings) -> Vec<String> {
     if !s.proxies.is_empty() {
         s.proxies.clone()
@@ -160,9 +354,9 @@ pub fn effective_proxies(s: &Settings) -> Vec<String> {
 /// Сколько резервов можно привязать к одному прокси.
 pub const MAX_BACKUPS: usize = 5;
 
-/// Прокси для моста: пул (индексы 0..n — как в назначениях и закреплённых
-/// входах), затем резервы всех прокси по порядку пула. Резервы — в конце,
-/// чтобы индексы пула не сдвигались. Один и тот же URL — один раз.
+/// Прокси для моста: пул (индексы 0..n - как в назначениях и закреплённых
+/// входах), затем резервы всех прокси по порядку пула. Резервы - в конце,
+/// чтобы индексы пула не сдвигались. Один и тот же URL - один раз.
 pub fn bridge_upstreams(s: &Settings) -> Vec<String> {
     let mut list = effective_proxies(s);
     let pool = list.clone();
@@ -196,7 +390,7 @@ pub fn bridge_fallbacks(s: &Settings) -> std::collections::BTreeMap<String, Vec<
         .collect()
 }
 
-/// Задать резервы прокси пула (пустой список — убрать все).
+/// Задать резервы прокси пула (пустой список - убрать все).
 pub fn set_proxy_backups(parent: String, backups: Vec<String>) -> Result<Settings, String> {
     if backups.len() > MAX_BACKUPS {
         return Err(format!("У прокси может быть до {MAX_BACKUPS} резервов"));
@@ -209,7 +403,7 @@ pub fn set_proxy_backups(parent: String, backups: Vec<String>) -> Result<Setting
         let mut clean: Vec<String> = Vec::new();
         for b in backups {
             if b == parent || pool.contains(&b) {
-                return Err("Этот прокси уже есть в списке — резервом его сделать нельзя".into());
+                return Err("Этот прокси уже есть в списке - резервом его сделать нельзя".into());
             }
             if !clean.contains(&b) {
                 clean.push(b);
@@ -225,7 +419,7 @@ pub fn set_proxy_backups(parent: String, backups: Vec<String>) -> Result<Setting
     })
 }
 
-/// Имена — только у прокси пула и их резервов.
+/// Имена - только у прокси пула и их резервов.
 fn retain_labels(s: &mut Settings) {
     let keep = bridge_upstreams(s);
     s.proxy_labels.retain(|u, _| keep.contains(u));
@@ -238,14 +432,48 @@ fn settings_path() -> Result<PathBuf, String> {
 }
 
 pub fn load() -> Settings {
-    let path = match settings_path() {
-        Ok(p) => p,
-        Err(_) => return Settings::default(),
+    load_checked().unwrap_or_default()
+}
+
+/// Прочитать настройки, не скрывая сбоев. Нет файла - настройки по умолчанию
+/// (первый запуск); файл есть, но не читается или не разбирается - ошибка.
+pub fn load_checked() -> Result<Settings, String> {
+    let path = settings_path()?;
+    parse_checked(fs::read_to_string(&path), &path)
+}
+
+/// Для записи по действию человека: файл не разобрался - переименовать в
+/// settings.json.bad-<время> (резервная копия), предупредить и продолжить с
+/// умолчаний. Ошибка ввода-вывода (не читается) - запись отклоняется.
+fn load_recovering(path: &std::path::Path) -> Result<Settings, String> {
+    let text = match fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Settings::default()),
+        Err(e) => return Err(format!("Не смог прочитать {}: {e}", path.display())),
     };
-    let Ok(text) = fs::read_to_string(&path) else {
-        return Settings::default();
+    match serde_json::from_str(&text) {
+        Ok(s) => Ok(s),
+        Err(e) => {
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let bad = path.with_extension(format!("json.bad-{ts}"));
+            fs::rename(path, &bad)
+                .map_err(|re| format!("Настройки повреждены ({e}), а сохранить копию не вышло: {re}"))?;
+            tracing::warn!("settings.json не разобрался ({e}): сохранён как {}, продолжаю с умолчаний", bad.display());
+            Ok(Settings::default())
+        }
+    }
+}
+
+fn parse_checked(read: std::io::Result<String>, path: &std::path::Path) -> Result<Settings, String> {
+    let text = match read {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Settings::default()),
+        Err(e) => return Err(format!("Не смог прочитать {}: {e}", path.display())),
     };
-    serde_json::from_str(&text).unwrap_or_default()
+    serde_json::from_str(&text).map_err(|e| format!("Не смог разобрать {}: {e}", path.display()))
 }
 
 pub fn save(settings: &Settings) -> Result<(), String> {
@@ -280,7 +508,7 @@ fn remap_assignments(s: &mut Settings, old_pool: &[String], new_pool: &[String])
             Some((svc, new_idx))
         })
         .collect();
-    // Прокси сайтов — так же по URL; исчезнувший → «Авто».
+    // Прокси сайтов - так же по URL; исчезнувший → «Авто».
     for site in &mut s.sites {
         site.proxy = site
             .proxy
@@ -309,7 +537,7 @@ pub fn set_proxy_url(url: String) -> Result<Settings, String> {
         let old_pool = effective_proxies(s);
         let mut new_pool = old_pool.clone();
         if let Some(pos) = new_pool.iter().position(|u| *u == url) {
-            // URL уже в пуле — «сделать основным» перестановкой, не дублируя.
+            // URL уже в пуле - «сделать основным» перестановкой, не дублируя.
             new_pool.remove(pos);
             new_pool.insert(0, url.clone());
         } else if new_pool.is_empty() {
@@ -326,10 +554,10 @@ pub fn set_proxy_url(url: String) -> Result<Settings, String> {
     })
 }
 
-/// Заменить пул целиком (1..=5, [0] — основной). Индексы назначений
+/// Заменить пул целиком (1..=5, [0] - основной). Индексы назначений
 /// перемапливаются по URL; назначения на удалённые прокси снимаются.
 pub fn set_proxies(urls: Vec<String>) -> Result<Settings, String> {
-    // Пустой — можно: человек убрал все прокси (мост тогда останавливается).
+    // Пустой - можно: человек убрал все прокси (мост тогда останавливается).
     if urls.len() > 5 {
         return Err("Пул прокси: до 5 адресов".into());
     }
@@ -339,8 +567,8 @@ pub fn set_proxies(urls: Vec<String>) -> Result<Settings, String> {
     })
 }
 
-/// Новый пул в настройках: назначения и сайты — по URL, резервы едут со
-/// своим прокси (ключ — URL); удалённый прокси уносит свои резервы, а
+/// Новый пул в настройках: назначения и сайты - по URL, резервы едут со
+/// своим прокси (ключ - URL); удалённый прокси уносит свои резервы, а
 /// прокси, ставший обычным, резервом больше не числится.
 fn replace_pool(s: &mut Settings, urls: Vec<String>) {
     let old_pool = effective_proxies(s);
@@ -356,7 +584,7 @@ fn replace_pool(s: &mut Settings, urls: Vec<String>) {
 }
 
 /// Задать/убрать имя (тэг) прокси. Пустое имя = убрать.
-/// Блокировать ли телеметрию Claude (по умолчанию — да).
+/// Блокировать ли телеметрию Claude (по умолчанию - да).
 pub fn claude_telemetry_blocked(s: &Settings) -> bool {
     s.block_claude_telemetry.unwrap_or(true)
 }
@@ -368,7 +596,7 @@ pub fn set_claude_telemetry_blocked(on: bool) -> Result<Settings, String> {
     })
 }
 
-/// Блокировать ли рекламу Google (по умолчанию — да).
+/// Блокировать ли рекламу Google (по умолчанию - да).
 pub fn google_ads_blocked(s: &Settings) -> bool {
     s.block_google_ads.unwrap_or(true)
 }
@@ -408,11 +636,12 @@ pub fn set_proxy_assignments(
 /// недостающие builtin-профили, сохраняя пользовательский `enabled` у уже
 /// существующих. Кастомные профили не трогает.
 pub fn load_with_presets() -> Settings {
-    // Поиск установленных приложений — до блокировки: остальные чтения
+    // Поиск установленных приложений - до блокировки: остальные чтения
     // настроек (опрос статусов, окна) не должны ждать детекта.
     let presets = crate::apps::builtin_presets();
     let _g = SETTINGS_LOCK.lock().ok();
-    let mut s = load();
+    // Нечитаемый файл: отдаём умолчания, но на диск ничего не пишем.
+    let Ok(mut s) = load_checked() else { return Settings::default() };
     if merge_presets(&mut s.app_profiles, presets) {
         let _ = save(&s);
     }
@@ -442,7 +671,7 @@ fn merge_presets(profiles: &mut Vec<AppProfile>, presets: Vec<AppProfile>) -> bo
                 }
                 continue;
             }
-            // Профиль уже есть — обновим только автодетект-поля (путь/AppID могли
+            // Профиль уже есть - обновим только автодетект-поля (путь/AppID могли
             // появиться если приложение поставили позже), сохранив enabled.
             if existing.exe_path.is_none() && preset.exe_path.is_some() {
                 existing.exe_path = preset.exe_path.clone();
@@ -462,7 +691,7 @@ fn merge_presets(profiles: &mut Vec<AppProfile>, presets: Vec<AppProfile>) -> bo
 
 /// Заменить список профилей целиком (UI прислал новое состояние enabled/добавил своё).
 /// UI шлёт runtime-снимок, где exe_path/app_id пустеют, если приложение в
-/// момент опроса недоступно (отключённый диск, «не найдено») — надёжные
+/// момент опроса недоступно (отключённый диск, «не найдено») - надёжные
 /// сохранённые автодетект-поля пустотой не затираем.
 pub fn set_profiles(profiles: Vec<AppProfile>) -> Result<Settings, String> {
     with_settings(|s| {
@@ -510,19 +739,30 @@ pub fn set_sites_bypass(apps: Vec<crate::browser_ext::BypassApp>) -> Result<Sett
 }
 
 pub fn set_notices_cache(list: Vec<crate::notices::Notice>) -> Result<Settings, String> {
-    with_settings(|s| {
-        // Отметки о прочтении — только для живых id: файл рассылок может
+    update_notices_caches(|_| (list, Vec::new()))
+}
+
+/// Пересчитать оба кэша рассылок (GitHub, сервер) под общей блокировкой:
+/// `f` видит прежние настройки и возвращает новые списки.
+pub fn update_notices_caches<F>(f: F) -> Result<Settings, String>
+where
+    F: FnOnce(&Settings) -> (Vec<crate::notices::Notice>, Vec<crate::notices::Notice>),
+{
+    with_settings_strict(|s| {
+        let (github, server) = f(s);
+        // Отметки о прочтении - только для живых id: файл рассылок может
         // похудеть, а список прочитанного не должен расти вечно.
-        let alive: Vec<String> = list.iter().map(|n| n.id.clone()).collect();
+        let alive: Vec<String> = github.iter().chain(server.iter()).map(|n| n.id.clone()).collect();
         s.notices_read.retain(|id| id.starts_with("update-") || alive.contains(id));
         s.notices_toasted.retain(|id| alive.contains(id));
-        s.notices_cache = list;
+        s.notices_cache = github;
+        s.notices_cache_server = server;
         Ok(())
     })
 }
 
 pub fn mark_notices_read(ids: &[String]) -> Result<Settings, String> {
-    with_settings(|s| {
+    with_settings_strict(|s| {
         for id in ids {
             if !s.notices_read.contains(id) {
                 s.notices_read.push(id.clone());
@@ -539,7 +779,7 @@ pub fn mark_notices_read(ids: &[String]) -> Result<Settings, String> {
 }
 
 pub fn mark_notices_toasted(ids: &[String]) -> Result<Settings, String> {
-    with_settings(|s| {
+    with_settings_strict(|s| {
         for id in ids {
             if !s.notices_toasted.contains(id) {
                 s.notices_toasted.push(id.clone());
@@ -563,20 +803,30 @@ pub fn set_system_pac_saved(conf: Option<crate::system_pac::ProxyConf>) -> Resul
     })
 }
 
+/// Запомнить `seq` принятого манифеста (только вперёд).
+pub fn set_update_seq(seq: u64) -> Result<Settings, String> {
+    with_settings_strict(|s| {
+        if s.update_seq.is_none_or(|old| seq > old) {
+            s.update_seq = Some(seq);
+        }
+        Ok(())
+    })
+}
+
 pub fn set_update_notified(version: &str) -> Result<Settings, String> {
-    with_settings(|s| {
+    with_settings_strict(|s| {
         s.update_notified = Some(version.to_string());
         Ok(())
     })
 }
 
 /// Запомнить текущую версию как увиденную. Возвращает версию, о которой
-/// стоит показать «Что нового», — если приложение только что обновилось.
+/// стоит показать «Что нового», - если приложение только что обновилось.
 /// Без записанной версии (обновление со сборки до этого поля) обновлением
-/// считается уже настроенная установка; первый запуск — нет.
+/// считается уже настроенная установка; первый запуск - нет.
 pub fn take_whats_new(current: &str) -> Result<Option<String>, String> {
     let mut news = None;
-    with_settings(|s| {
+    with_settings_strict(|s| {
         let configured = s.proxy_url.is_some() || !s.proxies.is_empty();
         if just_updated(s.last_version_seen.as_deref(), configured, current) {
             news = Some(current.to_string());
@@ -585,6 +835,33 @@ pub fn take_whats_new(current: &str) -> Result<Option<String>, String> {
         Ok(())
     })?;
     Ok(news)
+}
+
+/// Состояние автообновления для интерфейса.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct AutoUpdateState {
+    /// Включено ли автообновление сейчас.
+    pub enabled: bool,
+    /// Предложить включить (окно после «Что нового»): программа уже была
+    /// настроена до этой функции, а человека ещё не спрашивали.
+    pub offer: bool,
+}
+
+pub fn auto_update_state(s: &Settings) -> AutoUpdateState {
+    let configured = s.proxy_url.is_some() || !s.proxies.is_empty();
+    AutoUpdateState {
+        enabled: s.auto_update == Some(true),
+        offer: s.auto_update.is_none() && configured,
+    }
+}
+
+/// Включить/выключить автообновление (мастер, окно-предложение, Настройки).
+/// Любой ответ - и «не сейчас» тоже - снимает предложение навсегда.
+pub fn set_auto_update(enabled: bool) -> Result<Settings, String> {
+    with_settings(|s| {
+        s.auto_update = Some(enabled);
+        Ok(())
+    })
 }
 
 fn just_updated(seen: Option<&str>, configured: bool, current: &str) -> bool {
@@ -617,12 +894,45 @@ mod tests {
     use crate::apps::LaunchKind;
 
     #[test]
+    fn broken_settings_are_backed_up_for_user_writes() {
+        let dir = std::env::temp_dir().join(format!("clod-settings-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("settings.json");
+        assert!(load_recovering(&p).is_ok(), "нет файла - не ошибка");
+        fs::write(&p, "{broken").unwrap();
+        let s = load_recovering(&p).unwrap();
+        assert!(s.proxy_url.is_none());
+        assert!(!p.exists(), "битый файл переименован");
+        let bak: Vec<_> = fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert!(bak.iter().any(|n| n.starts_with("settings.json.bad-")), "{bak:?}");
+        // Не читается из-за ввода-вывода (каталог вместо файла): отказ, ничего не переименовано.
+        let d = dir.join("dir-as-file.json");
+        fs::create_dir_all(&d).unwrap();
+        assert!(load_recovering(&d).is_err());
+        assert!(d.exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_checked_distinguishes_missing_from_broken() {
+        use std::io::{Error, ErrorKind};
+        let p = std::path::Path::new("settings.json");
+        assert!(parse_checked(Err(Error::from(ErrorKind::NotFound)), p).is_ok(), "нет файла - не ошибка");
+        assert!(parse_checked(Err(Error::from(ErrorKind::PermissionDenied)), p).is_err(), "не читается - ошибка");
+        assert!(parse_checked(Ok("{broken".into()), p).is_err(), "не разбирается - ошибка");
+        assert!(parse_checked(Ok(String::new()), p).is_err());
+        let ok = parse_checked(Ok(r#"{"proxy_url":"http://1.2.3.4:80"}"#.into()), p).unwrap();
+        assert_eq!(ok.proxy_url.as_deref(), Some("http://1.2.3.4:80"));
+    }
+
+    #[test]
     fn backups_go_after_the_pool_and_keep_pool_indexes() {
         let mut s = Settings::default();
         s.proxies = vec!["a".into(), "b".into()];
         s.proxy_backups.insert("b".into(), vec!["b1".into(), "b2".into()]);
         s.proxy_backups.insert("a".into(), vec!["b1".into()]);
-        // Пул на своих местах, резервы — после, общий резерв — один раз.
+        // Пул на своих местах, резервы - после, общий резерв - один раз.
         assert_eq!(bridge_upstreams(&s), vec!["a", "b", "b1", "b2"]);
         let fb = bridge_fallbacks(&s);
         assert_eq!(fb.get("0"), Some(&vec![2]));
@@ -641,6 +951,35 @@ mod tests {
         assert_eq!(bridge_upstreams(&s), vec!["a", "a2", "x"]);
         assert!(!s.proxy_backups.contains_key("b"));
         assert!(!s.proxy_labels.contains_key("y"), "имя ушедшего резерва убрано");
+    }
+
+    #[test]
+    fn auto_update_is_offered_once_to_existing_installs() {
+        let fresh = Settings::default();
+        assert_eq!(auto_update_state(&fresh), AutoUpdateState { enabled: false, offer: false }, "до мастера не предлагаем");
+        let old = Settings { proxy_url: Some("http://1.2.3.4:80".into()), ..Settings::default() };
+        assert_eq!(auto_update_state(&old), AutoUpdateState { enabled: false, offer: true });
+        let declined = Settings { auto_update: Some(false), ..old.clone() };
+        assert_eq!(auto_update_state(&declined), AutoUpdateState { enabled: false, offer: false });
+        let on = Settings { auto_update: Some(true), ..old };
+        assert_eq!(auto_update_state(&on), AutoUpdateState { enabled: true, offer: false });
+        // Старый settings.json без поля читается как «не спрашивали».
+        let s: Settings = serde_json::from_str(r#"{"proxy_url":"http://1.2.3.4:80"}"#).unwrap();
+        assert_eq!(s.auto_update, None);
+    }
+
+    #[test]
+    fn privacy_switches_default_to_on() {
+        let s = Settings::default();
+        assert_eq!(s.crash_reports, None);
+        assert!(crash_reports_on(&s) && usage_stats_on(&s));
+        let old: Settings = serde_json::from_str(r#"{"proxy_url":"http://1.2.3.4:80"}"#).unwrap();
+        assert!(crash_reports_on(&old) && usage_stats_on(&old));
+        assert_eq!(old.telemetry, TelemetryState::default());
+        let off = Settings { crash_reports: Some(false), usage_stats: Some(false), ..old };
+        assert!(!crash_reports_on(&off) && !usage_stats_on(&off));
+        let p = privacy_state(&off);
+        assert!(!p.crash_reports && !p.usage_stats && !p.auto_update && p.offer);
     }
 
     #[test]
@@ -726,7 +1065,7 @@ mod tests {
         let new = vec!["b".to_string(), "a".into()];
         remap_assignments(&mut s, &old, &new);
         let got: Vec<Option<usize>> = s.sites.iter().map(|x| x.proxy).collect();
-        assert_eq!(got, vec![Some(0), None, None], "тот же прокси по URL; удалённый — «Авто»");
+        assert_eq!(got, vec![Some(0), None, None], "тот же прокси по URL; удалённый - «Авто»");
     }
 
     #[test]

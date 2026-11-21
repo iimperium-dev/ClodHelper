@@ -1,12 +1,12 @@
 //! «Инструменты» → архив локальных чатов Claude.
 //!
 //! Вся переписка, которая хранится на компьютере (вкладка Code и задачи
-//! Cowork в Claude Desktop, Claude Code в терминале), — одним ZIP в папку
-//! «Загрузки». Внутри README.md: что где лежит и как в этом искать, —
+//! Cowork в Claude Desktop, Claude Code в терминале), - одним ZIP в папку
+//! «Загрузки». Внутри README.md: что где лежит и как в этом искать, -
 //! чтобы потом попросить агента разобраться в архиве.
 //!
 //! Используется отдельно (кнопка «Сохранить архив») и перед удалением
-//! локальных чатов при очистке: архив не сохранился — чаты не удаляются.
+//! локальных чатов при очистке: архив не сохранился - чаты не удаляются.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -81,7 +81,7 @@ fn sources(env: &Env) -> Vec<(PathBuf, String)> {
     v
 }
 
-/// Ссылка, точка соединения и прочие перенаправления — не идём внутрь:
+/// Ссылка, точка соединения и прочие перенаправления - не идём внутрь:
 /// иначе в архив попадёт чужая папка (или сам архив по кругу).
 fn is_link(meta: &std::fs::Metadata) -> bool {
     if meta.file_type().is_symlink() {
@@ -100,7 +100,7 @@ fn is_link(meta: &std::fs::Metadata) -> bool {
 
 /// Все файлы источника: (путь на диске, путь в архиве, размер, время изменения).
 fn walk(src: &Path, name: &str, out: &mut Vec<(PathBuf, String, u64, Option<SystemTime>)>) {
-    // Сам источник может быть ссылкой (папку перенесли на другой диск) —
+    // Сам источник может быть ссылкой (папку перенесли на другой диск) -
     // идём по ней. Внутри ссылки пропускаем: иначе можно уйти по кругу.
     let Ok(meta) = std::fs::metadata(src) else { return };
     if meta.is_file() {
@@ -117,7 +117,9 @@ fn walk(src: &Path, name: &str, out: &mut Vec<(PathBuf, String, u64, Option<Syst
             let fname = e.file_name().to_string_lossy().to_string();
             let inner = format!("{prefix}/{fname}");
             if m.is_dir() {
-                if !SKIP_DIRS.contains(&fname.as_str()) {
+                // Папка-кэш со стандартной меткой (target/ сборки Rust и т.п.):
+                // в рабочих папках сессий это гигабайты, к переписке отношения нет.
+                if !SKIP_DIRS.contains(&fname.as_str()) && !e.path().join("CACHEDIR.TAG").is_file() {
                     stack.push((e.path(), inner));
                 }
             } else {
@@ -127,7 +129,7 @@ fn walk(src: &Path, name: &str, out: &mut Vec<(PathBuf, String, u64, Option<Syst
     }
 }
 
-/// Сдвиг местного времени от UTC в секундах (ZIP и имя архива — по местному).
+/// Сдвиг местного времени от UTC в секундах (ZIP и имя архива - по местному).
 fn utc_offset() -> i64 {
     // Раз в 10 минут: программа живёт в трее днями, а пояс меняется
     // (летнее время, поездка).
@@ -217,7 +219,7 @@ fn civil(secs: u64) -> (i64, u32, u32, u32, u32, u32) {
     (y, m, d, (rem / 3600) as u32, (rem % 3600 / 60) as u32, (rem % 60) as u32)
 }
 
-/// Уже сжатое — без повторного сжатия (быстрее, архив не больше).
+/// Уже сжатое - без повторного сжатия (быстрее, архив не больше).
 fn stored(name: &str) -> bool {
     let n = name.to_lowercase();
     [".zip", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".mp4", ".mov", ".pdf", ".gz", ".7z", ".woff2"]
@@ -338,7 +340,7 @@ fn write_zip(
         };
         let opts = SimpleFileOptions::default()
             .compression_method(if stored(name) { CompressionMethod::Stored } else { CompressionMethod::Deflated })
-            // Быстрое сжатие: текст переписки и так ужимается в 2–3 раза, а
+            // Быстрое сжатие: текст переписки и так ужимается в 2-3 раза, а
             // сильное сжатие гигабайтов заняло бы минуты.
             .compression_level(if stored(name) { None } else { Some(1) })
             .last_modified_time(zip_time(*modified))
@@ -347,7 +349,7 @@ fn write_zip(
         let before = DONE.load(Ordering::Relaxed);
         if let Err(e) = std::io::copy(&mut Counting { inner: &mut f }, &mut zw) {
             // Файл перестал читаться посередине: в архиве останется его часть.
-            // Диск переполнен — дальше смысла нет.
+            // Диск переполнен - дальше смысла нет.
             if e.kind() == std::io::ErrorKind::StorageFull || e.raw_os_error() == Some(112) {
                 return Err("На диске закончилось место".into());
             }
@@ -381,32 +383,34 @@ fn readme(count: u32, skipped: &[String]) -> String {
 в Claude Desktop и Claude Code в терминале. Чаты из облака (claude.ai) остаются в самом \
 аккаунте и в архив не входят.\n\n\
 ## Что где лежит\n\n\
-- `Claude Code/projects/<папка проекта>/<id сессии>.jsonl` — переписка Claude Code, \
-в том числе вкладки Code в Claude Desktop. Одна строка — одна запись в JSON: `type` \
+- `Claude Code/projects/<папка проекта>/<id сессии>.jsonl` - переписка Claude Code, \
+в том числе вкладки Code в Claude Desktop. Одна строка - одна запись в JSON: `type` \
 (`user`, `assistant`, `summary`…), `message.content` (текст, вызовы инструментов и их \
-результаты), `timestamp`, `cwd`, `sessionId`. Имя папки — путь проекта, в котором \
+результаты), `timestamp`, `cwd`, `sessionId`. Имя папки - путь проекта, в котором \
 `\\`, `/`, `:` и пробелы заменены на `-`.\n\
-- `Claude Code/projects/<папка проекта>/<id сессии>/subagents/` — переписка вложенных агентов.\n\
-- `Claude Code/projects/<папка проекта>/memory/` — заметки памяти проекта (Markdown).\n\
-- `Claude Code/history.jsonl` — история введённых запросов (`display`, `timestamp`, `project`).\n\
-- `Claude Code/file-history/<id сессии>/` — копии файлов до правок Claude.\n\
-- `Claude Code/todos/`, `Claude Code/plans/` — списки задач и планы сессий.\n\
-- `Claude Code/uploads/` — файлы, приложенные к чатам.\n\
-- `Claude Desktop/claude-code-sessions/<аккаунт>/<организация>/local_*.json` — карточки \
-сессий вкладки Code: название (`title`), папка (`cwd`), модель, время, и `cliSessionId` — \
+- `Claude Code/projects/<папка проекта>/<id сессии>/subagents/` - переписка вложенных агентов.\n\
+- `Claude Code/projects/<папка проекта>/memory/` - заметки памяти проекта (Markdown).\n\
+- `Claude Code/history.jsonl` - история введённых запросов (`display`, `timestamp`, `project`).\n\
+- `Claude Code/file-history/<id сессии>/` - копии файлов до правок Claude.\n\
+- `Claude Code/todos/`, `Claude Code/plans/` - списки задач и планы сессий.\n\
+- `Claude Code/uploads/` - файлы, приложенные к чатам.\n\
+- `Claude Desktop/claude-code-sessions/<аккаунт>/<организация>/local_*.json` - карточки \
+сессий вкладки Code: название (`title`), папка (`cwd`), модель, время, и `cliSessionId` - \
 id файла переписки в `Claude Code/projects`.\n\
-- `Claude Desktop/local-agent-mode-sessions/…` — задачи и сессии Cowork, их файлы и расписания.\n\
-- `Claude Desktop/scratch-workspaces/…` — рабочие папки временных сессий (что в них создавал Claude).\n\
-- `Claude Desktop/side-session-notes/` — заметки побочных сессий.\n\
-- `Claude Desktop/git-worktrees.json` — список рабочих копий git, созданных для сессий.\n\n\
+- `Claude Desktop/local-agent-mode-sessions/…` - задачи и сессии Cowork, их файлы и расписания.\n\
+- `Claude Desktop/scratch-workspaces/…` - рабочие папки временных сессий (что в них создавал Claude).\n\
+- `Claude Desktop/side-session-notes/` - заметки побочных сессий.\n\
+- `Claude Desktop/git-worktrees.json` - список рабочих копий git, созданных для сессий.\n\
+- `Claude Desktop/git-shadow/` - теневые копии git рабочих папок сессий (для отмены правок).\n\n\
 ## Как искать\n\n\
 Распакуйте архив и попросите агента: «Найди в этом архиве чат про …» или «Собери, что мы \
-решили по проекту X». Быстрее всего — искать по тексту во всех `*.jsonl` в \
+решили по проекту X». Быстрее всего - искать по тексту во всех `*.jsonl` в \
 `Claude Code/projects`, а название сессии брать из карточек в \
 `Claude Desktop/claude-code-sessions` по `cliSessionId`.\n\n\
 Папки `node_modules` в рабочих папках не сохранены: это установленные зависимости, их \
-восстанавливает установка пакетов. Ссылки на другие папки внутри тоже не сохранены.\n\n\
-Архив содержит переписку и данные прошлого аккаунта — храните его отдельно от нового.\n"
+восстанавливает установка пакетов. Не сохранены и папки-кэши (с файлом `CACHEDIR.TAG`, \
+например `target` сборки Rust): их заново создаёт сборка. Ссылки на другие папки внутри тоже не сохранены.\n\n\
+Архив содержит переписку и данные прошлого аккаунта - храните его отдельно от нового.\n"
     );
     if skipped.is_empty() {
         s.push_str("\n## Не вошло\n\nВсё скопировано.\n");
@@ -426,7 +430,7 @@ id файла переписки в `Claude Code/projects`.\n\
 pub(crate) mod tests {
     use super::*;
 
-    /// Архив одновременно только один (общий счётчик прогресса) — тесты по очереди.
+    /// Архив одновременно только один (общий счётчик прогресса) - тесты по очереди.
     pub(crate) static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
     pub(crate) fn serial() -> std::sync::MutexGuard<'static, ()> {
         SERIAL.lock().unwrap_or_else(|e| e.into_inner())
@@ -445,6 +449,9 @@ pub(crate) mod tests {
         };
         w(d.join("claude-code-sessions").join("a").join("o").join("local_1.json"), r#"{"title":"Чат"}"#);
         w(d.join("scratch-workspaces").join("a").join("node_modules").join("big.js"), "x");
+        // Сборка Rust в рабочей папке: на живом Маке такие target - 18 ГБ.
+        w(d.join("scratch-workspaces").join("a").join("target").join("CACHEDIR.TAG"), "Signature: 8a477f597d28d172789f06886806bc55");
+        w(d.join("scratch-workspaces").join("a").join("target").join("debug").join("app"), "бинарник");
         w(d.join("Cache").join("f"), "кэш не нужен");
         w(home.join(".claude").join("projects").join("C--p").join("s.jsonl"), "{\"type\":\"user\"}\n");
         w(home.join(".claude").join("history.jsonl"), "{}\n");
@@ -465,13 +472,13 @@ pub(crate) mod tests {
         ] {
             assert!(names.iter().any(|x| x == n), "нет {n}: {names:?}");
         }
-        assert!(!names.iter().any(|x| x.contains("node_modules") || x.contains("Cache") || x.contains("settings.json")));
+        assert!(!names.iter().any(|x| x.contains("node_modules") || x.contains("Cache") || x.contains("target/") || x.contains("settings.json")));
         let mut text = String::new();
         z.by_name("Claude Desktop/claude-code-sessions/a/o/local_1.json").unwrap().read_to_string(&mut text).unwrap();
         assert!(text.contains("Чат"));
         assert!(!progress().active);
 
-        // Второй архив в тот же день — новое имя, первый не перезаписан.
+        // Второй архив в тот же день - новое имя, первый не перезаписан.
         let b = export_to(&env, &out).unwrap();
         assert_ne!(a.path, b.path);
         let _ = std::fs::remove_dir_all(&root);
@@ -490,7 +497,7 @@ pub(crate) mod tests {
         std::fs::create_dir_all(&p).unwrap();
         std::fs::write(p.join("ok.jsonl"), "{}").unwrap();
         std::fs::write(p.join("busy.jsonl"), "{}").unwrap();
-        // Открыт без права совместного чтения — как у занятого файла.
+        // Открыт без права совместного чтения - как у занятого файла.
         let _lock = std::fs::OpenOptions::new().read(true).share_mode(0).open(p.join("busy.jsonl")).unwrap();
         let env = Env { code_dir: Some(root.join("home").join(".claude")), ..Env::default() };
         let a = export_to(&env, &root.join("out")).unwrap();

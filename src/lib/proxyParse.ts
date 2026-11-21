@@ -1,7 +1,7 @@
 /*
   Умный парсер прокси-строк: принимает любые популярные форматы прокси-шопов
   и раскладывает на хост/порт/логин/пароль. Когда формат неоднозначен
-  (например host:port:user:pass vs user:pass:host:port) — возвращает
+  (например host:port:user:pass vs user:pass:host:port) - возвращает
   confidence:"low" + альтернативу, и UI эскалирует подтверждение.
 
   Поддерживаемые формы:
@@ -74,7 +74,7 @@ export function isParseReject(r: ParsedProxy | ParseReject | null): r is ParseRe
 
 /**
  * Разобрать строку прокси. Схема сохраняется: мост (≥1.8) умеет HTTP, HTTPS
- * (TLS до прокси) и SOCKS5; без схемы — http.
+ * (TLS до прокси) и SOCKS5; без схемы - http.
  */
 export function parseProxyInput(raw: string): ParsedProxy | ParseReject | null {
   const trimmed = raw.trim();
@@ -82,7 +82,7 @@ export function parseProxyInput(raw: string): ParsedProxy | ParseReject | null {
   const m = trimmed.match(/^([a-z0-9]+):\/\//i);
   const given = m?.[1].toLowerCase();
   if (given && !["http", "https", "socks5", "socks5h", "socks"].includes(given)) {
-    return { error: `Протокол ${given}:// не поддерживается — нужен http, https или socks5.` };
+    return { error: `Протокол ${given}:// не поддерживается - нужен http, https или socks5.` };
   }
   const scheme = given === "https" ? "https" : given?.startsWith("socks") ? "socks5" : "http";
   const r = parseInner(trimmed.replace(/^[a-z0-9]+:\/\//i, ""));
@@ -107,7 +107,7 @@ function parseInner(input: string): ParsedProxy | ParseReject | null {
     s = spaceParts.join(":");
   }
 
-  // Формы с @: одна из сторон — host:port.
+  // Формы с @: одна из сторон - host:port.
   if (s.includes("@")) {
     const at = s.lastIndexOf("@");
     const left = s.slice(0, at);
@@ -119,7 +119,7 @@ function parseInner(input: string): ParsedProxy | ParseReject | null {
 
     if (leftIsHost && rightIsHost) {
       // Обе стороны похожи на host:port («доменный» логин + цифровой пароль).
-      // IP-адрес — сильный сигнал хоста; без него — эскалация в UI.
+      // IP-адрес - сильный сигнал хоста; без него - эскалация в UI.
       const asStd = make(rp[0], Number(rp[1]), lp[0], lp.slice(1).join(":"), "low"); // user:pass@host:port
       const asRev = make(lp[0], Number(lp[1]), rp[0], rp.slice(1).join(":"), "low"); // host:port@user:pass
       if (isIPv4(rp[0]) && !isIPv4(lp[0])) return { ...asStd, confidence: "high" };
@@ -127,7 +127,7 @@ function parseInner(input: string): ParsedProxy | ParseReject | null {
       return { ...asStd, alt: asRev };
     }
     if (rightIsHost) {
-      // user:pass@host:port — стандарт.
+      // user:pass@host:port - стандарт.
       const [user, ...passParts] = lp;
       return make(rp[0], Number(rp[1]), user, passParts.join(":"), "high");
     }
@@ -160,7 +160,7 @@ function parseInner(input: string): ParsedProxy | ParseReject | null {
       return make(parts[2], Number(parts[3]), parts[0], parts[1], "high");
     }
     if (v1ok && v2ok) {
-      // Обе трактовки валидны. IP-адрес — сильный сигнал: логины-IP не бывают.
+      // Обе трактовки валидны. IP-адрес - сильный сигнал: логины-IP не бывают.
       const v1 = make(parts[0], Number(parts[1]), parts[2], parts[3], "low");
       const v2 = make(parts[2], Number(parts[3]), parts[0], parts[1], "low");
       if (isIPv4(parts[0]) && !isIPv4(parts[2])) {
@@ -176,7 +176,7 @@ function parseInner(input: string): ParsedProxy | ParseReject | null {
   }
 
   if (parts.length === 3) {
-    // host:port:user (без пароля) — редкий, но встречается.
+    // host:port:user (без пароля) - редкий, но встречается.
     if (isPort(parts[1]) && (isIPv4(parts[0]) || isHostLike(parts[0]))) {
       return make(parts[0], Number(parts[1]), parts[2], "", "low");
     }

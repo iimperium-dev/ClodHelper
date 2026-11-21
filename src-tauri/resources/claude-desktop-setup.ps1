@@ -15,7 +15,7 @@
     127.0.0.1:8889 → купленный прокси с auth. Не трогает системный прокси.
 
 .PARAMETER ProxyUrl
-    URL купленного прокси: http://login:pass@ip:port. Если не задан — спросит.
+    URL купленного прокси: http://login:pass@ip:port. Если не задан - спросит.
 
 .PARAMETER Port
     Локальный порт для bridge-прокси (по умолчанию 8889).
@@ -39,7 +39,7 @@ $SourceDir = $PSScriptRoot
 $InstallDir = Join-Path $env:LOCALAPPDATA 'ClaudeDesktopProxy'
 
 # Resolve Startup folder. [Environment]::GetFolderPath('Startup') can return ""
-# under -NonInteractive PowerShell — fall back to the canonical path.
+# under -NonInteractive PowerShell - fall back to the canonical path.
 $StartupDir = [Environment]::GetFolderPath('Startup')
 if ([string]::IsNullOrEmpty($StartupDir)) {
     $StartupDir = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup'
@@ -49,7 +49,7 @@ if (-not (Test-Path $StartupDir)) {
 }
 $StartupVbs = Join-Path $StartupDir 'ClaudeDesktopProxy.vbs'
 
-# Desktop folder — same robustness.
+# Desktop folder - same robustness.
 $DesktopDir = [Environment]::GetFolderPath('Desktop')
 if ([string]::IsNullOrEmpty($DesktopDir)) {
     $DesktopDir = Join-Path $env:USERPROFILE 'Desktop'
@@ -86,7 +86,7 @@ function Get-PythonCommand {
             }
         }
     } catch {}
-    # Fallback на python (может быть MS Store stub — но тогда вернёт пустой output).
+    # Fallback на python (может быть MS Store stub - но тогда вернёт пустой output).
     try {
         $v = & python --version 2>&1
         if ($LASTEXITCODE -eq 0 -and $v -match 'Python\s+(\d+)\.(\d+)') {
@@ -146,7 +146,7 @@ if ($Uninstall) {
 
     Write-Host ""
     Write-Host "Готово. Claude Desktop proxy удалён." -ForegroundColor Green
-    Write-Host "Сам Claude Desktop не трогали — он остался установлен." -ForegroundColor DarkGray
+    Write-Host "Сам Claude Desktop не трогали - он остался установлен." -ForegroundColor DarkGray
     exit 0
 }
 
@@ -158,7 +158,7 @@ Write-Host "  Claude Desktop будет ходить через 127.0.0.1:$Port 
 Write-Host "  Остальные программы (браузер, Steam, Discord) не затронуты."
 Write-Host ""
 
-# Шаг 0 — получить прокси
+# Шаг 0 - получить прокси
 if (-not $ProxyUrl) {
     Write-Host "  Введи URL купленного HTTP-прокси:" -ForegroundColor Yellow
     Write-Host "    Формат: http://login:pass@ip:port" -ForegroundColor DarkGray

@@ -23,28 +23,28 @@ use super::*;
 
 /// Состояние одного прокси из пула: TCP-пинг (мс) и настоящий запрос через
 /// него. Открытый порт ещё не значит «работает»: мёртвый у провайдера прокси
-/// часто принимает соединение и молчит — пинг у него красивый.
+/// часто принимает соединение и молчит - пинг у него красивый.
 #[derive(Debug, Serialize)]
 pub struct ProxyPing {
     pub url: String,
     pub host: String,
     pub port: u16,
-    /// TCP-connect, мс. None — порт не ответил.
+    /// TCP-connect, мс. None - порт не ответил.
     pub ms: Option<u64>,
-    /// Запрос через прокси прошёл. None — не проверяли (порт не ответил /
+    /// Запрос через прокси прошёл. None - не проверяли (порт не ответил /
     /// URL не разобрать), тогда судить по `ms`.
     pub alive: Option<bool>,
-    /// Почему не работает — человеческой строкой.
+    /// Почему не работает - человеческой строкой.
     pub error: Option<String>,
-    /// Резерв какого прокси пула (индекс); None — сам прокси пула.
+    /// Резерв какого прокси пула (индекс); None - сам прокси пула.
     pub backup_of: Option<usize>,
 }
 
 /// Настоящий запрос через прокси: маленький ответ 204 без TLS (быстро и
-/// дёшево по трафику). Любой ответ сайта — прокси работает.
+/// дёшево по трафику). Любой ответ сайта - прокси работает.
 async fn probe_through(url: &str) -> Result<(), String> {
     // SOCKS5: имя сайта пусть разрешает сам прокси (socks5h), как мост. Иначе
-    // проверка зависела бы от DNS страны пользователя — в части стран он
+    // проверка зависела бы от DNS страны пользователя - в части стран он
     // подменяет или режет ответы, и рабочий прокси выглядел «мёртвым».
     let url = match url.strip_prefix("socks5://") {
         Some(rest) => format!("socks5h://{rest}"),
@@ -59,7 +59,7 @@ async fn probe_through(url: &str) -> Result<(), String> {
         .map_err(|e| format!("Внутренняя ошибка: {e}"))?;
     let mut last = String::new();
     // Несколько целей: прокси (или сеть) иногда режет конкретный хост или
-    // обычный http — тогда пробуем следующую, в том числе https (CONNECT).
+    // обычный http - тогда пробуем следующую, в том числе https (CONNECT).
     for target in [
         "http://cp.cloudflare.com/generate_204",
         "http://www.gstatic.com/generate_204",
@@ -69,8 +69,10 @@ async fn probe_through(url: &str) -> Result<(), String> {
             Ok(r) if r.status().as_u16() == 407 => return Err("Прокси не принял логин или пароль".into()),
             Ok(r) if r.status().is_server_error() => last = format!("Прокси ответил ошибкой {}", r.status().as_u16()),
             Ok(_) => return Ok(()),
-            // Молчит — дело в самом прокси, другие цели не помогут, а ожидание умножится.
-            Err(e) if e.is_timeout() => return Err("Порт открыт, но прокси молчит — не отвечает на запросы".into()),
+            // Молчит - другие цели не помогут, а ожидание умножится. Если прокси
+            // исправен (на сервере проверка прошла), так выглядит блокировка IP
+            // сервера у провайдера: соединение открывается, данные пропадают.
+            Err(e) if e.is_timeout() => return Err("Порт открыт, но прокси молчит. Скорее всего, ваш провайдер блокирует IP этого сервера: попросите у хостинга новый IP".into()),
             Err(e) if e.is_connect() => last = "Не удалось подключиться к прокси".into(),
             Err(e) => last = format!("Ошибка: {e}"),
         }
@@ -78,12 +80,142 @@ async fn probe_through(url: &str) -> Result<(), String> {
     Err(last)
 }
 
+/// Замер скорости скачивания через прокси.
+#[derive(Debug, Serialize)]
+pub struct ProxySpeed {
+    /// Мегабит в секунду.
+    pub mbps: f64,
+    /// Сколько скачали за замер, байт.
+    pub bytes: u64,
+    /// Сколько длился замер, с (от первого ответа до конца).
+    pub secs: f64,
+}
+
+/// Потолок замера: не больше стольких байт и секунд - прокси бывают с
+/// оплатой за трафик, а для оценки скорости этого хватает.
+const SPEED_MAX_BYTES: u64 = 25_000_000;
+const SPEED_MAX_SECS: f64 = 8.0;
+
+/// Откуда качать при замере: большие файлы на быстрых серверах; второй -
+/// если первый недоступен через этот прокси.
+const SPEED_TARGETS: &[&str] = &[
+    "https://speed.cloudflare.com/__down?bytes=25000000",
+    "https://proof.ovh.net/files/100Mb.dat",
+];
+
+/// Скачать через прокси до потолка и посчитать скорость. Время считаем от
+/// ответа сервера: подключение и рукопожатие - это пинг, не скорость.
+async fn speed_through(url: &str, targets: &[&str]) -> Result<ProxySpeed, String> {
+    let url = match url.strip_prefix("socks5://") {
+        Some(rest) => format!("socks5h://{rest}"),
+        None => url.to_string(),
+    };
+    let proxy = reqwest::Proxy::all(&url).map_err(|e| format!("Неверный адрес прокси: {e}"))?;
+    let client = reqwest::Client::builder()
+        .proxy(proxy)
+        .connect_timeout(std::time::Duration::from_secs(6))
+        .build()
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))?;
+    let mut last = "Не удалось начать замер".to_string();
+    for target in targets {
+        let resp = match tokio::time::timeout(std::time::Duration::from_secs(10), client.get(*target).send()).await {
+            Err(_) => {
+                last = "Прокси не отвечает на запрос".into();
+                continue;
+            }
+            Ok(Err(e)) if e.is_connect() => {
+                last = "Не удалось подключиться к прокси".into();
+                continue;
+            }
+            Ok(Err(e)) => {
+                last = format!("Ошибка: {e}");
+                continue;
+            }
+            Ok(Ok(r)) => r,
+        };
+        if resp.status().as_u16() == 407 {
+            return Err("Прокси не принял логин или пароль".into());
+        }
+        if !resp.status().is_success() {
+            last = format!("Сервер замера ответил ошибкой {}", resp.status().as_u16());
+            continue;
+        }
+        let mut resp = resp;
+        let start = std::time::Instant::now();
+        let mut bytes: u64 = 0;
+        loop {
+            let left = SPEED_MAX_SECS - start.elapsed().as_secs_f64();
+            if left <= 0.0 || bytes >= SPEED_MAX_BYTES {
+                break;
+            }
+            match tokio::time::timeout(std::time::Duration::from_secs_f64(left), resp.chunk()).await {
+                Ok(Ok(Some(c))) => bytes += c.len() as u64,
+                // Файл кончился, время вышло или связь оборвалась - считаем, что успели.
+                _ => break,
+            }
+        }
+        let secs = start.elapsed().as_secs_f64();
+        if bytes == 0 {
+            last = "Через прокси не пришло ни одного байта".into();
+            continue;
+        }
+        let mbps = bytes as f64 * 8.0 / secs.max(0.001) / 1_000_000.0;
+        return Ok(ProxySpeed { mbps, bytes, secs });
+    }
+    Err(last)
+}
+
+/// Замер скорости одного прокси (по кнопке - качает до 25 МБ).
+#[tauri::command]
+pub async fn proxy_speedtest(url: String) -> Result<ProxySpeed, String> {
+    proxy::parse(&url)?;
+    speed_through(&url, SPEED_TARGETS).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// HTTP-прокси, отдающий на любой запрос 2 МБ, - скорость посчитана,
+    /// байты сходятся.
+    #[tokio::test]
+    async fn speedtest_counts_bytes() {
+        use std::io::{Read, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        const N: usize = 2_000_000;
+        std::thread::spawn(move || {
+            for mut s in l.incoming().flatten() {
+                let mut buf = [0u8; 2048];
+                let _ = s.read(&mut buf);
+                let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {N}\r\n\r\n").as_bytes());
+                let _ = s.write_all(&vec![0u8; N]);
+            }
+        });
+        let r = speed_through(&format!("http://127.0.0.1:{port}"), &["http://example.test/file"]).await.unwrap();
+        assert_eq!(r.bytes, N as u64);
+        assert!(r.mbps > 0.0);
+    }
+
+    /// Прокси с неверным паролем - понятная ошибка, а не «0 Мбит/с».
+    #[tokio::test]
+    async fn speedtest_reports_bad_auth() {
+        use std::io::{Read, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for mut s in l.incoming().flatten() {
+                let mut buf = [0u8; 2048];
+                let _ = s.read(&mut buf);
+                let _ = s.write_all(b"HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\n\r\n");
+            }
+        });
+        let err = speed_through(&format!("http://127.0.0.1:{port}"), &["http://example.test/file"]).await.unwrap_err();
+        assert!(err.contains("логин"), "{err}");
+    }
+
     /// Прокси, который принимает соединение и молчит (так выглядит мёртвый
-    /// у провайдера сервер), — «не работает», хотя TCP-пинг у него есть.
+    /// у провайдера сервер), - «не работает», хотя TCP-пинг у него есть.
     #[tokio::test]
     async fn silent_proxy_is_not_alive() {
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -97,10 +229,10 @@ mod tests {
         let t = std::time::Instant::now();
         let err = probe_through(&format!("http://127.0.0.1:{port}")).await.unwrap_err();
         assert!(err.contains("молчит"), "{err}");
-        assert!(t.elapsed() < std::time::Duration::from_secs(12), "одна цель — не ждём дважды");
+        assert!(t.elapsed() < std::time::Duration::from_secs(12), "одна цель - не ждём дважды");
     }
 
-    /// Прокси, отвечающий на запросы, — работает.
+    /// Прокси, отвечающий на запросы, - работает.
     #[tokio::test]
     async fn answering_proxy_is_alive() {
         use std::io::{Read, Write};
@@ -123,7 +255,7 @@ pub fn proxies_get() -> Vec<String> {
     settings::effective_proxies(&s)
 }
 
-/// Заменить пул (1..=5; [0] — основной): валидация, сохранение, перерегистрация
+/// Заменить пул (1..=5; [0] - основной): валидация, сохранение, перерегистрация
 /// задачи (vbs получает все --upstream) и перезапуск моста.
 #[tauri::command]
 pub async fn proxies_set(urls: Vec<String>) -> Result<Vec<String>, String> {
@@ -135,7 +267,7 @@ pub async fn proxies_set(urls: Vec<String>) -> Result<Vec<String>, String> {
     let primary = saved.proxy_url.clone().unwrap_or_default();
     if empty {
         // Без прокси мост не работает: останавливаем и снимаем с автозапуска.
-        // Приложения через мост остаются без сети — напрямую не выпускаем.
+        // Приложения через мост остаются без сети - напрямую не выпускаем.
         tokio::task::spawn_blocking(|| {
             let _ = shim::stop();
             crate::tasks::unregister();
@@ -163,8 +295,8 @@ pub fn proxy_backups_get() -> std::collections::HashMap<String, Vec<String>> {
     settings::load().proxy_backups
 }
 
-/// Задать резервы прокси (пустой список — убрать все). Список прокси моста
-/// меняется — перерегистрация задачи (файл прокси) и перезапуск моста.
+/// Задать резервы прокси (пустой список - убрать все). Список прокси моста
+/// меняется - перерегистрация задачи (файл прокси) и перезапуск моста.
 #[tauri::command]
 pub async fn proxy_backups_set(
     parent: String,
@@ -224,7 +356,7 @@ pub async fn google_ads_set(on: bool) -> Result<bool, String> {
         .await
         .map_err(|e| format!("Внутренняя ошибка: {e}"))??;
     std::thread::spawn(|| {
-        // Мост перечитывает правила раз в 2 с — PAC после этого.
+        // Мост перечитывает правила раз в 2 с - PAC после этого.
         std::thread::sleep(std::time::Duration::from_millis(2500));
         if let Err(e) = crate::system_pac::refresh() {
             tracing::warn!("обновление системного PAC: {e}");
@@ -239,7 +371,7 @@ pub fn proxy_labels_get() -> std::collections::HashMap<String, String> {
     settings::load().proxy_labels
 }
 
-/// Задать/убрать имя прокси (пустое = убрать). Чисто косметика — мост не трогаем.
+/// Задать/убрать имя прокси (пустое = убрать). Чисто косметика - мост не трогаем.
 #[tauri::command]
 pub fn proxy_label_set(
     url: String,
@@ -267,7 +399,7 @@ pub async fn proxy_assignments_set(
 /// TCP-пинг всего пула параллельно (лёгкий connect, не через интернет-запрос).
 #[tauri::command]
 pub async fn proxies_ping() -> Vec<ProxyPing> {
-    // Пул и резервы — в порядке моста: индексы совпадают с /healthz.
+    // Пул и резервы - в порядке моста: индексы совпадают с /healthz.
     let s = settings::load();
     let pool = settings::effective_proxies(&s);
     let parent_of = |url: &str| {
@@ -292,10 +424,10 @@ pub async fn proxies_ping() -> Vec<ProxyPing> {
                     }
                 };
                 let (h, p) = (host.clone(), port);
-                // Три попытки, лучшая из удачных: один замер врёт — прокси,
+                // Три попытки, лучшая из удачных: один замер врёт - прокси,
                 // на секунды переставший принимать новые соединения (бывает у
                 // провайдеров), иначе висел бы красным «нет связи», хотя
-                // мост через него работает. None — не ответил ни разу.
+                // мост через него работает. None - не ответил ни разу.
                 let probe = tokio::task::spawn_blocking(move || {
                     use std::net::{TcpStream, ToSocketAddrs};
                     let addr = format!("{h}:{p}").to_socket_addrs().ok()?.next()?;
@@ -308,16 +440,16 @@ pub async fn proxies_ping() -> Vec<ProxyPing> {
                         })
                         .min()
                 });
-                // DNS-резолв внутри блокирующей задачи своего таймаута не имеет —
+                // DNS-резолв внутри блокирующей задачи своего таймаута не имеет -
                 // ограничиваем всё целиком, иначе зависший резолвер держит
                 // «пинг» в UI десятки секунд.
                 let ms = match tokio::time::timeout(std::time::Duration::from_secs(9), probe).await {
                     Ok(Ok(ms)) => ms,
                     _ => None,
                 };
-                // Порт не ответил — дальше проверять нечего.
+                // Порт не ответил - дальше проверять нечего.
                 let (alive, error) = if ms.is_none() {
-                    (None, Some("Прокси не отвечает — порт закрыт или сервер выключен".to_string()))
+                    (None, Some("Прокси не отвечает - порт закрыт или сервер выключен".to_string()))
                 } else {
                     match probe_through(&url).await {
                         Ok(()) => (Some(true), None),

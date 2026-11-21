@@ -61,7 +61,7 @@ function Remove-BrowserRegistryValue([string]$Key, [string]$Name) {
 
 function Remove-BrowserPolicyKeyIfEmpty([string]$Key) { $script:Writes += "prune:$Key" }
 
-# Нет политик — включаем и снимаем.
+# Нет политик - включаем и снимаем.
 Reset-Fixture
 $status = Get-BrowserPolicyStatus $chrome
 Assert-Equal $status.configured $false 'Nothing is configured initially'
@@ -106,7 +106,7 @@ Assert-Equal (Get-FixtureValue $chromeKey 'ProxySettings').data '' 'An empty ori
 Assert-Equal (Get-FixtureValue $chromeKey 'WebRtcIPHandling').data 'disable_non_proxied_udp' 'An existing WebRTC value is kept'
 Assert-Equal (Get-FixtureValue $chromeKey 'HomepageLocation').data 'https://example.com' 'Unrelated policies are untouched'
 
-# Изменение вне Helper после включения — сохраняется.
+# Изменение вне Helper после включения - сохраняется.
 Reset-Fixture
 $null = Enable-BrowserPolicy $chrome '127.0.0.1:8890'
 Set-FixtureValue $chromeKey 'ProxySettings' '{"ProxyMode":"direct"}'
@@ -126,7 +126,7 @@ Assert-Equal ((Get-FixtureValue $chromeKey 'ProxySettings').data -like '*127.0.0
 $null = Disable-BrowserPolicy $chrome
 Assert-Equal $script:Registry.Count 0 'Originals survive a listener switch'
 
-# Гонка: политику записали между проверкой и записью — не перетираем.
+# Гонка: политику записали между проверкой и записью - не перетираем.
 Reset-Fixture
 $script:ForeignWriteOnOwnerSave = '{"ProxyMode":"system"}'
 Assert-Throws { Enable-BrowserPolicy $chrome '127.0.0.1:8890' } '*изменилась во время настройки*' 'An intervening writer stops Enable'
@@ -143,7 +143,7 @@ Assert-Throws { Get-BrowserPolicyStatus $chrome } '*повреждена*' 'A da
 Set-FixtureValue $script:BrowserOwnerKey $chrome '{"owner":"ClodHelper","version":1,"server":"127.0.0.1:8890","original":{"ProxySettings":{"exists":true,"kind":"String","data":"{\"ProxyMode\":\"direct\"}"},"WebRtcIPHandling":{"exists":false,"kind":null,"data":null}}}'
 Assert-Throws { Get-BrowserPolicyStatus $chrome } '*повреждена*' 'A backup cannot restore an arbitrary proxy policy'
 
-# Другие браузеры — свои ключи политик.
+# Другие браузеры - свои ключи политик.
 Reset-Fixture
 $null = Enable-BrowserPolicy 'com.microsoft.Edge' '127.0.0.1:8890'
 Assert-Equal (Get-FixtureValue 'SOFTWARE\Policies\Microsoft\Edge' 'ProxySettings').data $ours 'Edge policy key'
@@ -164,7 +164,7 @@ $status = Disable-BrowserPolicy $chrome
 Assert-Equal $status.configured $false 'PAC policy is removed'
 Assert-Equal $null (Get-FixtureValue $chromeKey 'ProxySettings') 'Nothing remains after removing PAC policy'
 
-# «Весь трафик» → «Сайты»: WebRTC возвращается к исходному, политика — PAC.
+# «Весь трафик» → «Сайты»: WebRTC возвращается к исходному, политика - PAC.
 Reset-Fixture
 Set-FixtureValue $chromeKey 'WebRtcIPHandling' 'disable_non_proxied_udp'
 $null = Enable-BrowserPolicy $chrome '127.0.0.1:8890'

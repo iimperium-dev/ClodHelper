@@ -5,14 +5,14 @@ import { NotificationBell } from "./NotificationBell";
 
 /*
   Кастомный titlebar вместо нативной «брови» Windows (decorations: false).
-  - data-tauri-drag-region — перетаскивание окна (тянуть можно за бар и
-    за заголовок; кнопки без атрибута — клики работают как клики).
-  - Крестик прячет в трей (CloseRequested перехватывается в lib.rs) —
+  - data-tauri-drag-region - перетаскивание окна (тянуть можно за бар и
+    за заголовок; кнопки без атрибута - клики работают как клики).
+  - Крестик прячет в трей (CloseRequested перехватывается в lib.rs) -
     полный выход по-прежнему через меню трея.
-  - Кнопки в стиле Windows 11: широкие зоны, ховер; close — красный.
+  - Кнопки в стиле Windows 11: широкие зоны, ховер; close - красный.
 
   macOS: окно с нативным «светофором» поверх контента (titleBarStyle
-  Overlay в tauri.macos.conf.json) — свои кнопки не рисуем, бар остаётся
+  Overlay в tauri.macos.conf.json) - свои кнопки не рисуем, бар остаётся
   только drag-областью той же высоты.
 */
 export function Titlebar({ bell = true }: { bell?: boolean }) {

@@ -5,7 +5,7 @@ use serde::Serialize;
 use crate::settings::{self, SiteEntry};
 
 /// Домен из того, что вставил пользователь: «https://www.YouTube.com/watch?v=…»
-/// → «youtube.com». None — не похоже на домен.
+/// → «youtube.com». None - не похоже на домен.
 pub(crate) fn normalize_domain(input: &str) -> Option<String> {
     let s = input.trim();
     let s = s.split_once("://").map_or(s, |(_, rest)| rest);
@@ -14,7 +14,7 @@ pub(crate) fn normalize_domain(input: &str) -> Option<String> {
     let s = s.trim_start_matches("*.").trim_start_matches('.').trim_end_matches('.');
     // Порт отбрасываем (IPv6-литералы сайтам не нужны).
     let s = s.split(':').next().unwrap_or("");
-    // Кириллические домены — в punycode (мост сравнивает с CONNECT-хостом).
+    // Кириллические домены - в punycode (мост сравнивает с CONNECT-хостом).
     let host = url::Url::parse(&format!("http://{s}/")).ok()?.host_str()?.to_ascii_lowercase();
     let host = host.strip_prefix("www.").unwrap_or(&host).to_string();
     let label_ok = |l: &str| {
@@ -30,7 +30,7 @@ pub fn sites_get() -> Vec<SiteEntry> {
 }
 
 /// Сохранить сайты и переписать bridge-sites.json. Мост перечитывает файл
-/// сам за ~2 с — без перезапуска, стримы Claude не рвутся.
+/// сам за ~2 с - без перезапуска, стримы Claude не рвутся.
 #[tauri::command]
 pub async fn sites_set(sites: Vec<SiteEntry>) -> Result<Vec<SiteEntry>, String> {
     let mut clean = Vec::with_capacity(sites.len());
@@ -56,7 +56,7 @@ pub async fn sites_set(sites: Vec<SiteEntry>) -> Result<Vec<SiteEntry>, String> 
     tokio::task::spawn_blocking(crate::tasks::write_sites_file)
         .await
         .map_err(|e| format!("Внутренняя ошибка: {e}"))??;
-    // Мост перечитает файл за ~2 с — после этого PAC с новой меткой, чтобы
+    // Мост перечитает файл за ~2 с - после этого PAC с новой меткой, чтобы
     // браузеры запросили его заново. Фоном: окно не ждёт.
     std::thread::spawn(|| {
         std::thread::sleep(std::time::Duration::from_millis(2500));
@@ -83,7 +83,7 @@ pub async fn sites_proxy_extensions() -> Result<Vec<BrowserProxyExtensions>, Str
             .into_iter()
             .filter_map(|(name, path)| {
                 // Сайтам мешают только перехватчики прокси; снятая защита
-                // WebRTC — отдельная беда, о ней говорит строка браузера в «Приложениях».
+                // WebRTC - отдельная беда, о ней говорит строка браузера в «Приложениях».
                 let extensions: Vec<_> =
                     crate::browser_ext::proxy_extensions(&path).into_iter().filter(|e| !e.webrtc_only).collect();
                 (!extensions.is_empty()).then_some(BrowserProxyExtensions { name, path, extensions })
@@ -94,7 +94,7 @@ pub async fn sites_proxy_extensions() -> Result<Vec<BrowserProxyExtensions>, Str
     .map_err(|e| format!("Внутренняя ошибка: {e}"))
 }
 
-/// Открыть страницу расширения, чтобы его отключить. Путь — только из
+/// Открыть страницу расширения, чтобы его отключить. Путь - только из
 /// списка найденных браузеров: произвольный exe по команде UI не запускаем.
 #[tauri::command]
 pub async fn sites_open_extension(path: String, ext_id: String) -> Result<(), String> {
@@ -108,13 +108,13 @@ pub async fn sites_open_extension(path: String, ext_id: String) -> Result<(), St
     .map_err(|e| format!("Внутренняя ошибка: {e}"))?
 }
 
-/// Браузер для режима «Только в выбранных»: PAC моста — его политикой.
+/// Браузер для режима «Только в выбранных»: PAC моста - его политикой.
 #[derive(Debug, Serialize)]
 pub struct ScopeBrowser {
     pub domain: &'static str,
     pub name: String,
-    /// "pac" — сайты в этом браузере; "bridge" — весь трафик через мост
-    /// («Всегда через мост» в Приложениях); "off"; "conflict" — чужая политика.
+    /// "pac" - сайты в этом браузере; "bridge" - весь трафик через мост
+    /// («Всегда через мост» в Приложениях); "off"; "conflict" - чужая политика.
     pub state: &'static str,
     pub conflict: Option<String>,
 }
@@ -123,7 +123,7 @@ pub struct ScopeBrowser {
 pub struct SitesScope {
     /// Режим доступен (Windows).
     pub supported: bool,
-    /// true — «Только в выбранных браузерах», false — «Во всех».
+    /// true - «Только в выбранных браузерах», false - «Во всех».
     pub selected: bool,
     pub browsers: Vec<ScopeBrowser>,
 }
@@ -149,7 +149,7 @@ fn scope_browsers() -> Vec<ScopeBrowser> {
 
 fn scope_now() -> SitesScope {
     SitesScope {
-        // Windows — политика в реестре, macOS — Managed Preferences.
+        // Windows - политика в реестре, macOS - Managed Preferences.
         supported: cfg!(any(target_os = "windows", target_os = "macos")),
         selected: settings::load().sites_scope_selected,
         browsers: scope_browsers(),
@@ -162,8 +162,8 @@ pub async fn sites_scope_get() -> Result<SitesScope, String> {
 }
 
 /// Переключить режим: «во всех» (системная автонастройка) или «только в
-/// выбранных» (PAC моста политикой выбранных браузеров, остальные — вообще
-/// без Clod Helper и без лишней проверки каждого запроса). Политики — одним
+/// выбранных» (PAC моста политикой выбранных браузеров, остальные - вообще
+/// без Clod Helper и без лишней проверки каждого запроса). Политики - одним
 /// окном UAC; браузеры с «Всегда через мост» и с чужой политикой не трогаем.
 #[tauri::command]
 pub async fn sites_scope_set(selected: bool, browsers: Vec<String>) -> Result<SitesScope, String> {
@@ -215,7 +215,7 @@ pub async fn sites_bypass_candidates() -> Result<Vec<crate::browser_ext::BypassA
 /// Программа по выбранному exe (кнопка «Выбрать программу…»).
 #[tauri::command]
 pub fn sites_bypass_from_exe(path: String) -> Result<crate::browser_ext::BypassApp, String> {
-    let dir = crate::browser_ext::app_dir(&path).ok_or("Эту программу так не исключить — выберите exe внутри её папки")?;
+    let dir = crate::browser_ext::app_dir(&path).ok_or("Эту программу так не исключить - выберите exe внутри её папки")?;
     let name = std::path::Path::new(&path)
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
@@ -262,7 +262,7 @@ pub async fn system_pac_set(enable: bool) -> Result<crate::system_pac::SystemPac
 }
 
 /// Запись «Подсмотреть»: на её время PAC ведёт через мост весь трафик
-/// браузеров — иначе мост не увидит адресов, которых ещё нет в списке.
+/// браузеров - иначе мост не увидит адресов, которых ещё нет в списке.
 #[tauri::command]
 pub async fn sites_peek(active: bool) -> Result<(), String> {
     tokio::task::spawn_blocking(move || crate::system_pac::set_peek(active))
@@ -281,8 +281,8 @@ pub struct SitesBrowser {
     pub id: String,
     pub name: String,
     pub installed: bool,
-    /// "sites" — только AI и сайты (вход 8887); "all" — весь трафик через
-    /// прокси; "ai" — мост старый, только AI-сайты на общем входе.
+    /// "sites" - только AI и сайты (вход 8887); "all" - весь трафик через
+    /// прокси; "ai" - мост старый, только AI-сайты на общем входе.
     pub mode: &'static str,
 }
 
@@ -336,8 +336,8 @@ pub struct SeenHosts {
 }
 
 /// «Подсмотреть»: хосты со входа сайтов, к которым ходили с момента `since`
-/// (миллисекунды по часам моста — их отдаёт тот же ответ в now_ms).
-/// `reset` — начать запись с чистого листа (мост ≥1.10.2 забывает прежние
+/// (миллисекунды по часам моста - их отдаёт тот же ответ в now_ms).
+/// `reset` - начать запись с чистого листа (мост ≥1.10.2 забывает прежние
 /// хосты; старый параметр игнорирует).
 #[tauri::command]
 pub async fn sites_hosts(since: u64, reset: Option<bool>) -> Result<SeenHosts, String> {
@@ -351,7 +351,7 @@ pub async fn sites_hosts(since: u64, reset: Option<bool>) -> Result<SeenHosts, S
         .get(format!("http://127.0.0.1:{}/hosts?since={since}{reset}", crate::tasks::SITES_PORT))
         .send()
         .await
-        .map_err(|_| "Вход сайтов моста не отвечает — обновите мост или перезапустите его".to_string())?
+        .map_err(|_| "Вход сайтов моста не отвечает - обновите мост или перезапустите его".to_string())?
         .json::<SeenHosts>()
         .await
         .map_err(|e| format!("Не удалось разобрать ответ моста: {e}"))

@@ -27,7 +27,7 @@ pub fn show_main_window(app: AppHandle) {
     crate::show_main_window(&app);
 }
 
-/// Полный выход из GUI. Мост — отдельный процесс, он продолжает работать.
+/// Полный выход из GUI. Мост - отдельный процесс, он продолжает работать.
 #[tauri::command]
 pub fn quit_app(app: AppHandle) {
     app.exit(0);
@@ -35,7 +35,7 @@ pub fn quit_app(app: AppHandle) {
 
 #[tauri::command]
 pub async fn settings_set_proxy(url: String) -> Result<Settings, String> {
-    // 1) Validate proxy first — fail fast.
+    // 1) Validate proxy first - fail fast.
     proxy::parse(&url)?;
 
     // 2) Persist to settings.json.

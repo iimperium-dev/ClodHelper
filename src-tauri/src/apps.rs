@@ -3,11 +3,11 @@
 //! Модель: каждый профиль знает КАК его запустить (обычный exe с флагом
 //! `--proxy-server`, MSIX-приложение через `shell:AppsFolder`, или кастомный
 //! exe добавленный пользователем) и КАКИЕ процессы блокировать при killswitch
-//! (сам процесс + его сетевые дети — node/git/python/агентный рантайм).
+//! (сам процесс + его сетевые дети - node/git/python/агентный рантайм).
 //!
 //! Зачем `process_names` отдельно от пути запуска: killswitch-файрвол вешаем
 //! по ИМЕНИ процесса, а не по полному пути. MSIX-приложения (Codex, Claude
-//! Desktop) живут в `C:\Program Files\WindowsApps\<pkg>_<ВЕРСИЯ>_...` —
+//! Desktop) живут в `C:\Program Files\WindowsApps\<pkg>_<ВЕРСИЯ>_...` -
 //! версионированный путь меняется при каждом апдейте из Store, и правило по
 //! пути отвалилось бы. Имя (`ChatGPT.exe`) переживает апдейты.
 
@@ -41,10 +41,10 @@ pub struct AppProfile {
     /// Имя для UI («VS Code», «ChatGPT Codex»).
     pub name: String,
     pub kind: LaunchKind,
-    /// Для ExeFlag/Custom — полный путь к exe. Для Msix — None.
+    /// Для ExeFlag/Custom - полный путь к exe. Для Msix - None.
     #[serde(default)]
     pub exe_path: Option<String>,
-    /// Для Msix — AppUserModelID (`OpenAI.Codex_2p2nqsd0c76g0!App`). Иначе None.
+    /// Для Msix - AppUserModelID (`OpenAI.Codex_2p2nqsd0c76g0!App`). Иначе None.
     #[serde(default)]
     pub app_id: Option<String>,
     /// Имена процессов для killswitch-файрвола (сам процесс + сетевые дети).
@@ -58,21 +58,21 @@ pub struct AppProfile {
     #[serde(default)]
     pub builtin: bool,
     /// Убран пользователем из списка (встроенные не удаляются, а прячутся;
-    /// вернуть — через «Добавить»).
+    /// вернуть - через «Добавить»).
     #[serde(default)]
     pub hidden: bool,
     /// Свой прокси из пула (индекс) для приложений, запускаемых с
-    /// --proxy-server (VS Code, свои программы). None — «Авто».
+    /// --proxy-server (VS Code, свои программы). None - «Авто».
     /// Для Claude / Codex / Telegram выбор хранится в назначениях сервисов.
     #[serde(default)]
     pub proxy: Option<usize>,
     /// Весь трафик через прокси (true) или только AI-сайты (false).
-    /// None — по умолчанию: свои программы целиком, встроенные — только AI.
+    /// None - по умолчанию: свои программы целиком, встроенные - только AI.
     #[serde(default)]
     pub full_proxy: Option<bool>,
 }
 
-/// Runtime-статус профиля для UI — найдено ли приложение на этом ПК.
+/// Runtime-статус профиля для UI - найдено ли приложение на этом ПК.
 #[derive(Debug, Clone, Serialize)]
 pub struct AppProfileStatus {
     pub id: String,
@@ -94,12 +94,12 @@ pub struct AppProfileStatus {
 
 // ─── Пресеты ─────────────────────────────────────────────────────
 
-/// Встроенные пресеты. Пути/AppID НЕ хардкодим намертво — при первом запросе
+/// Встроенные пресеты. Пути/AppID НЕ хардкодим намертво - при первом запросе
 /// пробуем найти на диске; в settings храним то что нашли (или None).
 #[cfg(not(target_os = "windows"))]
 pub fn builtin_presets() -> Vec<AppProfile> {
-    // macOS: все профили — обычные .app (exe_path = путь к бандлу), запуск
-    // через `open -a … --args --proxy-server`. process_names — для единообразия
+    // macOS: все профили - обычные .app (exe_path = путь к бандлу), запуск
+    // через `open -a … --args --proxy-server`. process_names - для единообразия
     // UI: killswitch на macOS недоступен.
     vec![
         crate::claude_desktop::preset(),
@@ -190,9 +190,9 @@ pub fn builtin_presets() -> Vec<AppProfile> {
             kind: LaunchKind::Msix,
             exe_path: None,
             app_id: find_codex_app_id(),
-            // Codex — Electron в MSIX: main-процесс ChatGPT.exe + встроенный
+            // Codex - Electron в MSIX: main-процесс ChatGPT.exe + встроенный
             // агентный рантайм (node.exe, codex.exe, codex-command-runner.exe).
-            // Блокируем ВСЕ — иначе агент утечёт мимо моста своим node.
+            // Блокируем ВСЕ - иначе агент утечёт мимо моста своим node.
             process_names: vec![
                 "ChatGPT.exe".into(),
                 "Codex.exe".into(),
@@ -207,8 +207,8 @@ pub fn builtin_presets() -> Vec<AppProfile> {
             proxy: None,
             full_proxy: None,
         },
-        // Telegram Desktop: ходит через SOCKS-вход моста (настройка — в его
-        // окне прокси по ссылке tg://socks), «Открыть» — без параметров.
+        // Telegram Desktop: ходит через SOCKS-вход моста (настройка - в его
+        // окне прокси по ссылке tg://socks), «Открыть» - без параметров.
         AppProfile {
             id: TELEGRAM_ID.into(),
             name: "Telegram".into(),
@@ -229,7 +229,7 @@ pub fn builtin_presets() -> Vec<AppProfile> {
 /// папка вроде D:\Telegram Desktop), обычные папки, обработчик ссылок tg://;
 /// затем «Приложения и возможности» и запущенный Telegram.exe (переносная
 /// копия). Обработчик tg:// перезаписывает каждый запущенный Telegram, и при
-/// втором аккаунте (копия exe под другим именем) он указывает на копию —
+/// втором аккаунте (копия exe под другим именем) он указывает на копию -
 /// поэтому от него берём только Telegram.exe. Кэш 30 с: детект идёт при
 /// каждом чтении настроек.
 #[cfg(target_os = "windows")]
@@ -266,7 +266,7 @@ pub fn find_telegram_exe() -> Option<PathBuf> {
 }
 
 /// Telegram.exe по записи его установщика (Inno Setup, AppId Telegram
-/// Desktop) — прямое чтение одного ключа реестра.
+/// Desktop) - прямое чтение одного ключа реестра.
 #[cfg(target_os = "windows")]
 fn telegram_installer_entry() -> Option<PathBuf> {
     const KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{53F49750-6209-4FBF-9CA8-7A333C87D1ED}_is1";
@@ -281,7 +281,7 @@ fn telegram_installer_entry() -> Option<PathBuf> {
     })
 }
 
-/// Exe обработчика ссылок tg:// (HKCU) — чтение реестра, микросекунды.
+/// Exe обработчика ссылок tg:// (HKCU) - чтение реестра, микросекунды.
 /// Им может быть и копия Telegram под другим именем.
 #[cfg(target_os = "windows")]
 fn telegram_link_handler() -> Option<PathBuf> {
@@ -310,9 +310,9 @@ fn running_exes(matches: impl Fn(&str, &Path) -> bool) -> Vec<PathBuf> {
 }
 
 /// Другие запущенные Telegram Desktop, кроме `main`: копии под своим именем
-/// (второй аккаунт — «Vtoroy-Acc.exe» в отдельной папке) и другие установки.
+/// (второй аккаунт - «Vtoroy-Acc.exe» в отдельной папке) и другие установки.
 /// Узнаём по описанию файла, а не по имени; читаем его только у тех, рядом с
-/// кем лежит папка данных Telegram «tdata» (у копии она своя), — чтение
+/// кем лежит папка данных Telegram «tdata» (у копии она своя), - чтение
 /// версий всех процессов заняло бы секунду.
 #[cfg(target_os = "windows")]
 pub fn other_running_telegrams(main: &str) -> Vec<PathBuf> {
@@ -368,8 +368,8 @@ pub fn find_vscode_exe() -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.exists())
 }
 
-/// AppUserModelID установленного Codex в форме `<PackageFamilyName>!App` —
-/// этим запускается MSIX. Пакет — из реестра пакетов пользователя (не
+/// AppUserModelID установленного Codex в форме `<PackageFamilyName>!App` -
+/// этим запускается MSIX. Пакет - из реестра пакетов пользователя (не
 /// Get-AppxPackage: тот стоит секунды, а статусы опрашиваются постоянно).
 #[cfg(not(target_os = "windows"))]
 pub fn find_codex_app_id() -> Option<String> {
@@ -395,7 +395,7 @@ fn profile_installed(p: &AppProfile) -> (bool, Option<String>) {
     }
     match p.kind {
         LaunchKind::ExeFlag | LaunchKind::Custom => {
-            // Пресет мог быть сохранён без пути (не найден при установке) —
+            // Пресет мог быть сохранён без пути (не найден при установке) -
             // перепроверяем детектом на случай если приложение поставили позже.
             let path = p
                 .exe_path
@@ -423,7 +423,7 @@ fn profile_installed(p: &AppProfile) -> (bool, Option<String>) {
 }
 
 /// Файл программы профиля на этом ПК (exe или .app): сохранённый путь или
-/// найденный детектом. None — не найдена или известна только как AppID.
+/// найденный детектом. None - не найдена или известна только как AppID.
 pub fn profile_file(p: &AppProfile) -> Option<String> {
     let exists = |s: &String| Path::new(s).exists();
     p.exe_path.clone().filter(exists).or_else(|| {
@@ -455,7 +455,7 @@ pub fn same_path(a: &str, b: &str) -> bool {
 
 /// Рабочий стол через известную папку Windows (dirs → SHGetKnownFolderPath):
 /// при OneDrive Known Folder Move реальный Desktop лежит в OneDrive, и сырой
-/// `USERPROFILE\Desktop` его не видит — ярлык «не находился», а запуск падал
+/// `USERPROFILE\Desktop` его не видит - ярлык «не находился», а запуск падал
 /// в fallback без прокси.
 pub fn desktop_dir() -> Option<PathBuf> {
     dirs::desktop_dir().or_else(|| {
@@ -505,21 +505,21 @@ pub fn statuses(profiles: &[AppProfile]) -> Vec<AppProfileStatus> {
 // ─── Запуск ──────────────────────────────────────────────────────
 
 /// Весь трафик приложения через прокси? Своё приложение (браузер) и AI-
-/// клиенты (Codex) — по умолчанию целиком: иначе вход через Google, проверка
+/// клиенты (Codex) - по умолчанию целиком: иначе вход через Google, проверка
 /// «я не робот», сбор ошибок и статистики уходили напрямую, с настоящим IP и
-/// DNS провайдера. Редакторы (VS Code) — только AI-сайты (умный общий вход).
+/// DNS провайдера. Редакторы (VS Code) - только AI-сайты (умный общий вход).
 pub fn full_proxy_of(p: &AppProfile) -> bool {
     p.full_proxy
         .unwrap_or(p.kind == LaunchKind::Custom || service_group_of(p).is_some())
 }
 
-/// Группа сервиса, чей прокси — прокси приложения целиком (назначение в
+/// Группа сервиса, чей прокси - прокси приложения целиком (назначение в
 /// «Прокси»). Claude Desktop сюда не входит: у него свой строгий вход 8890.
 fn service_group_of(p: &AppProfile) -> Option<&'static str> {
     (p.id == "codex").then_some("openai")
 }
 
-/// Закреплённый вход прокси, назначенного группе сервиса (нет назначения —
+/// Закреплённый вход прокси, назначенного группе сервиса (нет назначения -
 /// основной №0). Так «весь трафик» Codex идёт с IP OpenAI, а не с IP Claude,
 /// как было бы на строгом входе 8890.
 fn group_pin_port(group: &str, s: &crate::settings::Settings, pool: usize) -> Option<u16> {
@@ -542,8 +542,8 @@ pub fn launch_proxy_url(p: &AppProfile) -> String {
             format!("http://127.0.0.1:{}", crate::tasks::PIN_PORT_BASE + i as u16)
         }
         _ if full_proxy_of(p) => match service_group_of(p) {
-            // Строгий вход 8890 ходит с IP Claude — AI-клиенту другого
-            // сервиса туда нельзя. Нет закреплённых входов (старый мост) —
+            // Строгий вход 8890 ходит с IP Claude - AI-клиенту другого
+            // сервиса туда нельзя. Нет закреплённых входов (старый мост) -
             // общий вход: домены сервиса там всё равно идут через его прокси.
             Some(group) => match group_pin_port(group, &settings, pool).filter(|_| pinned_listeners_available()) {
                 Some(port) => format!("http://127.0.0.1:{port}"),
@@ -551,7 +551,7 @@ pub fn launch_proxy_url(p: &AppProfile) -> String {
             },
             None => crate::claude_policy::PROXY_URL.to_string(),
         },
-        // VS Code и прочие — на общий вход: терминальный режим «всё через
+        // VS Code и прочие - на общий вход: терминальный режим «всё через
         // прокси» должен действовать и в их терминалах.
         _ if is_chromium_browser(p) && sites_listener_available() => {
             format!("http://127.0.0.1:{}", crate::tasks::SITES_PORT)
@@ -560,7 +560,7 @@ pub fn launch_proxy_url(p: &AppProfile) -> String {
     }
 }
 
-/// Профиль — Chromium-браузер (Chrome, Edge, Brave, Chromium).
+/// Профиль - Chromium-браузер (Chrome, Edge, Brave, Chromium).
 pub fn is_chromium_browser(p: &AppProfile) -> bool {
     p.exe_path.as_deref().and_then(crate::browser_policy::policy_domain).is_some()
 }
@@ -599,17 +599,17 @@ pub fn sites_listener_available() -> bool {
 }
 
 /// WebRTC (звонки, видео в браузере) ходит по UDP к STUN-серверам мимо
-/// любого HTTP-прокси — сайты так видят настоящий IP (ipleak: «WebRTC
+/// любого HTTP-прокси - сайты так видят настоящий IP (ipleak: «WebRTC
 /// detection»). Флаги запрещают WebRTC ходить мимо прокси. Проверено вживую
 /// (STUN-кандидаты): Chrome и Edge слушают только первый флаг, движок
-/// Chromium без браузерной части — только второй (`force-`), поэтому оба.
-/// Electron (Claude Desktop, Codex) не передаёт ни один в процессы страниц —
+/// Chromium без браузерной части - только второй (`force-`), поэтому оба.
+/// Electron (Claude Desktop, Codex) не передаёт ни один в процессы страниц -
 /// их закрывает запрет UDP в защите от утечек (leak-guard.ps1).
 const WEBRTC_FLAGS: [&str; 2] = [
     "--webrtc-ip-handling-policy=disable_non_proxied_udp",
     "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
 ];
-/// Те же флаги одной строкой — для ярлыков и команд оболочки.
+/// Те же флаги одной строкой - для ярлыков и команд оболочки.
 const WEBRTC_GUARD: &str =
     "--webrtc-ip-handling-policy=disable_non_proxied_udp --force-webrtc-ip-handling-policy=disable_non_proxied_udp";
 
@@ -645,10 +645,10 @@ fn local_proxy_url() -> String {
 ///   Дочерние процессы (терминал, node, git) наследуют env → Claude Code
 ///   внутри VS Code проксируется автоматически.
 /// Msix: активируем через ярлык `.lnk` (несёт `--proxy-server`), если он есть;
-///   иначе — голая MSIX-активация (UI-прокси может не подхватиться, но
+///   иначе - голая MSIX-активация (UI-прокси может не подхватиться, но
 ///   killswitch-файрвол всё равно держит трафик в мосте).
 /// Приложение уже открыто мимо моста: настройки прокси применяются только при
-/// старте, поэтому закрываем его штатно (как Cmd+Q — с вопросами о
+/// старте, поэтому закрываем его штатно (как Cmd+Q - с вопросами о
 /// несохранённом) и запускаем заново через мост.
 #[cfg(not(target_os = "windows"))]
 pub fn relaunch(p: &AppProfile) -> Result<(), String> {
@@ -680,7 +680,7 @@ pub fn relaunch(p: &AppProfile) -> Result<(), String> {
             std::thread::sleep(std::time::Duration::from_millis(500));
         }
         if is_running() {
-            return Err(format!("{} не закрылся — закройте его и нажмите «Открыть»", p.name));
+            return Err(format!("{} не закрылся - закройте его и нажмите «Открыть»", p.name));
         }
         // Chromium-браузер: вернуть все окна и вкладки, как было до закрытия
         // (на Windows это делает закрытие «как перед обновлением системы»).
@@ -692,9 +692,9 @@ pub fn relaunch(p: &AppProfile) -> Result<(), String> {
 }
 
 /// Windows: закрыть так же, как Windows закрывает программы для обновления
-/// (win::end_session — программа сохраняет состояние и выходит), дождаться
+/// (win::end_session - программа сохраняет состояние и выходит), дождаться
 /// выхода и запустить через мост. Кто после этого не вышел сам (Electron
-/// ждёт, что его завершит система), — завершаем: состояние уже сохранено.
+/// ждёт, что его завершит система), - завершаем: состояние уже сохранено.
 /// Трогаем только главный процесс программы (по пути к exe): не node.exe
 /// Codex и не claude.exe Claude Code в терминалах.
 #[cfg(target_os = "windows")]
@@ -706,7 +706,7 @@ pub fn relaunch(p: &AppProfile) -> Result<(), String> {
     }) else {
         return launch(p);
     };
-    // Claude Desktop из Store: в профиле — AppID, путь к exe — из детекта.
+    // Claude Desktop из Store: в профиле - AppID, путь к exe - из детекта.
     let exe = if p.id == crate::claude_desktop::PROFILE_ID {
         crate::claude_desktop::detect().map(|i| i.exe_path)
     } else {
@@ -721,7 +721,7 @@ pub fn relaunch(p: &AppProfile) -> Result<(), String> {
         }
         pids().is_empty()
     };
-    let not_closed = || format!("{} не закрылся — закройте его и нажмите «Открыть»", p.name);
+    let not_closed = || format!("{} не закрылся - закройте его и нажмите «Открыть»", p.name);
     let running = pids();
     if running.is_empty() {
         return launch(p);
@@ -778,7 +778,7 @@ pub(crate) fn kill_pids(pids: &[u32]) {
 }
 
 pub fn launch(p: &AppProfile) -> Result<(), String> {
-    // Claude Desktop или Codex обновились из Store — запрет UDP (WebRTC)
+    // Claude Desktop или Codex обновились из Store - запрет UDP (WebRTC)
     // переезжает на новый exe до запуска, иначе новая версия ходит мимо него.
     if p.id == crate::claude_desktop::PROFILE_ID {
         crate::leak_guard::refresh_if_stale("claude");
@@ -797,28 +797,28 @@ pub fn launch(p: &AppProfile) -> Result<(), String> {
     }
 }
 
-/// `extra` — дополнительные флаги запуска (например, восстановить сессию).
+/// `extra` - дополнительные флаги запуска (например, восстановить сессию).
 fn launch_exe(p: &AppProfile, extra: &[&str]) -> Result<(), String> {
     let (installed, location) = profile_installed(p);
     if !installed {
         return Err(format!("{} не найден на этом ПК", p.name));
     }
     let exe = location.ok_or_else(|| format!("Путь к {} не определён", p.name))?;
-    // Свои программы (браузер и т.п.) — ЦЕЛИКОМ через прокси: строгий вход
+    // Свои программы (браузер и т.п.) - ЦЕЛИКОМ через прокси: строгий вход
     // 8890 без DIRECT. Общий вход в умном режиме пускал бы не-AI сайты
     // напрямую (2ip.io показывал IP пользователя), а человек, добавивший
     // браузер, ждёт, что весь браузер идёт через прокси.
     let proxy = launch_proxy_url(p);
 
     // Терминал VS Code (и Claude Code в нём) покрывается глобальными User
-    // env-переменными (env_proxy.rs) — правка settings.json больше не нужна.
+    // env-переменными (env_proxy.rs) - правка settings.json больше не нужна.
 
     // macOS: бандл запускаем через LaunchServices. Env через `open` не
-    // передаётся — его дают глобальные переменные (launchctl setenv).
+    // передаётся - его дают глобальные переменные (launchctl setenv).
     #[cfg(not(target_os = "windows"))]
     {
         if p.id == TELEGRAM_ID {
-            // Прокси Telegram — в его собственных настройках (SOCKS моста):
+            // Прокси Telegram - в его собственных настройках (SOCKS моста):
             // флаги командной строки он не понимает.
             let ok = Command::new("/usr/bin/open")
                 .arg("-a")
@@ -834,7 +834,7 @@ fn launch_exe(p: &AppProfile, extra: &[&str]) -> Result<(), String> {
     }
 
     if p.id == TELEGRAM_ID {
-        // Прокси Telegram — в его настройках (SOCKS моста), флагов он не знает.
+        // Прокси Telegram - в его настройках (SOCKS моста), флагов он не знает.
         let mut cmd = Command::new(&exe);
         apply_no_window(&mut cmd);
         cmd.spawn().map_err(|e| format!("Не удалось запустить Telegram: {e}"))?;
@@ -849,7 +849,7 @@ fn launch_exe(p: &AppProfile, extra: &[&str]) -> Result<(), String> {
     cmd.env("HTTPS_PROXY", &proxy);
     cmd.env("http_proxy", &proxy);
     cmd.env("https_proxy", &proxy);
-    // NO_PROXY: локалхост и служебные — не гонять через мост.
+    // NO_PROXY: локалхост и служебные - не гонять через мост.
     cmd.env("NO_PROXY", "localhost,127.0.0.1,::1");
     apply_no_window(&mut cmd);
     cmd.spawn()
@@ -859,7 +859,7 @@ fn launch_exe(p: &AppProfile, extra: &[&str]) -> Result<(), String> {
 
 /// Windows: открыть адрес в браузере с теми же флагами, что и «Открыть».
 /// Уже запущенный браузер флаги игнорирует и открывает адрес вкладкой; не
-/// запущенный — стартует сразу через мост, а не мимо него.
+/// запущенный - стартует сразу через мост, а не мимо него.
 #[cfg(target_os = "windows")]
 pub fn open_in_browser(p: &AppProfile, url: &str) -> Result<(), String> {
     let (installed, location) = profile_installed(p);
@@ -885,7 +885,7 @@ pub(crate) fn open_app(app: &str, proxy: &str, name: &str) -> Result<(), String>
 /// open_app с дополнительными флагами запуска.
 #[cfg(not(target_os = "windows"))]
 fn open_app_with(app: &str, proxy: &str, name: &str, extra: &[&str]) -> Result<(), String> {
-    // Защита WebRTC в профилях — пока браузер закрыт (флаг ниже соблюдают не все).
+    // Защита WebRTC в профилях - пока браузер закрыт (флаг ниже соблюдают не все).
     if crate::browser_ext::is_chromium_browser(app) && !crate::browser_ext::bundle_running(app) {
         let n = crate::browser_ext::guard_webrtc_prefs(app);
         if n > 0 {
@@ -912,23 +912,23 @@ fn open_app_with(app: &str, proxy: &str, name: &str, extra: &[&str]) -> Result<(
 }
 
 fn launch_msix(p: &AppProfile) -> Result<(), String> {
-    // MSIX-приложение (Codex) НЕ проксируется через `shell:AppsFolder` —
+    // MSIX-приложение (Codex) НЕ проксируется через `shell:AppsFolder` -
     // активатор глотает аргументы, а Electron/Chromium НЕ читает env-прокси
     // (только `--proxy-server`). Проверено вживую: `shell:AppsFolder` → Codex
     // идёт мимо моста.
     //
     // Рабочий способ (подтверждён): запустить главный exe ПРЯМО из папки
     // установленного пакета WindowsApps с флагом `--proxy-server`. Путь
-    // версионированный — резолвим на лету через Get-AppxPackage, поэтому
+    // версионированный - резолвим на лету через Get-AppxPackage, поэтому
     // апдейт Store не ломает. Тест: 4 соединения к мосту, 0 прямых.
-    // Вход — как у остальных: выбранный прокси, «весь трафик» или умный.
+    // Вход - как у остальных: выбранный прокси, «весь трафик» или умный.
     let proxy = launch_proxy_url(p);
 
     if let Some(exe) = msix_main_exe(p) {
         let mut cmd = Command::new(&exe);
         cmd.arg(format!("--proxy-server={proxy}"));
         cmd.args(WEBRTC_FLAGS);
-        // env — на случай если рантайм внутри (node/codex) читает их.
+        // env - на случай если рантайм внутри (node/codex) читает их.
         cmd.env("HTTP_PROXY", &proxy);
         cmd.env("HTTPS_PROXY", &proxy);
         cmd.env("http_proxy", &proxy);
@@ -940,7 +940,7 @@ fn launch_msix(p: &AppProfile) -> Result<(), String> {
         return Ok(());
     }
 
-    // Fallback: если не нашли exe в пакете — голая активация (без прокси, но
+    // Fallback: если не нашли exe в пакете - голая активация (без прокси, но
     // хотя бы откроется; killswitch подстрахует от утечки).
     let app_id = p
         .app_id
@@ -962,7 +962,7 @@ fn launch_msix(p: &AppProfile) -> Result<(), String> {
 }
 
 /// Найти главный exe MSIX-приложения в установленном пакете (для прямого
-/// запуска с `--proxy-server`). Путь версионированный — резолвим каждый раз.
+/// запуска с `--proxy-server`). Путь версионированный - резолвим каждый раз.
 fn msix_main_exe(p: &AppProfile) -> Option<PathBuf> {
     let root = if p.id == "codex" {
         codex_install_root()?
@@ -973,7 +973,7 @@ fn msix_main_exe(p: &AppProfile) -> Option<PathBuf> {
         appx_install_location(family)?
     };
     // Главный exe: у Codex это app\ChatGPT.exe. Ищем первый .exe с именем из
-    // process_names (первое имя = главный процесс), иначе — эвристикой.
+    // process_names (первое имя = главный процесс), иначе - эвристикой.
     let main_name = p
         .process_names
         .first()
@@ -1021,14 +1021,14 @@ pub enum ShortcutTarget {
 /// Создать ярлык «<name> (proxy)» на рабочем столе или закрепить в панель задач.
 ///
 /// Ярлык несёт `--proxy-server=http://127.0.0.1:<port>` в аргументах и, для
-/// exe-приложений, задаёт рабочую среду. Для MSIX цель ярлыка — сам
+/// exe-приложений, задаёт рабочую среду. Для MSIX цель ярлыка - сам
 /// `shell:AppsFolder\<app_id>`, аргумент прокси добавляется в поле Arguments.
 ///
-/// Реализовано через PowerShell (WScript.Shell.CreateShortcut) — нативно, без
+/// Реализовано через PowerShell (WScript.Shell.CreateShortcut) - нативно, без
 /// сторонних зависимостей. Возвращает путь к созданному ярлыку.
 ///
 /// macOS: `.app`-обёртка (см. macos::create_app_wrapper) на рабочем столе или
-/// в `~/Applications` («Программы» — оттуда её можно перетащить в Dock).
+/// в `~/Applications` («Программы» - оттуда её можно перетащить в Dock).
 #[cfg(not(target_os = "windows"))]
 pub fn create_shortcut(
     p: &AppProfile,
@@ -1038,7 +1038,7 @@ pub fn create_shortcut(
 
     let (installed, location) = profile_installed(p);
     if !installed {
-        return Err(format!("{} не найден — сначала установите приложение", p.name));
+        return Err(format!("{} не найден - сначала установите приложение", p.name));
     }
     let app = location.ok_or_else(|| "Нет пути к приложению".to_string())?;
     let body = if p.id == crate::claude_desktop::PROFILE_ID {
@@ -1079,12 +1079,12 @@ pub fn create_shortcut(
 ) -> Result<String, String> {
     if p.id == crate::claude_desktop::PROFILE_ID {
         let installation = crate::claude_desktop::detect_fresh()?
-            .ok_or_else(|| "Claude Desktop не найден — сначала установите приложение".to_string())?;
+            .ok_or_else(|| "Claude Desktop не найден - сначала установите приложение".to_string())?;
         let launcher = crate::claude_desktop::install_launcher()?;
         let system32 = std::env::var("SystemRoot")
             .map(|root| PathBuf::from(root).join("System32"))
             .map_err(|_| "Не найдена папка Windows".to_string())?;
-        // conhost --headless: когда консоль по умолчанию — Windows Terminal,
+        // conhost --headless: когда консоль по умолчанию - Windows Terminal,
         // -WindowStyle Hidden не прячет его вкладку; headless-conhost окна не создаёт.
         let conhost = system32.join("conhost.exe");
         let powershell = system32.join("WindowsPowerShell/v1.0/powershell.exe");
@@ -1102,7 +1102,7 @@ pub fn create_shortcut(
     }
     let (installed, location) = profile_installed(p);
     if !installed {
-        return Err(format!("{} не найден — сначала установите приложение", p.name));
+        return Err(format!("{} не найден - сначала установите приложение", p.name));
     }
     let proxy = launch_proxy_url(p);
 
@@ -1114,7 +1114,7 @@ pub fn create_shortcut(
         }
         LaunchKind::Msix => {
             // Ярлык на ПРЯМОЙ exe пакета с флагом --proxy-server (как в launch)
-            // — только так Codex реально проксируется. shell:AppsFolder аргумент
+            // - только так Codex реально проксируется. shell:AppsFolder аргумент
             // глотает. Путь версионированный, но ярлык одноразовый; при апдейте
             // Store пользователь пересоздаёт (или запускает через «Открыть»).
             let exe = msix_main_exe(p)
@@ -1149,7 +1149,7 @@ fn run_create_shortcut_ps(
     // Desktop: .lnk в папку рабочего стола.
     // StartMenu: .lnk в пользовательскую папку Programs меню Пуск + открываем
     //   папку, чтобы пользователь мог правым кликом «Закрепить на панели задач»
-    //   (на Win11 это единственный рабочий путь — программный pin удалён).
+    //   (на Win11 это единственный рабочий путь - программный pin удалён).
     let script = match target {
         ShortcutTarget::Desktop => format!(
             "$ws = New-Object -ComObject WScript.Shell; \
@@ -1218,7 +1218,7 @@ fn run_create_shortcut_ps(
 ///
 /// Возвращает уникальный список существующих путей.
 pub fn resolve_process_paths(enabled_profiles: &[AppProfile]) -> Vec<String> {
-    // macOS: killswitch недоступен (firewall_stub.rs) — путей не ищем.
+    // macOS: killswitch недоступен (firewall_stub.rs) - путей не ищем.
     if cfg!(not(target_os = "windows")) {
         return Vec::new();
     }
@@ -1277,7 +1277,7 @@ pub fn resolve_process_paths(enabled_profiles: &[AppProfile]) -> Vec<String> {
                     }
                 }
                 _ => {
-                    // Кастомный профиль: если у него есть exe_path — блокируем его.
+                    // Кастомный профиль: если у него есть exe_path - блокируем его.
                     if let Some(ep) = &prof.exe_path {
                         push(ep.clone());
                     }
@@ -1311,7 +1311,7 @@ pub fn codex_main_exe() -> Option<PathBuf> {
 }
 
 /// Найти все файлы с именем `name` рекурсивно в `dir` (для MSIX-рантаймов).
-/// Ограничиваем глубину и кол-во — WindowsApps может быть большой.
+/// Ограничиваем глубину и кол-во - WindowsApps может быть большой.
 fn find_in_dir(dir: &std::path::Path, name: &str) -> Vec<String> {
     let out = run_silent(
         "powershell.exe",
@@ -1396,13 +1396,13 @@ fn run_silent(program: &str, args: &[&str]) -> Option<String> {
 pub struct FoundApp {
     pub name: String,
     pub path: String,
-    /// Иконка (data-URL PNG) сразу с ответом — чтобы подсказка не
-    /// «допрыгивала» иконкой следом (Windows; на macOS — отдельным запросом).
+    /// Иконка (data-URL PNG) сразу с ответом - чтобы подсказка не
+    /// «допрыгивала» иконкой следом (Windows; на macOS - отдельным запросом).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
 }
 
-/// Кириллица → латиница: «телег» находит Telegram, «хром» — Chrome.
+/// Кириллица → латиница: «телег» находит Telegram, «хром» - Chrome.
 fn translit(q: &str) -> String {
     const MAP: &[(char, &str)] = &[
         ('а', "a"), ('б', "b"), ('в', "v"), ('г', "g"), ('д', "d"), ('е', "e"), ('ё', "e"),
@@ -1417,7 +1417,7 @@ fn translit(q: &str) -> String {
         .collect()
 }
 
-/// Чем выше — тем лучше совпадение: начало имени > начало слова > внутри.
+/// Чем выше - тем лучше совпадение: начало имени > начало слова > внутри.
 fn match_score(name: &str, needles: &[String]) -> Option<u32> {
     let n = name.to_lowercase();
     needles
@@ -1457,7 +1457,7 @@ fn rank_found(mdfind_out: &str, query: &str, home: &str) -> Vec<FoundApp> {
             None => continue,
         };
         // Служебные программы внутри других бандлов, системные потроха и
-        // резервные копии в ~/Library — не то, что человек ищет.
+        // резервные копии в ~/Library - не то, что человек ищет.
         let inner = path.trim_end_matches(".app");
         if inner.contains(".app/")
             || path.starts_with("/System/Library")
@@ -1489,7 +1489,7 @@ fn rank_found(mdfind_out: &str, query: &str, home: &str) -> Vec<FoundApp> {
 
 /// Поиск среди установленных программ через Spotlight: берём все бандлы
 /// приложений разом (с именами как в Finder, в т.ч. «Терминал») и ранжируем
-/// сами — так работают и транслит («телег»), и первые буквы слов («vsc»).
+/// сами - так работают и транслит («телег»), и первые буквы слов («vsc»).
 #[cfg(not(target_os = "windows"))]
 pub fn search_installed(query: &str) -> Vec<FoundApp> {
     let q = query.trim();
@@ -1523,8 +1523,8 @@ pub fn search_installed(query: &str) -> Vec<FoundApp> {
 }
 
 /// Windows: ярлыки меню «Пуск» (общие и пользователя) и «Приложения и
-/// возможности» — то, что человек видит как установленные программы
-/// (Telegram в своей папке без ярлыка в «Пуске» — тоже). Ярлыки разбираем
+/// возможности» - то, что человек видит как установленные программы
+/// (Telegram в своей папке без ярлыка в «Пуске» - тоже). Ярлыки разбираем
 /// сами (lnk.rs, без PowerShell): ответ на каждую букву мгновенный.
 #[cfg(target_os = "windows")]
 pub fn search_installed(query: &str) -> Vec<FoundApp> {
@@ -1545,7 +1545,7 @@ pub fn search_installed(query: &str) -> Vec<FoundApp> {
     with_icons(out)
 }
 
-/// Windows: иконки — в том же ответе (миллисекунды; потом из кэша).
+/// Windows: иконки - в том же ответе (миллисекунды; потом из кэша).
 #[cfg(target_os = "windows")]
 fn with_icons(mut found: Vec<FoundApp>) -> Vec<FoundApp> {
     let paths: Vec<String> = found.iter().filter(|f| f.icon.is_none()).map(|f| f.path.clone()).collect();
@@ -1563,8 +1563,8 @@ fn with_icons(found: Vec<FoundApp>) -> Vec<FoundApp> {
 }
 
 /// Поиск с учётом убранных из списка: встроенные приложения не удаляются, а
-/// прячутся, и находятся всегда — выбор вернёт их на место, даже если
-/// программы нет ни в «Пуске», ни в Spotlight. `hidden` — (имя, путь к exe).
+/// прячутся, и находятся всегда - выбор вернёт их на место, даже если
+/// программы нет ни в «Пуске», ни в Spotlight. `hidden` - (имя, путь к exe).
 pub fn search_with_hidden(query: &str, hidden: &[(String, String)]) -> Vec<FoundApp> {
     let mut found = search_installed(query);
     let q = query.trim();
@@ -1582,7 +1582,7 @@ pub fn search_with_hidden(query: &str, hidden: &[(String, String)]) -> Vec<Found
 }
 
 /// Программы из ярлыков меню «Пуск» и «Приложений и возможностей»: (имя,
-/// exe); имя ярлыка главнее. Кэш 30 с — запрос идёт на каждую букву.
+/// exe); имя ярлыка главнее. Кэш 30 с - запрос идёт на каждую букву.
 #[cfg(target_os = "windows")]
 fn installed_apps() -> Vec<(String, String)> {
     use std::sync::Mutex;
@@ -1655,7 +1655,7 @@ fn icon_exe(display_icon: &str) -> Option<String> {
 }
 
 /// Имя из «Приложений и возможностей» без разрядности и версии:
-/// «7-Zip 23.01 (x64)» → «7-Zip»; «Telegram Desktop» — как есть.
+/// «7-Zip 23.01 (x64)» → «7-Zip»; «Telegram Desktop» - как есть.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn clean_app_name(name: &str) -> String {
     let mut s = name.trim().to_string();
@@ -1676,7 +1676,7 @@ fn clean_app_name(name: &str) -> String {
     words.join(" ")
 }
 
-/// Служебные ярлыки (удаление, справка, сайт) и наши же «… (proxy)» — не
+/// Служебные ярлыки (удаление, справка, сайт) и наши же «… (proxy)» - не
 /// программы, которые стоит добавлять.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn is_service_shortcut(name: &str) -> bool {
@@ -1690,7 +1690,7 @@ fn is_service_shortcut(name: &str) -> bool {
         .any(|w| n.contains(w))
 }
 
-/// Подходящие по имени ярлыки — лучшие сначала, не больше 12.
+/// Подходящие по имени ярлыки - лучшие сначала, не больше 12.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn rank_shortcuts<T: Clone>(items: &[(String, T)], query: &str) -> Vec<(String, T)> {
     let needles = vec![query.trim().to_lowercase(), translit(query.trim())];
@@ -1704,9 +1704,9 @@ fn rank_shortcuts<T: Clone>(items: &[(String, T)], query: &str) -> Vec<(String, 
 }
 
 /// Программа, которую запускает ярлык: существующий .exe, не системная
-/// утилита, не деинсталлятор и не версионная папка Store (WindowsApps —
+/// утилита, не деинсталлятор и не версионная папка Store (WindowsApps -
 /// путь меняется с каждым обновлением). Squirrel-приложения (Discord,
-/// Slack…) запускаются через Update.exe --processStart X.exe — берём X.exe.
+/// Slack…) запускаются через Update.exe --processStart X.exe - берём X.exe.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn shortcut_app(target: &str, args: &str, system_root: &str) -> Option<String> {
     let path = std::path::Path::new(target);
@@ -1768,15 +1768,15 @@ mod search_tests {
         assert!(WEBRTC_FLAGS.iter().all(|f| f.ends_with("=disable_non_proxied_udp")));
     }
 
-    /// Codex по умолчанию целиком через прокси — и через прокси OpenAI, а не
+    /// Codex по умолчанию целиком через прокси - и через прокси OpenAI, а не
     /// через строгий вход Claude.
     #[test]
     fn codex_goes_fully_through_the_openai_proxy() {
         let presets = builtin_presets();
         let codex = presets.iter().find(|p| p.id == "codex").unwrap();
         let vscode = presets.iter().find(|p| p.id == "vscode").unwrap();
-        assert!(full_proxy_of(codex), "Codex — весь трафик через прокси");
-        assert!(!full_proxy_of(vscode), "редактор — только AI-сайты");
+        assert!(full_proxy_of(codex), "Codex - весь трафик через прокси");
+        assert!(!full_proxy_of(vscode), "редактор - только AI-сайты");
         let mut off = codex.clone();
         off.full_proxy = Some(false);
         assert!(!full_proxy_of(&off), "выбор пользователя главнее");
@@ -1784,7 +1784,7 @@ mod search_tests {
         assert_eq!(service_group_of(vscode), None);
 
         let mut s = crate::settings::Settings::default();
-        assert_eq!(group_pin_port("openai", &s, 3), Some(crate::tasks::PIN_PORT_BASE), "без назначения — основной");
+        assert_eq!(group_pin_port("openai", &s, 3), Some(crate::tasks::PIN_PORT_BASE), "без назначения - основной");
         s.proxy_assignments.insert("openai".into(), 2);
         assert_eq!(group_pin_port("openai", &s, 3), Some(crate::tasks::PIN_PORT_BASE + 2));
         assert_eq!(group_pin_port("openai", &s, 2), None, "назначение вне пула");
@@ -1795,7 +1795,7 @@ mod search_tests {
     fn same_path_as_the_os_sees_it() {
         assert!(same_path("D:\\Telegram Desktop\\Telegram.exe", "D:\\Telegram Desktop\\Telegram.exe"));
         assert!(!same_path("D:\\Telegram Desktop\\Telegram.exe", "D:\\Telegram Desktop\\Updater.exe"));
-        // Путь VS Code в настройках — со смешанными слэшами.
+        // Путь VS Code в настройках - со смешанными слэшами.
         assert_eq!(
             same_path(
                 "C:\\Users\\u\\AppData\\Local\\Programs/Microsoft VS Code/Code.exe",
@@ -1830,7 +1830,7 @@ mod search_tests {
     fn apps_and_features_entries() {
         assert_eq!(icon_exe("\"D:\\Telegram Desktop\\Telegram.exe\",0").as_deref(), Some("D:\\Telegram Desktop\\Telegram.exe"));
         assert_eq!(icon_exe("C:\\Program Files\\7-Zip\\7zFM.exe,1").as_deref(), Some("C:\\Program Files\\7-Zip\\7zFM.exe"));
-        assert_eq!(icon_exe("C:\\Apps\\a,b\\App.exe").as_deref(), Some("C:\\Apps\\a,b\\App.exe"), "запятая в пути — не номер иконки");
+        assert_eq!(icon_exe("C:\\Apps\\a,b\\App.exe").as_deref(), Some("C:\\Apps\\a,b\\App.exe"), "запятая в пути - не номер иконки");
         assert_eq!(icon_exe("C:\\Program Files\\App\\app.ico"), None);
         assert_eq!(icon_exe(""), None);
         assert_eq!(clean_app_name("Telegram Desktop"), "Telegram Desktop");
@@ -1857,7 +1857,7 @@ mod search_tests {
         ];
         let names = |q: &str| rank_shortcuts(&shortcuts, q).into_iter().map(|(n, _)| n).collect::<Vec<_>>();
         assert_eq!(names("телег"), vec!["Telegram", "WebTelegram"]);
-        // Свой ярлык Clod Helper «… (proxy)» — не программа для добавления.
+        // Свой ярлык Clod Helper «… (proxy)» - не программа для добавления.
         assert_eq!(names("vs"), vec!["Visual Studio Code"]);
         assert_eq!(names("vsc"), vec!["Visual Studio Code"]);
         assert_eq!(names("хром"), vec!["Google Chrome"], "транслит: hrom внутри chrome");
@@ -1939,7 +1939,7 @@ const ICON_SCRIPT: &str = include_str!("../resources/app-icons.js");
 
 /// Иконки программ как data-URL PNG (для подсказок поиска и строк
 /// приложений). Кэш в памяти и на диске: иконка не меняется, пока не
-/// обновится программа — ключ включает дату её файла.
+/// обновится программа - ключ включает дату её файла.
 pub fn icons(paths: &[String]) -> std::collections::HashMap<String, String> {
     use base64::Engine;
     use std::collections::HashMap;
@@ -1948,7 +1948,7 @@ pub fn icons(paths: &[String]) -> std::collections::HashMap<String, String> {
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let b64 = base64::engine::general_purpose::STANDARD;
 
-    // Дисковый кэш (…/ru.iimperium.clodhelper/icons): ключ — путь и дата
+    // Дисковый кэш (…/ru.iimperium.clodhelper/icons): ключ - путь и дата
     // файла программы (Info.plist бандла / сам exe).
     let disk_dir = dirs::cache_dir().map(|d| d.join("ru.iimperium.clodhelper").join(ICON_CACHE_DIR));
     let disk_key = |p: &str| -> Option<PathBuf> {
@@ -2003,7 +2003,7 @@ pub fn icons(paths: &[String]) -> std::collections::HashMap<String, String> {
         .collect()
 }
 
-/// Папка дискового кэша иконок (на Windows — новые 64 px вместо прежних 32).
+/// Папка дискового кэша иконок (на Windows - новые 64 px вместо прежних 32).
 #[cfg(not(target_os = "windows"))]
 const ICON_CACHE_DIR: &str = "icons";
 #[cfg(target_os = "windows")]
@@ -2055,7 +2055,7 @@ fn msix_root(p: &str) -> Option<(PathBuf, Option<String>)> {
 }
 
 /// Логотип приложения Store (PNG из пакета): у Claude, Codex и других
-/// MSIX иконка в exe — заглушка, настоящая лежит в Assets пакета.
+/// MSIX иконка в exe - заглушка, настоящая лежит в Assets пакета.
 #[cfg(target_os = "windows")]
 fn msix_logo(p: &str) -> Option<Vec<u8>> {
     let (root, app) = msix_root(p)?;
@@ -2094,12 +2094,12 @@ fn best_logo_variant(base: &std::path::Path) -> Option<Vec<u8>> {
         if !name.ends_with(".png") || !(name == format!("{stem}.png") || name.starts_with(&format!("{stem}."))) {
             continue;
         }
-        // Светлая тема (lightunplated) — тёмный глиф, на нашем фоне не виден.
+        // Светлая тема (lightunplated) - тёмный глиф, на нашем фоне не виден.
         if name.contains("lightunplated") || name.contains("contrast-") {
             continue;
         }
         let score = if name.contains("targetsize-") {
-            // Больше 256 не нужно; без подложки — лучше всего.
+            // Больше 256 не нужно; без подложки - лучше всего.
             let n = num(&name, "targetsize-").min(256);
             if name.contains("altform-unplated") { 3000 + n } else { 2000 + n }
         } else if name.contains("scale-") {
@@ -2136,7 +2136,7 @@ fn extract_icons(paths: &[&String]) -> std::collections::HashMap<String, String>
         .unwrap_or_default()
 }
 
-/// Windows: иконка из ресурсов exe, 64×64 в PNG — нативно, миллисекунды.
+/// Windows: иконка из ресурсов exe, 64×64 в PNG - нативно, миллисекунды.
 #[cfg(target_os = "windows")]
 fn extract_icons(paths: &[&String]) -> std::collections::HashMap<String, String> {
     use base64::Engine;

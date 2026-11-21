@@ -43,13 +43,13 @@ pub async fn autostart_set(
 #[tauri::command]
 pub async fn bridge_health() -> Result<BridgeHealth, String> {
     // Один клиент на всё время жизни: UI спрашивает здоровье каждые 5с, а
-    // сборка reqwest-клиента (TLS-конфиг, пул) — не бесплатная.
+    // сборка reqwest-клиента (TLS-конфиг, пул) - не бесплатная.
     static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
     let client = match CLIENT.get() {
         Some(c) => c,
         None => {
             let c = reqwest::Client::builder()
-                .no_proxy() // сами к себе — не через системный прокси
+                .no_proxy() // сами к себе - не через системный прокси
                 .timeout(std::time::Duration::from_secs(3))
                 .build()
                 .map_err(|e| format!("client: {e}"))?;
@@ -65,7 +65,7 @@ pub async fn bridge_health() -> Result<BridgeHealth, String> {
         .json()
         .await
         .map_err(|e| format!("не удалось разобрать healthz: {e}"))?;
-    // Счётчики соединений — по всем входам моста, как у монитора трея.
+    // Счётчики соединений - по всем входам моста, как у монитора трея.
     let ports = tokio::task::spawn_blocking(crate::monitor::other_health_ports)
         .await
         .unwrap_or_default();
@@ -92,7 +92,7 @@ pub async fn bridge_set_route_mode(mode: String) -> Result<(), String> {
         return Err("Режим должен быть smart или all".into());
     }
     settings::set_route_mode(mode)?;
-    // Задача уже могла быть зарегистрирована без --rules (старый формат) —
+    // Задача уже могла быть зарегистрирована без --rules (старый формат) -
     // полная перерегистрация гарантирует актуальные аргументы runner-vbs.
     if let Some(url) = settings::load().proxy_url {
         tokio::task::spawn_blocking(move || crate::tasks::register(&url))
@@ -121,26 +121,26 @@ pub async fn bridge_update(app: AppHandle) -> Result<String, String> {
     let dst = shim::bridge_exe_path()
         .ok_or_else(|| "Не нашёл папку ClaudeDesktopProxy".to_string())?;
     tokio::task::spawn_blocking(move || -> Result<String, String> {
-        let _ = shim::stop(); // работающий exe залочен Windows — сначала стоп
+        let _ = shim::stop(); // работающий exe залочен Windows - сначала стоп
         if let Some(parent) = dst.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("create dir {}: {e}", parent.display()))?;
         }
-        // Страховка отката: старый exe сохраняем рядом (.bak) — если новый
+        // Страховка отката: старый exe сохраняем рядом (.bak) - если новый
         // мост у пользователя поведёт себя хуже, можно вернуть вручную.
         if dst.exists() {
             let mut bak = dst.clone().into_os_string();
             bak.push(".bak");
             let _ = std::fs::copy(&dst, bak);
         }
-        // Файл может освобождаться не мгновенно после kill — пара ретраев.
+        // Файл может освобождаться не мгновенно после kill - пара ретраев.
         let mut last_err = String::new();
         for _ in 0..3 {
             match shim::install_bridge_binary(&src, &dst) {
                 Ok(_) => {
                     // Перерегистрировать задачу: новый Rust-мост понимает
                     // --rules, vbs должен его получить (иначе smart-режим не
-                    // применится). Не фатально — легаси-vbs тоже рабочий.
+                    // применится). Не фатально - легаси-vbs тоже рабочий.
                     if let Some(url) = settings::load().proxy_url {
                         if let Err(e) = crate::tasks::register(&url) {
                             tracing::warn!("bridge_update: перерегистрация задачи не удалась: {e}");
@@ -155,7 +155,7 @@ pub async fn bridge_update(app: AppHandle) -> Result<String, String> {
                 }
             }
         }
-        // Копирование не удалось (exe залочен антивирусом и т.п.) — старый exe
+        // Копирование не удалось (exe залочен антивирусом и т.п.) - старый exe
         // на месте, но мост уже остановлен shim::stop(). Обязательно поднимаем
         // обратно, иначе прокси лежит намертво до ручного «Запустить».
         if let Err(e) = shim::start() {

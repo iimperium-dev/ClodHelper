@@ -6,7 +6,7 @@ import type { ServiceGroup } from "../lib/types";
 /*
   Бренд-логотипы сервисов и приложений: точные глифы из simple-icons на
   глянцевых мини-плитках с брендовым свечением («объёмный» вид).
-  OpenAI и VS Code из пакета удалены по требованию брендов — их глифы
+  OpenAI и VS Code из пакета удалены по требованию брендов - их глифы
   нарисованы вручную (узел-лепестки и классическая «лента» соответственно).
 */
 
@@ -53,7 +53,7 @@ export function OpenAiKnot({ className }: { className?: string }) {
   );
 }
 
-/** Классическая «лента» VS Code (рисуем сами — иконка изъята из simple-icons). */
+/** Классическая «лента» VS Code (рисуем сами - иконка изъята из simple-icons). */
 export function VsCodeMark({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" className={className ?? "h-4 w-4"}>
@@ -132,7 +132,7 @@ export function ServiceLogo({ id }: { id: ServiceGroup }) {
   );
 }
 
-/** Бренд приложения по имени профиля; null — рисовать generic-иконку. */
+/** Бренд приложения по имени профиля; null - рисовать generic-иконку. */
 export function appBrand(name: string): { glyph: ReactNode; glow: string } | null {
   const n = name.toLowerCase();
   if (n.includes("claude")) {

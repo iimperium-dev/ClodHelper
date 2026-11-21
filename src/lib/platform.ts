@@ -1,6 +1,6 @@
 /*
   Платформа, на которой запущено приложение. WebView macOS (WKWebView)
-  отдаёт «Macintosh» в userAgent — отдельный плагин ради одного флага не нужен.
+  отдаёт «Macintosh» в userAgent - отдельный плагин ради одного флага не нужен.
 */
 export const isMac = /Macintosh|Mac OS X/.test(navigator.userAgent);
 

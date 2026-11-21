@@ -4,19 +4,19 @@
     [string]$ResultPath = '',
     [switch]$LibraryOnly
 )
-# «Защита от утечек» Clod Helper (Windows) — то же, что leak-guard.sh (pf) на
-# macOS: брандмауэр Windows запрещает ПРЯМОЙ выход к сетям сервисов — Claude
+# «Защита от утечек» Clod Helper (Windows) - то же, что leak-guard.sh (pf) на
+# macOS: брандмауэр Windows запрещает ПРЯМОЙ выход к сетям сервисов - Claude
 # (Anthropic) и Telegram. Мост ходит к ним только через ваш прокси, поэтому
 # правила его не задевают; программа, которая попробует мимо моста, получит
 # мгновенный отказ, а не ваш IP.
 #
-# Правила — исходящие «Блокировать» в своей группе ClodHelper LeakGuard: группу
+# Правила - исходящие «Блокировать» в своей группе ClodHelper LeakGuard: группу
 # ClodHelper целиком снимает прежний killswitch, смешивать их нельзя. Правила
-# брандмауэра постоянные — переживают перезагрузку без всякой службы.
+# брандмауэра постоянные - переживают перезагрузку без всякой службы.
 #
 # WebRTC: Claude Desktop и Codex (Electron) ходят по UDP к STUN-серверам мимо
 # любого прокси и так раскрывают настоящий IP; флаги запуска Electron не
-# передаёт в процессы страниц (проверено вживую). Поэтому для их exe —
+# передаёт в процессы страниц (проверено вживую). Поэтому для их exe -
 # правило «никакого UDP наружу»: работе через мост UDP не нужен, а DNS идёт
 # через системную службу и правилом не задет. Пути exe (у Store-приложений
 # они меняются с версией) Helper кладёт рядом в programs.json:
@@ -24,15 +24,15 @@
 #
 # Использование: leak-guard.ps1 -Action Status|Enable|Disable [-Services claude,telegram,codex] [-ResultPath файл]
 # Enable/Disable требуют прав администратора; Status читается без них.
-# Результат — одна строка JSON (в stdout или в файл -ResultPath).
+# Результат - одна строка JSON (в stdout или в файл -ResultPath).
 
 $ErrorActionPreference = 'Stop'
 $script:LeakGuardGroup = 'ClodHelper LeakGuard'
-# Сети сервисов (официальные диапазоны; IPv4 и IPv6) — те же, что в leak-guard.sh.
+# Сети сервисов (официальные диапазоны; IPv4 и IPv6) - те же, что в leak-guard.sh.
 $script:LeakGuardNets = [ordered]@{
     claude = @('160.79.104.0/21', '2607:6bc0::/48')
     telegram = @('149.154.160.0/20', '91.108.0.0/16', '91.105.192.0/23', '95.161.64.0/20', '185.76.151.0/24', '2001:b28:f23d::/48', '2001:b28:f23f::/48', '2001:67c:4e8::/48', '2a0a:f280::/32')
-    # У OpenAI нет своих сетей (общие облачные адреса) — только запрет UDP.
+    # У OpenAI нет своих сетей (общие облачные адреса) - только запрет UDP.
     codex = @()
 }
 $script:LeakGuardLabels = @{ claude = 'Claude'; telegram = 'Telegram'; codex = 'Codex' }
@@ -50,7 +50,7 @@ function Test-LeakGuardRuleActive([string]$Name) {
 }
 
 # Сервисы, у которых правило на месте и действует (в каноничном порядке).
-# Сервис с сетями — по правилу сетей; без сетей (Codex) — по правилу UDP.
+# Сервис с сетями - по правилу сетей; без сетей (Codex) - по правилу UDP.
 function Get-LeakGuardServices {
     $on = @()
     foreach ($service in $script:LeakGuardNets.Keys) {
@@ -100,7 +100,7 @@ function Enable-LeakGuard([string]$List) {
     foreach ($service in $wanted) {
         if (-not $script:LeakGuardNets.Contains($service)) { throw 'Не выбраны сервисы для защиты.' }
     }
-    # Сервису без сетей (Codex) нужен exe — проверяем до того, как снять правила.
+    # Сервису без сетей (Codex) нужен exe - проверяем до того, как снять правила.
     foreach ($service in $wanted) {
         if (@($script:LeakGuardNets[$service]).Count -eq 0 -and @(Get-LeakGuardPrograms $service).Count -eq 0) {
             throw ('{0} не найден на этом компьютере.' -f $script:LeakGuardLabels[$service])

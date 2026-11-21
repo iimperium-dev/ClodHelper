@@ -15,9 +15,21 @@ import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-const [dir, tag, whatsNew] = process.argv.slice(2);
+// Необязательные управляющие поля (scripts/lib/controls.mjs; чаще их ставит
+// publish-release.mjs перед подписью): --rollout N, --paused, --force,
+// --min-version X. CI запускает без них.
+import { applyControls, parseArgs } from "./lib/controls.mjs";
+
+let parsed;
+try {
+  parsed = parseArgs(process.argv.slice(2));
+} catch (e) {
+  console.error(e.message);
+  process.exit(1);
+}
+const [dir, tag, whatsNew] = parsed.positional;
 if (!dir || !/^v\d+\.\d+\.\d+$/.test(tag ?? "") || !whatsNew) {
-  console.error("usage: make-manifest.mjs <dir> <vX.Y.Z> <whats-new.json>");
+  console.error("usage: make-manifest.mjs <dir> <vX.Y.Z> <whats-new.json> [--rollout N] [--paused] [--force] [--min-version X]");
   process.exit(1);
 }
 const version = tag.slice(1);
@@ -59,12 +71,18 @@ if (!Object.keys(platforms).length) {
 }
 
 // Общий список — для версий до 0.8.11, которые не знают пунктов по ОС.
-const manifest = {
+let manifest = {
   version,
   tag,
   pub_date: new Date().toISOString(),
   highlights: items.map((i) => (typeof i === "string" ? i : i.text)),
   platforms,
 };
+try {
+  manifest = applyControls(manifest, parsed.opts);
+} catch (e) {
+  console.error(e.message);
+  process.exit(1);
+}
 writeFileSync(join(dir, "latest.json"), JSON.stringify(manifest, null, 2) + "\n");
 console.log(JSON.stringify(manifest, null, 2));

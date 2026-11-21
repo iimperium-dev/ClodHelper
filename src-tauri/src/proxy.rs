@@ -109,7 +109,7 @@ pub async fn check(url: &str) -> ProxyCheckResult {
     };
 
     let start = std::time::Instant::now();
-    // ip-api.com отдаёт IP, страну и провайдера за один запрос — и заодно проверяет
+    // ip-api.com отдаёт IP, страну и провайдера за один запрос - и заодно проверяет
     // что прокси вообще работает (ходим на внешний хост).
     let resp = match client
         .get("http://ip-api.com/json/?fields=status,message,query,countryCode,country,isp")

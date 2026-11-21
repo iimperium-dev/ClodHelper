@@ -21,17 +21,17 @@ use super::*;
 
 // ─── Глобальные env-переменные (главный выключатель) ────────────
 
-/// Прочитать глобальные HTTP(S)_PROXY (User scope) — состояние тумблера.
+/// Прочитать глобальные HTTP(S)_PROXY (User scope) - состояние тумблера.
 #[tauri::command]
 pub async fn global_proxy_env() -> Result<GlobalProxyEnv, String> {
-    // Внутри спавн PowerShell — с главного потока это фриз окна.
+    // Внутри спавн PowerShell - с главного потока это фриз окна.
     tokio::task::spawn_blocking(env_proxy::read)
         .await
         .map_err(|e| format!("Внутренняя ошибка: {e}"))
 }
 
 /// Включить системное проксирование: HTTP(S)_PROXY → мост (User scope, без UAC).
-/// Заодно best-effort чистим легаси-ключи из settings.json VS Code — при
+/// Заодно best-effort чистим легаси-ключи из settings.json VS Code - при
 /// глобальном env они стали лишними дублями.
 #[tauri::command]
 pub async fn set_global_proxy_env() -> Result<GlobalProxyEnv, String> {

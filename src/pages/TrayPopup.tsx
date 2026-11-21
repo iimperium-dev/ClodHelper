@@ -30,12 +30,12 @@ import type { NoticeItem, ShimTestResult } from "../lib/types";
 import { cn } from "../lib/cn";
 
 /*
-  Трей-попап: компактная живая панель у иконки трея (левый клик) — паттерн
+  Трей-попап: компактная живая панель у иконки трея (левый клик) - паттерн
   Tailscale/WARP вместо нативного меню. Окно прозрачное, скрывается по blur
-  (Rust), тень рисуем CSS. Всё управление — не открывая большого окна.
+  (Rust), тень рисуем CSS. Всё управление - не открывая большого окна.
 */
 export function TrayPopup() {
-  // orb — единое состояние из StatusProvider (учитывает и «нестабилен»).
+  // orb - единое состояние из StatusProvider (учитывает и «нестабилен»).
   const { status, health, refresh, orb } = useStatus();
 
   const [busy, setBusy] = useState<"start" | "stop" | "restart" | "test" | null>(null);
@@ -87,7 +87,7 @@ export function TrayPopup() {
     await getCurrentWindow().hide();
   };
 
-  // Обновление и непрочитанные уведомления — индикатор прямо в попапе.
+  // Обновление и непрочитанные уведомления - индикатор прямо в попапе.
   const [notices, setNotices] = useState<NoticeItem[]>([]);
   useEffect(() => {
     const reload = () => void noticesList().then(setNotices).catch(() => {});
@@ -111,7 +111,7 @@ export function TrayPopup() {
     await getCurrentWindow().hide();
   };
 
-  // macOS: значок сверху — панель висит от верха окна, а окно ровно по её
+  // macOS: значок сверху - панель висит от верха окна, а окно ровно по её
   // высоте (растёт вниз при результате теста). Без этого под панелью
   // оставалась невидимая область окна, перехватывающая клики.
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -123,7 +123,7 @@ export function TrayPopup() {
     fit();
     const ro = new ResizeObserver(fit);
     ro.observe(el);
-    // Каждое открытие — панель «выезжает» из значка вниз (CSS .tray-drop).
+    // Каждое открытие - панель «выезжает» из значка вниз (CSS .tray-drop).
     const replay = () => {
       el.classList.remove("tray-drop");
       void el.offsetWidth;
@@ -137,8 +137,8 @@ export function TrayPopup() {
   }, []);
 
   return (
-    // Windows: трей внизу — панель прижата к низу окна и растёт ВВЕРХ.
-    // Клик по прозрачной зоне — закрыть (как клик мимо).
+    // Windows: трей внизу - панель прижата к низу окна и растёт ВВЕРХ.
+    // Клик по прозрачной зоне - закрыть (как клик мимо).
     <div
       className={cn(
         "flex h-screen w-screen flex-col",
@@ -150,8 +150,8 @@ export function TrayPopup() {
     >
       <div
         ref={panelRef}
-        // shrink-0: высота панели — по содержимому, а не по окну. Иначе окно
-        // подгонялось под панель, панель под окно — и футер обрезался.
+        // shrink-0: высота панели - по содержимому, а не по окну. Иначе окно
+        // подгонялось под панель, панель под окно - и футер обрезался.
         className="flex shrink-0 flex-col overflow-hidden rounded-xl border border-vb-border bg-vb-bg shadow-[0_8px_28px_rgba(0,0,0,0.5)]"
       >
         {/* Статус */}
@@ -201,7 +201,7 @@ export function TrayPopup() {
           )}
         </div>
 
-        {/* Вышло обновление — светящаяся строка */}
+        {/* Вышло обновление - светящаяся строка */}
         {update && (
           <button
             type="button"
@@ -315,7 +315,7 @@ export function TrayPopup() {
                   />
                   <span className="truncate font-mono">
                     {testResult.ok
-                      ? `${testResult.external_ip ?? "OK"} · ${testResult.latency_ms ?? "—"} мс`
+                      ? `${testResult.external_ip ?? "OK"} · ${testResult.latency_ms ?? "-"} мс`
                       : testResult.error ?? "ошибка"}
                   </span>
                 </div>

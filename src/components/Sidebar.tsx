@@ -74,9 +74,9 @@ interface Props {
 }
 
 /*
-  Сайдбар по умолчанию свёрнут в узкую полосу иконок — окну не нужна
+  Сайдбар по умолчанию свёрнут в узкую полосу иконок - окну не нужна
   постоянная колонка подписей. Навигация работает и в свёрнутом виде
-  (иконки + подсказки). Логотип — ручка панели: при наведении он
+  (иконки + подсказки). Логотип - ручка панели: при наведении он
   перетекает в иконку «раскрыть», по клику панель выезжает пружиной,
   подписи проявляются со сдвигом. Выбор запоминается.
 */
@@ -84,7 +84,7 @@ interface Props {
 function proxyProblemLabel(proxies: ProxyState[]): string | null {
   const pool = poolOnly(proxies);
   const down = pool.filter((p) => p.state === "down");
-  // Упавший, но подменённый живым резервом — трафик идёт, это не «не отвечает».
+  // Упавший, но подменённый живым резервом - трафик идёт, это не «не отвечает».
   const lost = down.filter((p) => p.coveredBy === undefined);
   if (pool.length > 0 && lost.length === pool.length) {
     return pool.length > 1 ? "Прокси не отвечают" : "Прокси не отвечает";
@@ -98,7 +98,7 @@ function proxyProblemLabel(proxies: ProxyState[]): string | null {
 }
 
 export function Sidebar({ view, onNavigate }: Props) {
-  const { status, health, healthErr, exeLegacy, orb, proxies, bridgeFile } = useStatus();
+  const { status, health, healthErr, exeLegacy, orb, proxies, bridgeFile, sitesBroken } = useStatus();
   const [expanded, setExpanded] = useState(readExpanded);
   const [logoHover, setLogoHover] = useState(false);
 
@@ -107,7 +107,7 @@ export function Sidebar({ view, onNavigate }: Props) {
       try {
         localStorage.setItem(STORAGE_KEY, v ? "0" : "1");
       } catch {
-        /* приватный режим — просто не запоминаем */
+        /* приватный режим - просто не запоминаем */
       }
       return !v;
     });
@@ -138,7 +138,7 @@ export function Sidebar({ view, onNavigate }: Props) {
       transition={SPRING}
       className="flex shrink-0 flex-col overflow-hidden border-r border-vb-border/60"
     >
-      {/* Логотип — ручка панели */}
+      {/* Логотип - ручка панели */}
       <div className="mx-2.5 mb-3 mt-2.5 flex h-10 items-center gap-2">
         <button
           type="button"
@@ -209,7 +209,13 @@ export function Sidebar({ view, onNavigate }: Props) {
               role="tab"
               aria-selected={active}
               aria-label={label}
-              title={expanded ? undefined : label}
+              title={
+                id === "sites" && sitesBroken
+                  ? "Сайты не работают - настройку сбросила другая программа"
+                  : expanded
+                    ? undefined
+                    : label
+              }
               onClick={() => onNavigate(id)}
               className={cn(
                 "relative flex h-9 items-center gap-2.5 rounded-lg px-[11px] text-left text-[13px] font-medium",
@@ -227,10 +233,26 @@ export function Sidebar({ view, onNavigate }: Props) {
                   aria-hidden
                 />
               )}
-              <Icon
-                className={cn("relative h-4 w-4 shrink-0", active ? "text-vb-emerald" : "opacity-80")}
-                strokeWidth={1.9}
-              />
+              <span className="relative shrink-0">
+                <Icon
+                  className={cn("relative h-4 w-4", active ? "text-vb-emerald" : "opacity-80")}
+                  strokeWidth={1.9}
+                />
+                {/* Проблема на экране - жёлтая точка на значке, видна из любого места */}
+                <AnimatePresence>
+                  {id === "sites" && sitesBroken && (
+                    <motion.span
+                      key="warn"
+                      initial={{ scale: 0 }}
+                      animate={{ scale: 1 }}
+                      exit={{ scale: 0 }}
+                      transition={{ type: "spring", bounce: 0.5, duration: 0.4 }}
+                      aria-hidden
+                      className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-vb-warn ring-2 ring-vb-bg"
+                    />
+                  )}
+                </AnimatePresence>
+              </span>
               <Label show={expanded}>{label}</Label>
             </button>
           );
@@ -239,7 +261,7 @@ export function Sidebar({ view, onNavigate }: Props) {
 
       <div className="flex-1" />
 
-      {/* Живой статус моста — всегда на виду (в свёрнутом виде — точка) */}
+      {/* Живой статус моста - всегда на виду (в свёрнутом виде - точка) */}
       <button
         type="button"
         onClick={() => onNavigate("overview")}
@@ -249,7 +271,7 @@ export function Sidebar({ view, onNavigate }: Props) {
           "transition-colors duration-150 hover:bg-vb-surface-2/40 active:scale-[0.97]",
           expanded && "border border-vb-border/70",
         )}
-        aria-label={`${statusLabel} — открыть Обзор`}
+        aria-label={`${statusLabel} - открыть Обзор`}
       >
         <span className="relative shrink-0">
           <StatusOrb state={orb} size={8} />

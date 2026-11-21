@@ -1,7 +1,7 @@
 //! «Проверка приватности» одной кнопкой: то же, что ipleak, но с вердиктом.
 //!
 //!  - выход: внешний IP через строгий вход моста (что видят AI-сервисы);
-//!  - дом: внешний IP напрямую (настоящий, от провайдера) — для сравнения;
+//!  - дом: внешний IP напрямую (настоящий, от провайдера) - для сравнения;
 //!  - DNS: какие резолверы видит сайт (bash.ws dnsleak через мост): утечка,
 //!    если среди них DNS вашего провайдера;
 //!  - приложения: кто сейчас идёт мимо моста (статус по соединениям) и
@@ -20,7 +20,7 @@ pub struct IpInfo {
 pub struct PrivacyReport {
     /// IP, который видят сервисы (через мост).
     pub exit: Option<IpInfo>,
-    /// Настоящий IP (напрямую). None — прямой выход недоступен.
+    /// Настоящий IP (напрямую). None - прямой выход недоступен.
     pub home: Option<IpInfo>,
     /// DNS-резолверы, видимые сайтом.
     pub dns: Vec<IpInfo>,
@@ -79,7 +79,7 @@ pub async fn check(leaking_apps: Vec<String>) -> PrivacyReport {
         return r;
     };
 
-    // Настоящий IP — параллельно с DNS-тестом.
+    // Настоящий IP - параллельно с DNS-тестом.
     let home_fut = async {
         let j: IpleakJson = direct.get("https://ipleak.net/json/").send().await.ok()?.json().await.ok()?;
         Some(IpInfo {
@@ -94,7 +94,7 @@ pub async fn check(leaking_apps: Vec<String>) -> PrivacyReport {
         if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric()) {
             return None;
         }
-        // Имена резолвит сторона прокси — так bash.ws видит её DNS. Все
+        // Имена резолвит сторона прокси - так bash.ws видит её DNS. Все
         // четыре разом: по очереди зависший прокси растягивал проверку на минуту.
         let pings: Vec<_> = (1..=4)
             .map(|i| {
@@ -149,7 +149,7 @@ pub async fn check_within(leaking_apps: Vec<String>, limit: std::time::Duration)
         Err(_) => PrivacyReport {
             leaking_apps,
             error: Some(format!(
-                "Проверка не уложилась в {} с — прокси отвечает слишком медленно",
+                "Проверка не уложилась в {} с - прокси отвечает слишком медленно",
                 limit.as_secs()
             )),
             ..Default::default()

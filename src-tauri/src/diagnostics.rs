@@ -1,8 +1,8 @@
 //! «Отчёт для поддержки»: всё, что нужно, чтобы понять проблему человека
-//! удалённо, — одним текстом, который он пересылает разработчику.
+//! удалённо, - одним текстом, который он пересылает разработчику.
 //!
-//! Без секретов: адреса прокси — только host:port (логин и пароль никогда не
-//! попадают в отчёт), чужие прокси-переменные — тоже без учётных данных.
+//! Без секретов: адреса прокси - только host:port (логин и пароль никогда не
+//! попадают в отчёт), чужие прокси-переменные - тоже без учётных данных.
 
 use std::fmt::Write as _;
 use std::time::Duration;
@@ -22,10 +22,54 @@ fn mask_proxy_value(v: &str) -> String {
     }
 }
 
+/// Целиком, как его видит человек в программе.
 pub fn report() -> String {
+    build(false)
+}
+
+/// Версия для отправки разработчику: без списка сайтов, меток прокси,
+/// корпоративных прокси и чужих доменов из ошибок моста. Видимый в программе
+/// отчёт не меняется.
+pub fn report_for_server() -> String {
+    build(true)
+}
+
+/// Домен из встроенного списка сервисов (не личный, полезен для разбора).
+pub(crate) fn is_service_domain(host: &str) -> bool {
+    let h = host.trim_end_matches('.').to_lowercase();
+    crate::tasks::SERVICE_GROUPS
+        .iter()
+        .flat_map(|(_, d)| d.iter())
+        .any(|d| h == *d || h.ends_with(&format!(".{d}")))
+}
+
+/// Ошибка моста для сервера: домены вне списка сервисов - <host>.
+fn redact_bridge_error(msg: &str) -> String {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| {
+        regex::Regex::new(r"(назначение для |прямое соединение с )([^\s:]+)").expect("regex")
+    });
+    re.replace_all(msg, |c: &regex::Captures| {
+        let host = &c[2];
+        format!("{}{}", &c[1], if is_service_domain(host) { host } else { "<host>" })
+    })
+    .into_owned()
+}
+
+/// Чужой (корпоративный) прокси: адрес не отправляем. Свой мост виден как есть.
+fn mask_corp(v: &str) -> String {
+    let hp = host_port(v).to_lowercase();
+    if hp.starts_with("127.0.0.1") || hp.starts_with("localhost") || hp.starts_with("[::1]") {
+        mask_proxy_value(v)
+    } else {
+        "<proxy>".to_string()
+    }
+}
+
+fn build(redact: bool) -> String {
     let mut r = String::new();
     let s = crate::settings::load_with_presets();
-    let _ = writeln!(r, "=== Clod Helper — отчёт для поддержки ===");
+    let _ = writeln!(r, "=== Clod Helper - отчёт для поддержки ===");
     let _ = writeln!(r, "Версия: {}", env!("CARGO_PKG_VERSION"));
     let _ = writeln!(
         r,
@@ -90,7 +134,9 @@ pub fn report() -> String {
                     errors_shown = true;
                     let _ = writeln!(r, "  последние ошибки входа {port}:");
                     for e in errs.iter().rev().take(8).collect::<Vec<_>>().into_iter().rev() {
-                        let _ = writeln!(r, "    [{}с] {}", e["t"], e["msg"].as_str().unwrap_or(""));
+                        let msg = e["msg"].as_str().unwrap_or("");
+                        let msg = if redact { redact_bridge_error(msg) } else { msg.to_string() };
+                        let _ = writeln!(r, "    [{}с] {}", e["t"], msg);
                     }
                 }
             }
@@ -107,7 +153,11 @@ pub fn report() -> String {
     let _ = writeln!(r, "\n--- Прокси ---");
     let pool = crate::settings::effective_proxies(&s);
     for (i, u) in pool.iter().enumerate() {
-        let label = s.proxy_labels.get(u).map(|l| format!(" «{l}»")).unwrap_or_default();
+        let label = if redact {
+            String::new()
+        } else {
+            s.proxy_labels.get(u).map(|l| format!(" «{l}»")).unwrap_or_default()
+        };
         let _ = writeln!(r, "#{i}{label}: {}", host_port(u));
     }
     if pool.is_empty() {
@@ -130,7 +180,7 @@ pub fn report() -> String {
         } else {
             env.values
                 .iter()
-                .map(|(k, v)| format!("{k}={}", mask_proxy_value(v)))
+                .map(|(k, v)| format!("{k}={}", if redact { mask_corp(v) } else { mask_proxy_value(v) }))
                 .collect::<Vec<_>>()
                 .join(", ")
         }
@@ -145,18 +195,27 @@ pub fn report() -> String {
         pac.supported,
         pac.enabled,
         pac.active,
-        pac.foreign.map(|f| format!(" чужая настройка: {}", mask_proxy_value(&f))).unwrap_or_default()
+        pac.foreign
+            .map(|f| format!(" чужая настройка: {}", if redact { mask_corp(&f) } else { mask_proxy_value(&f) }))
+            .unwrap_or_default()
     );
     if let Ok(c) = crate::system_pac::read() {
         let _ = writeln!(
             r,
             "Системный прокси Windows: флаги={} PAC={} прокси={}",
             c.flags,
-            c.pac_url.as_deref().map(|u| u.split('?').next().unwrap_or(u).to_string()).unwrap_or_else(|| "—".into()),
-            c.server.as_deref().map(mask_proxy_value).unwrap_or_else(|| "—".into()),
+            c.pac_url
+                .as_deref()
+                .map(|u| if redact { "<pac>".to_string() } else { u.split('?').next().unwrap_or(u).to_string() })
+                .unwrap_or_else(|| "-".into()),
+            c.server
+                .as_deref()
+                .map(|v| if redact { mask_corp(v) } else { mask_proxy_value(v) })
+                .unwrap_or_else(|| "-".into()),
         );
     }
-    for site in &s.sites {
+    // На сервер список сайтов не уходит: имена и домены личные. Только число.
+    for site in s.sites.iter().filter(|_| !redact) {
         let _ = writeln!(
             r,
             "{} {}: {} (прокси: {})",
@@ -165,6 +224,9 @@ pub fn report() -> String {
             site.domains.join(", "),
             site.proxy.map(|i| format!("#{i}")).unwrap_or_else(|| "авто".into())
         );
+    }
+    if redact && !s.sites.is_empty() {
+        let _ = writeln!(r, "Сайтов: {}", s.sites.len());
     }
     if s.sites.is_empty() {
         let _ = writeln!(r, "сайтов нет");
@@ -183,8 +245,14 @@ pub fn report() -> String {
                 .map(|st| {
                     format!(
                         " политика={}{}",
-                        if st.configured { st.server.clone() } else { "нет".into() },
-                        st.conflict.map(|c| format!(" (конфликт: {c})")).unwrap_or_default()
+                        if st.configured {
+                            if redact { mask_corp(&st.server) } else { st.server.clone() }
+                        } else {
+                            "нет".into()
+                        },
+                        st.conflict
+                            .map(|c| format!(" (конфликт: {})", if redact { "<proxy>".to_string() } else { c }))
+                            .unwrap_or_default()
                     )
                 })
                 .unwrap_or_default()
@@ -207,6 +275,30 @@ pub fn report() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn server_report_redacts_bridge_domains() {
+        assert_eq!(
+            redact_bridge_error("назначение для mybank.ru указывает на прокси вне пула"),
+            "назначение для <host> указывает на прокси вне пула"
+        );
+        assert_eq!(redact_bridge_error("прямое соединение с shop.example.org:443 не удалось"), "прямое соединение с <host>:443 не удалось");
+        assert_eq!(
+            redact_bridge_error("прямое соединение с api.anthropic.com:443 не удалось"),
+            "прямое соединение с api.anthropic.com:443 не удалось",
+            "домены сервисов полезны для разбора"
+        );
+        assert_eq!(redact_bridge_error("назначение для claude.ai указывает"), "назначение для claude.ai указывает");
+        assert_eq!(redact_bridge_error("прямое соединение с notclaude.ai:443"), "прямое соединение с <host>:443");
+        assert_eq!(redact_bridge_error("другая ошибка"), "другая ошибка");
+    }
+
+    #[test]
+    fn corporate_proxy_is_masked_for_server() {
+        assert_eq!(mask_corp("http://corp.local:3128"), "<proxy>");
+        assert_eq!(mask_corp("proxy.company.com:8080"), "<proxy>");
+        assert_eq!(mask_corp("http://127.0.0.1:8889"), "http://127.0.0.1:8889");
+    }
 
     #[test]
     fn secrets_never_leak() {

@@ -3,12 +3,12 @@
 //! Фоновый поток раз в 5 секунд:
 //!   - жив ли мост (лёгкий TCP-чек порта, без скана процессов);
 //!   - /healthz нового моста (мини-HTTP-клиент на std::net, без async);
-//!   - раз в ~60с — латентность TCP-коннекта до upstream-прокси.
+//!   - раз в ~60с - латентность TCP-коннекта до upstream-прокси.
 //!
 //! Результат: иконка трея меняет цвет (зелёная/жёлтая/красная точка),
 //! tooltip и статус-строка меню показывают режим и число соединений,
 //! а на ПЕРЕХОДАХ состояний летят системные тосты (мост упал/ожил,
-//! upstream не отвечает, высокий пинг) — с дебаунсом, чтобы не спамить.
+//! upstream не отвечает, высокий пинг) - с дебаунсом, чтобы не спамить.
 //!
 //! Легаси-мост (python, без /healthz): после двух неудачных парсов healthz
 //! перестаём слать GET (он уходил бы в upstream мусором) и минуту проверяем
@@ -34,8 +34,8 @@ const TRAY_DOWN: &[u8] = include_bytes!("../icons/tray-down.png");
 
 /// macOS: «C» в цвет строки меню + цветная точка состояния (зелёная /
 /// жёлтая / красная). Template-картинку с цветной точкой сделать нельзя:
-/// macOS перекрашивает её целиком — поэтому по два варианта на тему.
-/// Template — только первая картинка до первого замера.
+/// macOS перекрашивает её целиком - поэтому по два варианта на тему.
+/// Template - только первая картинка до первого замера.
 /// Генератор: scripts/gen-tray-icons-mac.py.
 #[cfg(target_os = "macos")]
 pub const MAC_TEMPLATE: &[u8] = include_bytes!("../icons/tray-mac-template.png");
@@ -95,7 +95,7 @@ const PING_ALERT_STREAK: u32 = 2;
 const UPSTREAM_ALERT_TICKS: u32 = 6;
 
 /// Ручки трея, которые монитор обновляет на лету (иконка + tooltip;
-/// нативного меню нет — статус живёт в попапе и tooltip'е).
+/// нативного меню нет - статус живёт в попапе и tooltip'е).
 pub struct TrayHandles {
     pub tray: TrayIcon<tauri::Wry>,
 }
@@ -119,7 +119,7 @@ struct Health {
 struct UpHealth {
     url: String,
     /// Мост ≥1.5: false только после серии отказов подряд, а не после
-    /// единичного сбоя — уведомление больше не дёргается от каждого флапа.
+    /// единичного сбоя - уведомление больше не дёргается от каждого флапа.
     healthy: bool,
 }
 
@@ -164,14 +164,14 @@ fn run(app: AppHandle, h: TrayHandles) {
     let mut nf_ping = Debounce::new(Duration::from_secs(600));
     // Сколько замеров подряд пинг высокий / тиков подряд прокси нездоров.
     // Тревожим только затяжные проблемы: единичный потерянный пакет при
-    // TCP-коннекте — это повтор SYN через 1–2с, а не «медленный прокси».
+    // TCP-коннекте - это повтор SYN через 1-2с, а не «медленный прокси».
     let mut ping_high_streak: u32 = 0;
     let mut upstream_bad_ticks: u32 = 0;
 
     loop {
         let listening = port_listening();
 
-        // healthz — только если порт жив и мы не в «легаси-паузе».
+        // healthz - только если порт жив и мы не в «легаси-паузе».
         let health: Option<Health> = if listening
             && skip_healthz_until.map(|t| Instant::now() > t).unwrap_or(true)
         {
@@ -197,7 +197,13 @@ fn run(app: AppHandle, h: TrayHandles) {
             None
         };
 
-        // Латентность до upstream — раз в LATENCY_EVERY_TICKS.
+        // Статистика: через мост идут соединения и прокси здоров - сегодня
+        // прокси реально пропускал трафик.
+        if health.as_ref().is_some_and(|hh| hh.active > 0 && hh.upstreams.iter().any(|u| u.healthy)) {
+            crate::telemetry::note_used();
+        }
+
+        // Латентность до upstream - раз в LATENCY_EVERY_TICKS.
         if tick % LATENCY_EVERY_TICKS == 0 {
             if let Some(hh) = &health {
                 if let Some(addr) = hh.upstreams.first().and_then(|u| upstream_addr(&u.url)) {
@@ -206,7 +212,7 @@ fn run(app: AppHandle, h: TrayHandles) {
                     ping_high_streak = if high { ping_high_streak + 1 } else { 0 };
                     if ping_high_streak == PING_ALERT_STREAK && internet_ok() && nf_ping.ready() {
                         let ms = last_latency_ms.unwrap_or_default();
-                        notify(&app, &format!("Прокси отвечает медленно ({ms} мс) уже пару минут — соединения могут тормозить"));
+                        notify(&app, &format!("Прокси отвечает медленно ({ms} мс) уже пару минут - соединения могут тормозить"));
                     }
                 }
             }
@@ -236,7 +242,7 @@ fn run(app: AppHandle, h: TrayHandles) {
         let (bytes, template, variant) = tray_icon_for(state);
         if prev_icon != Some(variant) {
             // Порядок важен: set_icon создаёт новую картинку БЕЗ флага template
-            // (tray-icon), флаг ставится уже на неё. Наоборот — чёрная «C»
+            // (tray-icon), флаг ставится уже на неё. Наоборот - чёрная «C»
             // на тёмной строке меню, то есть невидимая иконка.
             if let Ok(img) = tauri::image::Image::from_bytes(bytes) {
                 let _ = h.tray.set_icon(Some(img));
@@ -246,7 +252,7 @@ fn run(app: AppHandle, h: TrayHandles) {
         }
 
         // ── Tooltip ──
-        // set_tooltip — вызов в UI-поток; дёргаем только когда текст поменялся.
+        // set_tooltip - вызов в UI-поток; дёргаем только когда текст поменялся.
         let tooltip = describe(state, &health, last_latency_ms);
         if tooltip != prev_tooltip {
             let _ = h.tray.set_tooltip(Some(&tooltip));
@@ -257,7 +263,7 @@ fn run(app: AppHandle, h: TrayHandles) {
         match (prev_state, state) {
             (Some(BridgeState::Ok | BridgeState::Warn), BridgeState::Down) => {
                 if !shim::manually_stopped() && nf_down.ready() {
-                    notify(&app, "Мост остановился — он перезапустится автоматически в течение ~5 секунд");
+                    notify(&app, "Мост остановился - он перезапустится автоматически в течение ~5 секунд");
                 }
             }
             (Some(BridgeState::Down), BridgeState::Ok | BridgeState::Warn) => {
@@ -268,16 +274,16 @@ fn run(app: AppHandle, h: TrayHandles) {
             _ => {}
         }
         upstream_bad_ticks = if upstream_ok { 0 } else { upstream_bad_ticks + 1 };
-        // Тревога — только если сбой держится UPSTREAM_ALERT_TICKS тиков (~30с)
+        // Тревога - только если сбой держится UPSTREAM_ALERT_TICKS тиков (~30с)
         // и интернет у самого Mac есть: при отвалившемся Wi‑Fi прокси ни при чём.
         if upstream_bad_ticks == UPSTREAM_ALERT_TICKS && internet_ok() && nf_upstream.ready() {
             let pool = health.as_ref().map(|hh| hh.upstreams.len()).unwrap_or(1);
             notify(&app, &upstream_down_text(pool));
             upstream_alerted = true;
         }
-        // Парное «отбой тревоги» — иначе пользователь не знает, кончилось ли.
+        // Парное «отбой тревоги» - иначе пользователь не знает, кончилось ли.
         if upstream_alerted && !prev_upstream_ok && upstream_ok && nf_upstream_back.ready() {
-            notify(&app, "Прокси снова отвечает — соединения идут как обычно");
+            notify(&app, "Прокси снова отвечает - соединения идут как обычно");
             upstream_alerted = false;
         }
 
@@ -289,7 +295,7 @@ fn run(app: AppHandle, h: TrayHandles) {
 }
 
 /// Текст тревоги по прокси. Закреплённый сервис (Claude) НИКОГДА не уходит
-/// на другой прокси — обещать «failover» нельзя: мост повторяет попытку к
+/// на другой прокси - обещать «failover» нельзя: мост повторяет попытку к
 /// тому же прокси и ждёт его, выходной IP не меняется.
 fn upstream_down_text(pool: usize) -> String {
     if pool > 1 {
@@ -297,7 +303,7 @@ fn upstream_down_text(pool: usize) -> String {
          остальные сервисы переходят на резервный"
             .into()
     } else {
-        "Прокси перестал отвечать. Мост повторяет подключение к нему же — \
+        "Прокси перестал отвечать. Мост повторяет подключение к нему же - \
          IP не меняется, трафик в обход прокси не идёт"
             .into()
     }
@@ -311,9 +317,9 @@ fn describe(
     match state {
         BridgeState::Down => {
             if shim::manually_stopped() {
-                "Clod Helper — мост остановлен вручную".into()
+                "Clod Helper - мост остановлен вручную".into()
             } else {
-                "Clod Helper — мост не работает!".into()
+                "Clod Helper - мост не работает!".into()
             }
         }
         _ => match health {
@@ -321,9 +327,9 @@ fn describe(
                 let mode = if hh.mode == "smart" { "smart" } else { "весь трафик" };
                 let ping = latency.map(|ms| format!(" · пинг {ms} мс")).unwrap_or_default();
                 let warn = if state == BridgeState::Warn { " ⚠" } else { "" };
-                format!("Clod Helper — мост активен · {mode} · соединений: {}{ping}{warn}", hh.active)
+                format!("Clod Helper - мост активен · {mode} · соединений: {}{ping}{warn}", hh.active)
             }
-            None => "Clod Helper — мост активен (легаси, без телеметрии)".into(),
+            None => "Clod Helper - мост активен (легаси, без телеметрии)".into(),
         },
     }
 }
@@ -337,14 +343,14 @@ fn notify(app: &AppHandle, body: &str) {
         .show();
 }
 
-/// Порт моста слушается? Лёгкий connect — без скана процессов.
+/// Порт моста слушается? Лёгкий connect - без скана процессов.
 fn port_listening() -> bool {
     let addr: SocketAddr = format!("127.0.0.1:{LISTEN_PORT}").parse().unwrap();
     TcpStream::connect_timeout(&addr, Duration::from_millis(600)).is_ok()
 }
 
-/// GET /healthz мини-клиентом на std::net (монитор — обычный поток, не tokio).
-/// Счётчики соединений — по всему мосту (см. merge_listener).
+/// GET /healthz мини-клиентом на std::net (монитор - обычный поток, не tokio).
+/// Счётчики соединений - по всему мосту (см. merge_listener).
 fn fetch_healthz() -> Option<(Health, serde_json::Value)> {
     let mut raw = fetch_healthz_port(LISTEN_PORT, Duration::from_millis(800))?;
     for port in other_health_ports() {
@@ -372,7 +378,7 @@ pub(crate) fn fetch_healthz_port(port: u16, connect: Duration) -> Option<serde_j
 
 /// Остальные HTTP-входы моста со своими счётчиками: строгий вход Claude и
 /// закреплённые за прокси пула (по одному на прокси). SOCKS-вход Telegram
-/// (8891) не HTTP — его статистики в /healthz нет.
+/// (8891) не HTTP - его статистики в /healthz нет.
 pub(crate) fn other_health_ports() -> Vec<u16> {
     let pool = crate::settings::effective_proxies(&crate::settings::load()).len() as u16;
     [crate::claude_desktop::PROXY_PORT, crate::tasks::SITES_PORT]
@@ -382,8 +388,8 @@ pub(crate) fn other_health_ports() -> Vec<u16> {
 }
 
 /// Добавить к /healthz общего входа счётчики другого входа моста: у каждого
-/// входа они свои (upstream'ы — общие), а «Обзор» и трей показывают трафик
-/// всего моста — Claude Desktop, например, ходит только через свой вход
+/// входа они свои (upstream'ы - общие), а «Обзор» и трей показывают трафик
+/// всего моста - Claude Desktop, например, ходит только через свой вход
 /// 8890, и по общему его трафика не было видно вовсе.
 pub(crate) fn merge_listener(main: &mut serde_json::Value, other: &serde_json::Value) {
     if other["service"] != "clod-bridge" {
@@ -393,7 +399,7 @@ pub(crate) fn merge_listener(main: &mut serde_json::Value, other: &serde_json::V
         let sum = main[key].as_u64().unwrap_or(0) + other[key].as_u64().unwrap_or(0);
         main[key] = sum.into();
     }
-    // Журналы сбоев — на общей шкале времени (все входы в одном процессе).
+    // Журналы сбоев - на общей шкале времени (все входы в одном процессе).
     if let Some(theirs) = other["last_errors"].as_array().filter(|a| !a.is_empty()) {
         let mut all: Vec<serde_json::Value> = main["last_errors"].as_array().cloned().unwrap_or_default();
         all.extend(theirs.iter().cloned());
@@ -410,8 +416,8 @@ fn upstream_addr(url_masked: &str) -> Option<String> {
 }
 
 /// Медиана трёх TCP-коннектов до upstream, мс. Один замер врёт: потерянный
-/// SYN даёт «2–3 секунды» при живом прокси. Неудачные попытки не считаются;
-/// None — не подключились ни разу.
+/// SYN даёт «2-3 секунды» при живом прокси. Неудачные попытки не считаются;
+/// None - не подключились ни разу.
 fn measure_latency_median(addr: &str) -> Option<u128> {
     let mut v: Vec<u128> = (0..3).filter_map(|_| measure_connect_ms(addr)).collect();
     if v.is_empty() {
@@ -421,7 +427,7 @@ fn measure_latency_median(addr: &str) -> Option<u128> {
     Some(v[v.len() / 2])
 }
 
-/// Есть ли интернет у самого Mac (мимо прокси)? Если нет — проблема в Wi‑Fi,
+/// Есть ли интернет у самого Mac (мимо прокси)? Если нет - проблема в Wi‑Fi,
 /// а не в прокси, и тревожить «прокси не отвечает» нельзя. Два независимых
 /// адреса: Cloudflare и Яндекс DNS.
 fn internet_ok() -> bool {
@@ -431,7 +437,7 @@ fn internet_ok() -> bool {
     })
 }
 
-/// Время TCP-коннекта до upstream, мс. None — не подключились (это отдельно
+/// Время TCP-коннекта до upstream, мс. None - не подключились (это отдельно
 /// подсветит healthz как unhealthy при реальном использовании).
 fn measure_connect_ms(addr: &str) -> Option<u128> {
     let sock = addr.to_socket_addrs().ok()?.next()?;
@@ -456,7 +462,7 @@ mod tests {
         assert_eq!((main["via_upstream"].as_u64(), main["via_direct"].as_u64()), (Some(3439), Some(2)));
         assert_eq!(main["errors"].as_u64(), Some(3));
         let order: Vec<u64> = main["last_errors"].as_array().unwrap().iter().map(|e| e["t"].as_u64().unwrap()).collect();
-        assert_eq!(order, vec![10, 50, 90], "журнал сбоев — по времени");
+        assert_eq!(order, vec![10, 50, 90], "журнал сбоев - по времени");
         assert_eq!(main["upstreams"].as_array().unwrap().len(), 1, "upstream-ы общие, не дублируются");
         // Чужой сервис на порту моста не примешиваем.
         merge_listener(&mut main, &json!({"service": "nginx", "total": 100}));

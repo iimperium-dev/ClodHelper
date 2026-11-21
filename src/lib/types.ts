@@ -83,9 +83,9 @@ export type AppView = "overview" | "proxies" | "sites" | "apps" | "tools" | "set
 export interface SiteEntry {
   id: string;
   name: string;
-  /** Домены сайта — вместе с поддоменами. */
+  /** Домены сайта - вместе с поддоменами. */
   domains: string[];
-  /** Индекс прокси в пуле; null — «Авто». */
+  /** Индекс прокси в пуле; null - «Авто». */
   proxy: number | null;
   enabled: boolean;
 }
@@ -94,7 +94,7 @@ export interface SitesBrowser {
   id: string;
   name: string;
   installed: boolean;
-  /** "sites" — только AI и сайты; "all" — весь трафик; "ai" — старый мост. */
+  /** "sites" - только AI и сайты; "all" - весь трафик; "ai" - старый мост. */
   mode: "sites" | "all" | "ai";
 }
 
@@ -108,14 +108,14 @@ export interface SitesStatus {
 export interface ScopeBrowser {
   domain: string;
   name: string;
-  /** pac — сайты в этом браузере; bridge — весь трафик через мост; off; conflict. */
+  /** pac - сайты в этом браузере; bridge - весь трафик через мост; off; conflict. */
   state: "pac" | "bridge" | "off" | "conflict";
   conflict: string | null;
 }
 
 export interface SitesScope {
   supported: boolean;
-  /** true — «Только в выбранных», false — «Во всех браузерах». */
+  /** true - «Только в выбранных», false - «Во всех браузерах». */
   selected: boolean;
   browsers: ScopeBrowser[];
 }
@@ -123,7 +123,7 @@ export interface SitesScope {
 /** Программа, которую «Сайты» не трогают (mirror browser_ext::BypassApp). */
 export interface BypassApp {
   name: string;
-  /** Папка программы — правило действует на все её exe и профили. */
+  /** Папка программы - правило действует на все её exe и профили. */
   dir: string;
   running: boolean;
 }
@@ -131,18 +131,18 @@ export interface BypassApp {
 /** Браузер, в котором расширения перехватывают прокси (сайты в нём не работают). */
 export interface BrowserProxyExtensions {
   name: string;
-  /** Путь к exe/.app — для «Открыть расширение». */
+  /** Путь к exe/.app - для «Открыть расширение». */
   path: string;
   extensions: { id: string; name: string }[];
 }
 
-/** «Сайты во всех браузерах» — системная автонастройка прокси (mirror system_pac.rs). */
+/** «Сайты во всех браузерах» - системная автонастройка прокси (mirror system_pac.rs). */
 export interface SystemPacStatus {
   /** Есть в этой ОС (пока только Windows). */
   supported: boolean;
   /** Включено пользователем. */
   enabled: boolean;
-  /** В системе сейчас стоит наш PAC (enabled && !active — сбросила другая программа). */
+  /** В системе сейчас стоит наш PAC (enabled && !active - сбросила другая программа). */
   active: boolean;
   /** Чужая настройка прокси в системе. */
   foreign: string | null;
@@ -199,7 +199,7 @@ export interface AppProfileStatus {
   builtin: boolean;
   /** Убрано из списка (встроенные прячутся, а не удаляются). */
   hidden: boolean;
-  /** Свой прокси из пула (индекс); null — «Авто». */
+  /** Свой прокси из пула (индекс); null - «Авто». */
   proxy: number | null;
   /** Весь трафик через прокси (иначе только AI-сайты). */
   full_proxy: boolean;
@@ -262,7 +262,7 @@ export interface BridgeUpstreamHealth {
   fail: number;
   /** Отказов подряд (мост 1.5.0+). */
   fail_streak?: number;
-  /** Резервы этого прокси — индексы в списке моста (мост 1.12.0+). */
+  /** Резервы этого прокси - индексы в списке моста (мост 1.12.0+). */
   backups?: number[];
 }
 
@@ -277,7 +277,7 @@ export interface AutostartState {
 export interface FoundApp {
   name: string;
   path: string;
-  /** Иконка (data-URL PNG) сразу с ответом — Windows. */
+  /** Иконка (data-URL PNG) сразу с ответом - Windows. */
   icon?: string;
 }
 
@@ -288,7 +288,7 @@ export interface AppTraffic {
   via_bridge: number;
   direct: number;
   /** Браузер: включённое расширение, перехватившее прокси. */
-  /** Расширение-перехватчик; webrtc_only — прокси не трогает, но снимает
+  /** Расширение-перехватчик; webrtc_only - прокси не трогает, но снимает
       защиту WebRTC (настоящий IP виден сайтам). */
   proxy_extension: { id: string; name: string; webrtc_only?: boolean } | null;
   /** Telegram: чужой локальный прокси («127.0.0.1:1442»), мимо моста. */
@@ -314,7 +314,7 @@ export interface TelegramStatus {
 export interface BridgeVersions {
   installed: string | null;
   bundled: string | null;
-  /** Встроенный новее установленного — пора «Обновить мост». */
+  /** Встроенный новее установленного - пора «Обновить мост». */
   outdated: boolean;
 }
 
@@ -329,7 +329,7 @@ export interface BridgeHealth {
   version: string;
   uptime_sec: number;
   listen: string;
-  /** "smart" — через upstream только AI-домены; "all" — весь трафик. */
+  /** "smart" - через upstream только AI-домены; "all" - весь трафик. */
   mode: string;
   active: number;
   total: number;
@@ -350,14 +350,22 @@ export interface ProxyPing {
   url: string;
   host: string;
   port: number;
-  /** TCP-connect, мс; null — порт не ответил. */
+  /** TCP-connect, мс; null - порт не ответил. */
   ms: number | null;
-  /** Запрос через прокси прошёл; null/нет — не проверяли. */
+  /** Запрос через прокси прошёл; null/нет - не проверяли. */
   alive?: boolean | null;
   /** Почему не работает. */
   error?: string | null;
-  /** Резерв какого прокси пула (индекс); нет — сам прокси пула. */
+  /** Резерв какого прокси пула (индекс); нет - сам прокси пула. */
   backup_of?: number | null;
+}
+
+/** Замер скорости скачивания через прокси. */
+export interface ProxySpeed {
+  /** Мегабит в секунду. */
+  mbps: number;
+  bytes: number;
+  secs: number;
 }
 
 /** Группы сервисов для назначений (mirror tasks::SERVICE_GROUPS). */
@@ -410,7 +418,38 @@ export interface UpdateInfo {
   sha256: string;
   /** Пункты «Что нового» этой версии. */
   highlights?: string[];
+  /** Срочное исправление. */
+  force?: boolean;
+  /** Слишком старая установка: обновить можно только вручную со страницы релиза. */
+  manual_only?: boolean;
+  /** Страница релиза на GitHub. */
+  page?: string;
+  /** Доля установок, которым предложена версия. */
+  rollout?: number;
+  /** Бэкенд: обновление поставится само (автообновление включено и условия позволяют). */
+  handles_silently?: boolean;
 }
+
+/** Автообновление (settings.auto_update). */
+export interface AutoUpdateState {
+  enabled: boolean;
+  /** Один раз предложить включить (установка до этой функции). */
+  offer: boolean;
+}
+
+/** Приватность: три переключателя и «предложить автообновление» (privacy_get). */
+export interface PrivacyState {
+  auto_update: boolean;
+  crash_reports: boolean;
+  usage_stats: boolean;
+  offer: boolean;
+  /** Переключатели или строка про отчёты уже были показаны. */
+  notice_seen: boolean;
+  /** Установка со старой версии (до статистики). */
+  legacy: boolean;
+}
+
+export type PrivacyKey = "auto_update" | "crash_reports" | "usage_stats";
 
 /** Элемент колокольчика: обновление или рассылка разработчика (notices.rs). */
 export interface NoticeItem {
@@ -421,6 +460,8 @@ export interface NoticeItem {
   title: string;
   body: string;
   link: string | null;
+  /** Подпись кнопки со ссылкой; нет - «Подробнее». */
+  link_label?: string | null;
   read: boolean;
 }
 
@@ -428,17 +469,17 @@ export interface NoticeItem {
 export interface UpdateProgress {
   stage: "download" | "verify" | "install" | "restart";
   received: number;
-  /** 0 — размер неизвестен. */
+  /** 0 - размер неизвестен. */
   total: number;
 }
 
 /** «Защита от утечек» (pf на macOS, брандмауэр Windows). */
 export interface LeakGuardStatus {
   enabled: boolean;
-  /** Через запятую: "claude", "telegram", "codex" (codex — только Windows). */
+  /** Через запятую: "claude", "telegram", "codex" (codex - только Windows). */
   services: string;
   auto_restore: boolean;
-  /** Живая проверка: прямое соединение с Anthropic отклонено. null — не понять. */
+  /** Живая проверка: прямое соединение с Anthropic отклонено. null - не понять. */
   verified: boolean | null;
   /** Windows: у каких сервисов ("claude", "codex") запрет UDP стоит на прежнюю версию (обновились из Store). */
   stale?: string;

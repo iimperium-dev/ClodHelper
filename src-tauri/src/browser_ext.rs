@@ -3,7 +3,7 @@
 //! В Chromium-браузерах расширение с правом `proxy` (FoxyProxy,
 //! SwitchyOmega, VPN-расширения) ставит СВОЮ настройку прокси, и она главнее
 //! параметра запуска `--proxy-server`: браузер, открытый через мост, всё
-//! равно идёт мимо. Снаружи такое не исправить — но можно честно показать
+//! равно идёт мимо. Снаружи такое не исправить - но можно честно показать
 //! «прокси перехватывает FoxyProxy» и открыть страницу расширения.
 //!
 //! Признак: в Secure Preferences / Preferences профиля у включённого
@@ -18,18 +18,18 @@ use serde_json::Value;
 
 /// Включённое расширение, которое задало браузеру свой прокси или сняло
 /// защиту WebRTC (VPN-расширения вроде Tuxler ставят ip_handling_policy =
-/// default — такая настройка главнее и флага запуска, и настройки профиля).
+/// default - такая настройка главнее и флага запуска, и настройки профиля).
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ProxyExtension {
     pub id: String,
     pub name: String,
-    /// Прокси не трогает — только выдаёт настоящий IP через WebRTC.
+    /// Прокси не трогает - только выдаёт настоящий IP через WebRTC.
     #[serde(default)]
     pub webrtc_only: bool,
 }
 
 /// Имя файла программы без пути и расширения («…/Google Chrome.app» →
-/// «Google Chrome», «C:\…\chrome.exe» → «chrome») — разбор без учёта ОС.
+/// «Google Chrome», «C:\…\chrome.exe» → «chrome») - разбор без учёта ОС.
 fn app_stem(app_path: &str) -> Option<&str> {
     let leaf = app_path.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next()?;
     let stem = [".app", ".exe", ".EXE"]
@@ -57,7 +57,7 @@ fn mac_data_rel(stem: &str) -> Option<&'static str> {
     })
 }
 
-/// Windows: папка в %LOCALAPPDATA% по имени exe (chrome.exe — и у Google
+/// Windows: папка в %LOCALAPPDATA% по имени exe (chrome.exe - и у Google
 /// Chrome, и у Chromium: различаем по пути установки).
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn windows_data_rel(stem: &str, app_path: &str) -> Option<&'static str> {
@@ -85,9 +85,9 @@ fn data_dir(app_path: &str) -> Option<PathBuf> {
 
 /// Защита WebRTC в профилях браузера: настоящий IP не уходит через STUN
 /// мимо прокси. Флаг запуска --webrtc-ip-handling-policy соблюдают не все
-/// Chromium-браузеры (Comet 156 его игнорирует — ipleak показывал IP
+/// Chromium-браузеры (Comet 156 его игнорирует - ipleak показывал IP
 /// провайдера), а настройка профиля webrtc.ip_handling_policy работает в
-/// любом — та же, что выставляют расширения против утечки WebRTC. Пишем,
+/// любом - та же, что выставляют расширения против утечки WebRTC. Пишем,
 /// только пока браузер закрыт: открытый перезапишет файл при выходе.
 /// Возвращает, сколько профилей изменено.
 pub fn guard_webrtc_prefs(app_path: &str) -> usize {
@@ -114,7 +114,7 @@ pub fn guard_webrtc_prefs(app_path: &str) -> usize {
     changed
 }
 
-/// Выставить защиту WebRTC в настройках профиля. true — что-то изменилось.
+/// Выставить защиту WebRTC в настройках профиля. true - что-то изменилось.
 fn apply_webrtc_guard(prefs: &mut Value) -> bool {
     let Some(root) = prefs.as_object_mut() else { return false };
     let webrtc = root.entry("webrtc").or_insert_with(|| Value::Object(Default::default()));
@@ -135,7 +135,7 @@ fn apply_webrtc_guard(prefs: &mut Value) -> bool {
     changed
 }
 
-/// Имя расширения из манифеста; `__MSG_x__` — из _locales (ru → en → default).
+/// Имя расширения из манифеста; `__MSG_x__` - из _locales (ru → en → default).
 fn ext_name(ext_dir: &Path, manifest: &Value) -> String {
     let raw = manifest.get("name").and_then(Value::as_str).unwrap_or("Расширение");
     let Some(key) = raw.strip_prefix("__MSG_").and_then(|k| k.strip_suffix("__")) else {
@@ -158,8 +158,8 @@ fn ext_name(ext_dir: &Path, manifest: &Value) -> String {
     raw.to_string()
 }
 
-/// Перехватчики в настройках одного профиля (без файловой системы — для тестов).
-/// (id, только WebRTC) — расширения, перехватывающие прокси или WebRTC.
+/// Перехватчики в настройках одного профиля (без файловой системы - для тестов).
+/// (id, только WebRTC) - расширения, перехватывающие прокси или WebRTC.
 fn scan_prefs(prefs: &[Value]) -> Vec<(String, bool)> {
     let mut ids: Vec<(String, bool)> = Vec::new();
     for p in prefs {
@@ -168,7 +168,7 @@ fn scan_prefs(prefs: &[Value]) -> Vec<(String, bool)> {
         };
         for (id, e) in settings {
             let has_proxy = e.pointer("/preferences/proxy").is_some();
-            // Ключ с точкой: «webrtc.ip_handling_policy» — одно имя.
+            // Ключ с точкой: «webrtc.ip_handling_policy» - одно имя.
             let weakens_webrtc = e.get("preferences").and_then(Value::as_object).is_some_and(|p| {
                 p.get("webrtc.ip_handling_policy").and_then(Value::as_str).is_some_and(|v| v != "disable_non_proxied_udp")
                     || p.get("webrtc.multiple_routes_enabled") == Some(&Value::Bool(true))
@@ -223,7 +223,7 @@ fn scan(data: &Path) -> Vec<ProxyExtension> {
 }
 
 /// Перехватчики прокси у браузера по пути к его .app / .exe. Кэш по mtime
-/// файла настроек: опрос статуса идёт раз в 5 секунд, а JSON профиля — мегабайты.
+/// файла настроек: опрос статуса идёт раз в 5 секунд, а JSON профиля - мегабайты.
 pub fn proxy_extensions(app_path: &str) -> Vec<ProxyExtension> {
     static CACHE: Mutex<Option<HashMap<PathBuf, (SystemTime, Vec<ProxyExtension>)>>> = Mutex::new(None);
     let Some(data) = data_dir(app_path) else {
@@ -247,7 +247,7 @@ pub fn proxy_extensions(app_path: &str) -> Vec<ProxyExtension> {
     Vec::new()
 }
 
-/// Установленные Chromium-браузеры (имя, путь к .exe / .app) — для «Сайтов»:
+/// Установленные Chromium-браузеры (имя, путь к .exe / .app) - для «Сайтов»:
 /// расширение-перехватчик в любом из них ломает сайты, даже если браузера
 /// нет в «Приложениях».
 pub fn installed_browsers() -> Vec<(String, String)> {
@@ -292,7 +292,7 @@ pub fn installed_browsers() -> Vec<(String, String)> {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BypassApp {
     pub name: String,
-    /// Папка программы: все её exe внутри (у антидетект-браузера — все профили).
+    /// Папка программы: все её exe внутри (у антидетект-браузера - все профили).
     pub dir: String,
     /// Запущена сейчас (только для подсказок в UI).
     #[serde(default)]
@@ -301,10 +301,10 @@ pub struct BypassApp {
 
 /// Папка программы по пути к её exe: «…\Google\Chrome\Application\chrome.exe»
 /// → «…\Google\Chrome»; «…\Local\1browser\1browser\Application\1browser.exe»
-/// → «…\Local\1browser» (двойная папка — весь продукт с его ядрами профилей).
+/// → «…\Local\1browser» (двойная папка - весь продукт с его ядрами профилей).
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn app_dir(exe: &str) -> Option<String> {
-    // macOS: программа — это бандл .app целиком (исполняемые файлы и
+    // macOS: программа - это бандл .app целиком (исполняемые файлы и
     // помощники браузера лежат внутри него).
     #[cfg(not(target_os = "windows"))]
     {
@@ -334,7 +334,7 @@ pub fn app_dir(exe: &str) -> Option<String> {
 }
 
 /// Кандидаты в «Не трогать»: установленные Chromium-браузеры и запущенные
-/// программы на движке Chromium (рядом с exe лежит chrome_elf.dll — так
+/// программы на движке Chromium (рядом с exe лежит chrome_elf.dll - так
 /// находятся и антидетект-браузеры вроде 1browser, которых нет в списках).
 pub fn bypass_candidates() -> Vec<BypassApp> {
     #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
@@ -380,7 +380,7 @@ pub fn bypass_candidates() -> Vec<BypassApp> {
         }
     }
     // macOS: установленные браузеры и запущенные программы, которые
-    // зарегистрированы как браузер (открывают ссылки http) — так находятся и
+    // зарегистрированы как браузер (открывают ссылки http) - так находятся и
     // антидетект-браузеры, которых нет в списке известных.
     #[cfg(not(target_os = "windows"))]
     {
@@ -425,7 +425,7 @@ pub fn bundle_running(app: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// macOS: бандл — Chromium-браузер (известный или открывающий ссылки http
+/// macOS: бандл - Chromium-браузер (известный или открывающий ссылки http
 /// и собранный на Chromium: внутри есть «… Framework.framework»).
 #[cfg(not(target_os = "windows"))]
 pub fn is_chromium_browser(app: &str) -> bool {
@@ -439,7 +439,7 @@ pub fn is_chromium_browser(app: &str) -> bool {
     chromium && opens_http(&bundle)
 }
 
-/// macOS: бандл объявляет схему http в CFBundleURLTypes — это браузер.
+/// macOS: бандл объявляет схему http в CFBundleURLTypes - это браузер.
 #[cfg(not(target_os = "windows"))]
 fn opens_http(bundle: &str) -> bool {
     let plist = Path::new(bundle).join("Contents/Info.plist");
@@ -452,7 +452,7 @@ fn opens_http(bundle: &str) -> bool {
 }
 
 /// Открыть страницу расширения в браузере по его пути (Windows: адрес
-/// передаётся exe — открытый браузер просто покажет новую вкладку).
+/// передаётся exe - открытый браузер просто покажет новую вкладку).
 #[cfg(target_os = "windows")]
 pub fn open_extension_page(app_path: &str, ext_id: &str) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
@@ -466,8 +466,8 @@ pub fn open_extension_page(app_path: &str, ext_id: &str) -> Result<(), String> {
         .map_err(|_| format!("Откройте в браузере {url} и отключите расширение"))
 }
 
-/// Адрес страницы расширения в браузере. id расширения Chromium — 32 буквы
-/// a–p; другое в командную строку и AppleScript не пускаем.
+/// Адрес страницы расширения в браузере. id расширения Chromium - 32 буквы
+/// a-p; другое в командную строку и AppleScript не пускаем.
 pub fn extension_page_url(app_path: &str, ext_id: &str) -> Result<String, String> {
     if ext_id.len() != 32 || !ext_id.chars().all(|c| ('a'..='p').contains(&c)) {
         return Err("Некорректный идентификатор расширения".into());
@@ -489,7 +489,7 @@ pub fn open_extension_page(app_path: &str, ext_id: &str) -> Result<(), String> {
         .map(|s| s.to_string_lossy().replace('"', ""))
         .ok_or("Браузер не найден")?;
     let url = extension_page_url(app_path, ext_id)?;
-    // chrome:// нельзя открыть «как ссылку» снаружи — только новой вкладкой
+    // chrome:// нельзя открыть «как ссылку» снаружи - только новой вкладкой
     // через AppleScript самого браузера.
     let script = format!(
         "tell application \"{app}\"\nactivate\nif (count of windows) = 0 then make new window\nmake new tab at end of tabs of front window with properties {{URL:\"{url}\"}}\nend tell"
@@ -518,7 +518,7 @@ mod tests {
         assert_eq!(p["webrtc"]["ip_handling_policy"], "disable_non_proxied_udp");
         assert_eq!(p["webrtc"]["multiple_routes_enabled"], false);
         assert_eq!(p["profile"]["name"], "Личный", "остальные настройки не трогаем");
-        assert!(!apply_webrtc_guard(&mut p), "уже защищён — файл не переписываем");
+        assert!(!apply_webrtc_guard(&mut p), "уже защищён - файл не переписываем");
         let mut empty = json!({});
         assert!(apply_webrtc_guard(&mut empty));
     }
@@ -531,7 +531,7 @@ mod tests {
             Some("/Applications/Google Chrome.app")
         );
         assert_eq!(app_dir("/Applications/Arc.app").as_deref(), Some("/Applications/Arc.app"));
-        assert_eq!(app_dir("/usr/bin/curl"), None, "не бандл — не программа для исключения");
+        assert_eq!(app_dir("/usr/bin/curl"), None, "не бандл - не программа для исключения");
     }
 
     /// Живая проверка: cargo test live_chromium -- --ignored --nocapture
@@ -566,7 +566,7 @@ mod tests {
         assert_eq!(
             scan_prefs(&prefs),
             vec![("foxy".to_string(), false), ("tuxler".to_string(), true)],
-            "защищающее WebRTC расширение — не перехватчик"
+            "защищающее WebRTC расширение - не перехватчик"
         );
     }
 
@@ -610,10 +610,10 @@ mod tests {
         assert_eq!(
             app_dir(r"C:\Users\u\AppData\Local\1browser\1browser\Application\1browser.exe").as_deref(),
             Some(r"C:\Users\u\AppData\Local\1browser"),
-            "двойная папка 1browser\\1browser — весь продукт"
+            "двойная папка 1browser\\1browser - весь продукт"
         );
         assert_eq!(app_dir(r"D:\Tools\MyBrowser\browser.exe").as_deref(), Some(r"D:\Tools\MyBrowser"));
-        assert_eq!(app_dir(r"C:\x.exe"), None, "корень диска — слишком широко");
+        assert_eq!(app_dir(r"C:\x.exe"), None, "корень диска - слишком широко");
     }
 
     #[test]
