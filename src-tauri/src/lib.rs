@@ -9,6 +9,7 @@ mod claude_chats_export;
 mod claude_wipe;
 mod commands;
 mod diagnostics;
+mod media;
 mod notices;
 mod telemetry;
 mod telemetry_scrub;
@@ -159,6 +160,7 @@ pub fn run() {
             commands::notice_event,
             commands::notices_banner,
             commands::notices_banner_dismiss,
+            commands::banner_media,
             commands::play_chime,
             commands::diagnostics_report,
             commands::notices_list,

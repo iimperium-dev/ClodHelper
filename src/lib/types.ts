@@ -465,6 +465,19 @@ export interface BannerView {
   eyebrow?: string | null;
   buttons: { label: string; url: string }[];
   dismissible: boolean;
+  /** Фото и видео: первое - обложка, все - в окне просмотра. */
+  media: BannerMedia[];
+  /** Первое медиа - обложкой в самом баннере. */
+  cover: boolean;
+}
+
+export interface BannerMedia {
+  key: string;
+  kind: "image" | "video";
+  w: number;
+  h: number;
+  /** Кадр-заставка видео. */
+  poster?: string;
 }
 
 export interface NoticeItem {

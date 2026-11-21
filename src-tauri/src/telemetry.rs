@@ -205,6 +205,34 @@ pub async fn get(path_and_query: &str) -> Result<Option<String>, String> {
     .await
 }
 
+/// Файл с сервера статистики (фото и видео баннеров): только при включённой
+/// статистике, не больше max байт. Напрямую, нет связи - через мост.
+pub async fn get_bytes(path: &str, max: usize, timeout: Duration) -> Result<Vec<u8>, String> {
+    let base = base().ok_or("сервер не задан")?;
+    let on = tokio::task::spawn_blocking(load_if_stats_on).await.ok().flatten().is_some();
+    if !on {
+        return Err("статистика выключена".into());
+    }
+    let url = format!("{base}{path}");
+    let body = with_fallback_cfg(timeout, &bridge_proxy(), should_try_bridge, |c| {
+        let url = url.clone();
+        async move {
+            let mut r = c.get(url).send().await?.error_for_status()?;
+            let mut out: Vec<u8> = Vec::new();
+            while let Some(chunk) = r.chunk().await? {
+                out.extend_from_slice(&chunk);
+                if out.len() > max {
+                    // Сервер отдал больше обещанного: дальше не читаем.
+                    return Ok(None);
+                }
+            }
+            Ok(Some(out))
+        }
+    })
+    .await?;
+    body.ok_or_else(|| "файл больше допустимого".to_string())
+}
+
 // ---------------------------------------------------------------- даты
 
 /// Дни от 1970-01-01 до гражданской даты (H. Hinnant).

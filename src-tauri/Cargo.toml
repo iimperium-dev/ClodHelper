@@ -20,7 +20,7 @@ sha2 = "0.10"
 # (@tauri-apps/*): tauri build падает, если они расходятся, а Cargo.lock в git
 # не хранится. Поэтому «~»: без него чистая сборка (CI, новый компьютер)
 # берёт свежий минорный выпуск крейта, и сборка ломается.
-tauri = { version = "~2.12", features = ["tray-icon", "image-png", "macos-private-api"] }
+tauri = { version = "~2.12", features = ["tray-icon", "image-png", "macos-private-api", "protocol-asset"] }
 tauri-plugin-opener = "~2.7.2"
 tauri-plugin-shell = "~2.5"
 tauri-plugin-autostart = "2"

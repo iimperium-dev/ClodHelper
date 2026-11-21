@@ -60,6 +60,23 @@ pub struct Banner {
     /// Заодно положить в колокольчик и показать в углу экрана.
     #[serde(default)]
     pub bell: bool,
+    /// Фото и видео: первое - обложка, все - в окне просмотра.
+    #[serde(default)]
+    pub media: Vec<MediaItem>,
+    /// Показывать первое медиа обложкой в баннере.
+    #[serde(default)]
+    pub cover: bool,
+}
+
+/// Фото или видео баннера: ключ файла на сервере и размер в пикселях.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MediaItem {
+    pub key: String,
+    pub kind: String,
+    pub w: u32,
+    pub h: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poster: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -93,6 +110,22 @@ fn clean_banner(mut b: Banner) -> Banner {
         .filter(|x| !x.label.is_empty())
         .take(2)
         .collect();
+    // Медиа: только наши ключи, вид - по ключу, разумный размер.
+    b.media = b
+        .media
+        .into_iter()
+        .filter_map(|mut m| {
+            let kind = crate::media::kind_of(&m.key).filter(|_| crate::media::valid_key(&m.key))?;
+            if m.w == 0 || m.h == 0 || m.w > 10_000 || m.h > 10_000 {
+                return None;
+            }
+            m.kind = kind.to_string();
+            m.poster = m.poster.filter(|p| kind == "video" && crate::media::valid_key(p) && crate::media::kind_of(p) == Some("image"));
+            Some(m)
+        })
+        .take(8)
+        .collect();
+    b.cover = b.cover && !b.media.is_empty();
     b
 }
 
@@ -104,6 +137,18 @@ pub struct BannerView {
     pub body: String,
     #[serde(flatten)]
     pub banner: Banner,
+}
+
+/// Все файлы медиа всех баннеров в кэше: остальное из папки медиа можно удалить.
+pub fn media_keys(s: &crate::settings::Settings) -> Vec<String> {
+    let mut v: Vec<String> = cached(s)
+        .into_iter()
+        .filter_map(|n| n.banner)
+        .flat_map(|b| b.media.into_iter().flat_map(|m| std::iter::once(m.key).chain(m.poster)))
+        .collect();
+    v.sort();
+    v.dedup();
+    v
 }
 
 /// Показывать ли запись в колокольчике и всплывающим окном.

@@ -1,16 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { ArrowUpRight, X } from "lucide-react";
+import { ArrowUpRight, Images, Play, X } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
-import { noticeEvent, noticesBanner, noticesBannerDismiss } from "../lib/api";
+import { bannerMedia, noticeEvent, noticesBanner, noticesBannerDismiss } from "../lib/api";
 import type { BannerView } from "../lib/types";
 import { cn } from "../lib/cn";
+import { MediaViewer } from "./MediaViewer";
 
 /*
   Баннер на «Обзоре»: объявление из админки с оформлением. Что показывать,
   кому и когда - решается в админке (заголовок, текст, цвет, метка, до двух
-  кнопок, можно ли закрыть). Программа только рисует: ссылки только https,
-  картинок с чужих адресов нет. Закрытый крестиком не возвращается.
+  кнопок, можно ли закрыть, фото и видео). Программа только рисует: ссылки
+  только https, фото и видео - из своего кэша, сверенные с ключом, чужих
+  адресов нет. Нажатие открывает окно просмотра. Закрытый крестиком не
+  возвращается.
 */
 
 /** Цвет акцента: точка, метка, свечение в углу и главная кнопка. */
@@ -27,6 +30,8 @@ export function PromoBanner({ className }: { className?: string }) {
   const reduce = useReducedMotion();
   const [b, setB] = useState<BannerView | null>(null);
   const shown = useRef<string | null>(null);
+  const [srcs, setSrcs] = useState<Record<string, string>>({});
+  const [viewer, setViewer] = useState(false);
 
   useEffect(() => {
     const load = () => void noticesBanner().then(setB).catch(() => setB(null));
@@ -43,6 +48,30 @@ export function PromoBanner({ className }: { className?: string }) {
     }
   }, [b]);
 
+  // Обложка - сразу, остальное - при открытии окна просмотра.
+  const coverKey = b?.cover && b.media[0] ? (b.media[0].kind === "video" ? b.media[0].poster ?? null : b.media[0].key) : null;
+  useEffect(() => {
+    if (!coverKey || srcs[coverKey]) return;
+    void bannerMedia([coverKey]).then((m) => setSrcs((s) => ({ ...s, ...m }))).catch(() => {});
+  }, [coverKey, srcs]);
+
+  const openViewer = () => {
+    if (!b || b.media.length === 0) return;
+    setViewer(true);
+    const want = b.media.flatMap((m) => (m.poster ? [m.poster, m.key] : [m.key])).filter((k) => !srcs[k]);
+    if (!want.length) return;
+    // Сначала заставки и фото (мелкие), потом видео.
+    const isVideo = (k: string) => /\.(mp4|webm)$/.test(k);
+    const add = (m: Record<string, string>) => setSrcs((s) => ({ ...s, ...m }));
+    const big = want.filter(isVideo);
+    void bannerMedia(want.filter((k) => !isVideo(k)))
+      .then(add)
+      .catch(() => {})
+      .finally(() => {
+        if (big.length) void bannerMedia(big).then(add).catch(() => {});
+      });
+  };
+
   const open = (url: string) => {
     if (!b) return;
     void noticeEvent(b.id, "clicked").catch(() => {});
@@ -58,8 +87,12 @@ export function PromoBanner({ className }: { className?: string }) {
   };
 
   const acc = b ? ACCENT[b.accent] ?? ACCENT.emerald : ACCENT.emerald;
+  const hasMedia = !!b && b.media.length > 0;
+  const first = b?.media[0];
+  const coverSrc = coverKey ? srcs[coverKey] : undefined;
 
   return (
+    <>
     <AnimatePresence initial={false}>
       {b && (
         <motion.section
@@ -87,6 +120,38 @@ export function PromoBanner({ className }: { className?: string }) {
             style={{ background: "linear-gradient(90deg, transparent, var(--acc), transparent)" }}
           />
 
+          {b.cover && first && (
+            <button
+              type="button"
+              onClick={openViewer}
+              aria-label="Фото и видео"
+              className="group/cover relative -ml-4 -mr-10 -mt-4 mb-3 block aspect-[2/1] w-[calc(100%+3.5rem)] overflow-hidden bg-black"
+            >
+              {coverSrc ? (
+                <img
+                  src={coverSrc}
+                  alt=""
+                  draggable={false}
+                  className="h-full w-full object-cover transition-transform duration-500 ease-out group-hover/cover:scale-[1.03]"
+                />
+              ) : (
+                <span aria-hidden className="absolute inset-0 animate-pulse bg-vb-surface-2" />
+              )}
+              <span aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-black/45 to-transparent" />
+              {first.kind === "video" && (
+                <span className="absolute inset-0 flex items-center justify-center">
+                  <span className="flex size-11 items-center justify-center rounded-full bg-black/55 text-white ring-1 ring-white/20 backdrop-blur-sm transition-transform group-hover/cover:scale-105">
+                    <Play size={18} className="ml-0.5" fill="currentColor" />
+                  </span>
+                </span>
+              )}
+              {b.media.length > 1 && (
+                <span className="absolute bottom-2 right-2 rounded-full bg-black/60 px-2 py-0.5 text-[11px] text-white backdrop-blur-sm">
+                  1 / {b.media.length}
+                </span>
+              )}
+            </button>
+          )}
           {b.eyebrow && (
             <p className="relative mb-1 flex items-center gap-1.5 text-[11px] font-medium" style={{ color: "var(--acc)" }}>
               <span aria-hidden className="h-1 w-1 rounded-full" style={{ background: "var(--acc)" }} />
@@ -98,7 +163,7 @@ export function PromoBanner({ className }: { className?: string }) {
             <p className="relative mt-1 line-clamp-3 whitespace-pre-line text-[12px] leading-relaxed text-vb-silver-dim">{b.body}</p>
           )}
 
-          {b.buttons.length > 0 && (
+          {(b.buttons.length > 0 || (hasMedia && !b.cover)) && (
             <div className="relative mt-3 flex flex-wrap gap-2">
               {b.buttons.map((x, i) =>
                 i === 0 ? (
@@ -123,6 +188,16 @@ export function PromoBanner({ className }: { className?: string }) {
                   </button>
                 ),
               )}
+              {hasMedia && !b.cover && (
+                <button
+                  type="button"
+                  onClick={openViewer}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-vb-border px-3 text-[12px] font-medium text-vb-silver transition-colors hover:bg-vb-surface-2 hover:text-vb-fg active:scale-[0.97]"
+                >
+                  <Images className="h-3.5 w-3.5" aria-hidden />
+                  Посмотреть
+                </button>
+              )}
             </div>
           )}
 
@@ -132,7 +207,12 @@ export function PromoBanner({ className }: { className?: string }) {
               onClick={dismiss}
               aria-label="Скрыть"
               title="Скрыть"
-              className="absolute right-2.5 top-2.5 rounded-md p-1 text-vb-silver-faint transition-colors hover:bg-vb-surface-2 hover:text-vb-silver"
+              className={cn(
+                "absolute right-2.5 top-2.5 p-1 transition-colors",
+                b.cover && first
+                  ? "rounded-full bg-black/50 text-white backdrop-blur-sm hover:bg-black/70"
+                  : "rounded-md text-vb-silver-faint hover:bg-vb-surface-2 hover:text-vb-silver",
+              )}
             >
               <X className="h-3.5 w-3.5" />
             </button>
@@ -140,5 +220,13 @@ export function PromoBanner({ className }: { className?: string }) {
         </motion.section>
       )}
     </AnimatePresence>
+    <MediaViewer
+      banner={viewer ? b : null}
+      srcs={srcs}
+      accent={acc}
+      onClose={() => setViewer(false)}
+      onOpenUrl={open}
+    />
+    </>
   );
 }

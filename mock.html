@@ -103,6 +103,14 @@
     ...(BROWSERS_DEMO ? { sites_bypass_candidates: BROWSERS_DEMO.candidates, sites_bypass_get: [BROWSERS_DEMO.candidates[2]] } : {}),
     google_ads_get: true,
   };
+  // Фото и видео баннера: ключ - файл стенда в mock-assets.
+  const MOCK_FILES = { ["a".repeat(64) + ".jpg"]: "cover.jpg", ["b".repeat(64) + ".mp4"]: "clip.mp4",
+    ["c".repeat(64) + ".jpg"]: "clip-poster.jpg", ["d".repeat(64) + ".jpg"]: "photo2.jpg" };
+  const MOCK_MEDIA = [
+    { key: "a".repeat(64) + ".jpg", kind: "image", w: 1200, h: 600 },
+    { key: "b".repeat(64) + ".mp4", kind: "video", w: 640, h: 360, poster: "c".repeat(64) + ".jpg" },
+    { key: "d".repeat(64) + ".jpg", kind: "image", w: 1200, h: 900 },
+  ];
   const R = {
     settings_get: { proxy_url: "http://u:p@185.68.187.138:8000" },
     shim_script_path: "/x",
@@ -163,7 +171,9 @@
     notices_banner: params.has("promo")
       ? { id: "promo-demo", title: "Свой прокси за 5 минут", body: "Пошаговая инструкция: купить сервер, поднять прокси и подключить его к Clod Helper.",
           accent: params.get("promo") || "emerald", eyebrow: "Новое", dismissible: true,
-          buttons: [{ label: "Смотреть", url: "https://example.com/guide" }, { label: "Подробнее", url: "https://example.com" }] }
+          buttons: [{ label: "Смотреть", url: "https://example.com/guide" }, { label: "Подробнее", url: "https://example.com" }],
+          // &media - фото и видео с обложкой, &media=nocover - без обложки (кнопка «Посмотреть»).
+          media: params.has("media") ? MOCK_MEDIA : [], cover: params.has("media") && params.get("media") !== "nocover" }
       : null,
     notices_mark_read: [],
     whats_new_take: params.has("whatsnew") ? "0.8.18" : null,
@@ -373,6 +383,11 @@
         if (params.has("reportfail")) throw "Не получилось отправить. Проверьте интернет и попробуйте ещё раз";
         window.__reports.push({ text: args.text, contact: args.contact });
         return null;
+      }
+      if (cmd === "banner_media") {
+        (window.__mediaAsked ||= []).push(...args.keys);
+        await wait(params.has("mediaslow") ? 4000 : 150);
+        return Object.fromEntries(args.keys.filter((k) => MOCK_FILES[k]).map((k) => [k, "/mock-assets/" + MOCK_FILES[k]]));
       }
       if (cmd === "notices_banner_dismiss") {
         R.notices_banner = null;

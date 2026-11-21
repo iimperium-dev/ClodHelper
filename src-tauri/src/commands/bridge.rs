@@ -239,7 +239,21 @@ pub async fn notices_list() -> Result<Vec<crate::notices::NoticeItem>, String> {
 /// Баннер на «Обзоре»: действующий или None.
 #[tauri::command]
 pub async fn notices_banner() -> Option<crate::notices::BannerView> {
-    tokio::task::spawn_blocking(|| crate::notices::active_banner(&crate::settings::load())).await.ok().flatten()
+    tokio::task::spawn_blocking(|| {
+        let s = crate::settings::load();
+        // Заодно убрать из кэша файлы снятых баннеров.
+        crate::media::prune(&crate::notices::media_keys(&s));
+        crate::notices::active_banner(&s)
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Фото и видео баннера: скачать в кэш (с проверкой суммы) и вернуть пути.
+#[tauri::command]
+pub async fn banner_media(keys: Vec<String>) -> std::collections::HashMap<String, String> {
+    crate::media::ensure_many(keys).await
 }
 
 /// Закрыть баннер крестиком: больше не показывать.

@@ -536,6 +536,13 @@ export function noticesBanner(): Promise<BannerView | null> {
   return invoke<BannerView | null>("notices_banner");
 }
 
+/** Фото и видео баннера: скачать в кэш программы и получить адреса для показа. */
+export async function bannerMedia(keys: string[]): Promise<Record<string, string>> {
+  const paths = await invoke<Record<string, string>>("banner_media", { keys });
+  const { convertFileSrc } = await import("@tauri-apps/api/core");
+  return Object.fromEntries(Object.entries(paths).map(([k, p]) => [k, convertFileSrc(p)]));
+}
+
 export function noticesBannerDismiss(id: string): Promise<void> {
   return invoke<void>("notices_banner_dismiss", { id });
 }
