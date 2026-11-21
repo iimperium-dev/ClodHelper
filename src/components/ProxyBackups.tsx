@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { AlertTriangle, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { Button } from "./Button";
 import { CountryFlag } from "./CountryFlag";
@@ -171,11 +171,34 @@ export function ProxyBackups({
   };
 
   const danger = warnings.some((w) => w.tone === "loss");
+  const reduce = useReducedMotion();
+  // Ветка «растёт» при раскрытии: ствол тянется вниз, отводы выдвигаются
+  // вбок, строки проявляются по очереди. Без анимаций - сразу на месте.
+  const grow = (k: number) =>
+    reduce
+      ? {}
+      : {
+          initial: { opacity: 0, x: -6 },
+          animate: { opacity: 1, x: 0 },
+          transition: { duration: 0.24, delay: 0.1 + k * 0.05, ease: [0.22, 1, 0.36, 1] as const },
+        };
+  const tick = (k: number) =>
+    reduce
+      ? {}
+      : {
+          initial: { scaleX: 0 },
+          animate: { scaleX: 1 },
+          transition: { duration: 0.18, delay: 0.08 + k * 0.05, ease: "easeOut" as const },
+        };
 
   return (
     <div className="relative pb-3 pl-[34px] pr-4">
       {/* Ствол «веточки»: от точки прокси вниз, к резервам и плюсику */}
-      <span aria-hidden className="absolute bottom-[19px] left-[19px] top-0 w-px bg-vb-border-strong/80" />
+      <motion.span
+        aria-hidden
+        className="absolute bottom-[19px] left-[19px] top-0 w-px origin-top bg-vb-border-strong/80"
+        {...(reduce ? {} : { initial: { scaleY: 0 }, animate: { scaleY: 1 }, transition: { duration: 0.3, ease: [0.22, 1, 0.36, 1] } })}
+      />
 
       {backups.map((url, k) => {
         const j = states.findIndex((s) => s.url === url);
@@ -185,9 +208,9 @@ export function ProxyBackups({
         const host = hostOnly(url);
         const live = st?.state;
         return (
-          <div key={url} className="group/b relative flex items-center gap-2.5 rounded-lg px-2.5 py-2 transition-colors hover:bg-vb-surface-2/60">
+          <motion.div key={url} {...grow(k)} className="group/b relative flex items-center gap-2.5 rounded-lg px-2.5 py-2 transition-colors hover:bg-vb-surface-2/60">
             {/* Отвод от ствола */}
-            <span aria-hidden className="absolute -left-[15px] top-1/2 h-px w-[15px] bg-vb-border-strong/80" />
+            <motion.span {...tick(k)} aria-hidden className="absolute -left-[15px] top-1/2 h-px w-[15px] origin-left bg-vb-border-strong/80" />
             <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", dotOf(st))} />
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 items-center gap-1.5">
@@ -259,7 +282,7 @@ export function ProxyBackups({
                 </button>
               </div>
             )}
-          </div>
+          </motion.div>
         );
       })}
 
@@ -334,15 +357,16 @@ export function ProxyBackups({
             <motion.button
               key="plus"
               type="button"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
+              initial={reduce ? { opacity: 0 } : { opacity: 0, x: -6 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, transition: { duration: 0.12 } }}
+              transition={{ duration: 0.24, delay: reduce ? 0 : 0.1 + backups.length * 0.05, ease: [0.22, 1, 0.36, 1] }}
               onClick={() => setAdding(true)}
               disabled={busy}
               aria-label="Добавить резервный прокси"
               className="group/add relative mt-0.5 flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-[12px] text-vb-silver-faint transition-colors hover:text-vb-emerald disabled:opacity-40"
             >
-              <span aria-hidden className="absolute -left-[15px] top-1/2 h-px w-[15px] bg-vb-border-strong/80" />
+              <motion.span {...tick(backups.length)} aria-hidden className="absolute -left-[15px] top-1/2 h-px w-[15px] origin-left bg-vb-border-strong/80" />
               <span className="flex h-5 w-5 items-center justify-center rounded-full border border-dashed border-vb-border-strong transition-colors group-hover/add:border-vb-emerald/60 group-hover/add:bg-vb-emerald/10">
                 <Plus className="h-3 w-3" />
               </span>

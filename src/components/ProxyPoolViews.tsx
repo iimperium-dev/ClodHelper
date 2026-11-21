@@ -148,13 +148,14 @@ export function SpeedMeter({ entry, busy, showLabel = true }: { entry?: SpeedEnt
   // Неудачный замер видно 20 секунд (причина - в подсказке), потом строка
   // возвращается к «скорость -»: висеть вечно ему незачем.
   const failed = entry && "error" in entry ? entry : undefined;
-  const [failShown, setFailShown] = useState(false);
+  const failShown = !!failed && Date.now() - failed.at < FAIL_SHOW_MS;
+  // Перерисовать, когда 20 секунд выйдут.
+  const [, expire] = useState(0);
   useEffect(() => {
-    if (!failed) return setFailShown(false);
+    if (!failed) return;
     const left = FAIL_SHOW_MS - (Date.now() - failed.at);
-    setFailShown(left > 0);
     if (left <= 0) return;
-    const t = window.setTimeout(() => setFailShown(false), left);
+    const t = window.setTimeout(() => expire((x) => x + 1), left);
     return () => window.clearTimeout(t);
   }, [failed]);
   if (!busy && failed && !failShown) {
@@ -308,9 +309,8 @@ function Backups({ row, a }: { row: PoolRow; a: PoolActions }) {
       {row.open && (
         <motion.div
           initial={{ height: 0, opacity: 0 }}
-          animate={{ height: "auto", opacity: 1 }}
-          exit={{ height: 0, opacity: 0 }}
-          transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+          animate={{ height: "auto", opacity: 1, transition: { height: { duration: 0.32, ease: [0.32, 0.72, 0, 1] }, opacity: { duration: 0.2 } } }}
+          exit={{ height: 0, opacity: 0, transition: { height: { duration: 0.22, ease: [0.4, 0, 0.2, 1] }, opacity: { duration: 0.14 } } }}
           className="overflow-hidden"
         >
           {a.backupsPanel(row)}
