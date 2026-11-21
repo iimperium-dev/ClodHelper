@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ArrowUpRight, Images, Play, X } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
-import { bannerMedia, noticeEvent, noticesBanner, noticesBannerDismiss } from "../lib/api";
+import { bannerMedia, noticeEvent, noticesBanners, noticesBannerDismiss } from "../lib/api";
+import { useStatus } from "../lib/status";
 import type { BannerView } from "../lib/types";
 import { cn } from "../lib/cn";
 import { MediaViewer } from "./MediaViewer";
@@ -14,6 +15,10 @@ import { MediaViewer } from "./MediaViewer";
   только https, фото и видео - из своего кэша, сверенные с ключом, чужих
   адресов нет. Нажатие открывает окно просмотра. Закрытый крестиком не
   возвращается.
+
+  Условие показа тоже из админки: «всегда», «пока не работает ни один прокси
+  N минут» (предложение по ситуации) или «в мастере» рядом с полем прокси.
+  Решает программа на месте: на сервер про прокси ничего не уходит.
 */
 
 /** Цвет акцента: точка, метка, свечение в углу и главная кнопка. */
@@ -26,15 +31,27 @@ const ACCENT: Record<BannerView["accent"], string> = {
   neutral: "#d8dde3",
 };
 
-export function PromoBanner({ className }: { className?: string }) {
+/** Подходит ли баннер месту и ситуации. */
+export function bannerFits(x: BannerView, place: "overview" | "setup", downSince: number | null, now: number): boolean {
+  if (place === "setup") return x.when === "setup";
+  if (x.when === "always") return true;
+  return x.when === "proxy_down" && downSince !== null && now - downSince >= (x.after_min ?? 0) * 60_000;
+}
+
+export function PromoBanner({ className, place = "overview" }: { className?: string; place?: "overview" | "setup" }) {
   const reduce = useReducedMotion();
-  const [b, setB] = useState<BannerView | null>(null);
+  const [list, setList] = useState<BannerView[]>([]);
+  const [gone, setGone] = useState<string[]>([]);
+  // Статус обновляется раз в 5 с - этого хватает, чтобы баннер по ситуации
+  // появился в срок и ушёл, когда прокси снова заработал.
+  const { poolDownSince } = useStatus();
+  const b = list.find((x) => !gone.includes(x.id) && bannerFits(x, place, poolDownSince, Date.now())) ?? null;
   const shown = useRef<string | null>(null);
   const [srcs, setSrcs] = useState<Record<string, string>>({});
   const [viewer, setViewer] = useState(false);
 
   useEffect(() => {
-    const load = () => void noticesBanner().then(setB).catch(() => setB(null));
+    const load = () => void noticesBanners().then((v) => setList(v ?? [])).catch(() => setList([]));
     load();
     // Рассылки обновились (админка включила или сняла баннер) - перечитать.
     const un = listen("notices:changed", load);
@@ -49,7 +66,9 @@ export function PromoBanner({ className }: { className?: string }) {
   }, [b]);
 
   // Обложка - сразу, остальное - при открытии окна просмотра.
-  const coverKey = b?.cover && b.media[0] ? (b.media[0].kind === "video" ? b.media[0].poster ?? null : b.media[0].key) : null;
+  // В мастере места мало: без обложки, фото и видео - по кнопке «Посмотреть».
+  const cover = !!b?.cover && place !== "setup";
+  const coverKey = cover && b?.media[0] ? (b.media[0].kind === "video" ? b.media[0].poster ?? null : b.media[0].key) : null;
   useEffect(() => {
     if (!coverKey || srcs[coverKey]) return;
     void bannerMedia([coverKey]).then((m) => setSrcs((s) => ({ ...s, ...m }))).catch(() => {});
@@ -81,7 +100,7 @@ export function PromoBanner({ className }: { className?: string }) {
   const dismiss = () => {
     if (!b) return;
     const id = b.id;
-    setB(null);
+    setGone((g) => [...g, id]);
     void noticeEvent(id, "dismissed").catch(() => {});
     void noticesBannerDismiss(id).catch(() => {});
   };
@@ -120,7 +139,7 @@ export function PromoBanner({ className }: { className?: string }) {
             style={{ background: "linear-gradient(90deg, transparent, var(--acc), transparent)" }}
           />
 
-          {b.cover && first && (
+          {cover && first && (
             <button
               type="button"
               onClick={openViewer}
@@ -163,7 +182,7 @@ export function PromoBanner({ className }: { className?: string }) {
             <p className="relative mt-1 line-clamp-3 whitespace-pre-line text-[12px] leading-relaxed text-vb-silver-dim">{b.body}</p>
           )}
 
-          {(b.buttons.length > 0 || (hasMedia && !b.cover)) && (
+          {(b.buttons.length > 0 || (hasMedia && !cover)) && (
             <div className="relative mt-3 flex flex-wrap gap-2">
               {b.buttons.map((x, i) =>
                 i === 0 ? (
@@ -188,7 +207,7 @@ export function PromoBanner({ className }: { className?: string }) {
                   </button>
                 ),
               )}
-              {hasMedia && !b.cover && (
+              {hasMedia && !cover && (
                 <button
                   type="button"
                   onClick={openViewer}
@@ -209,7 +228,7 @@ export function PromoBanner({ className }: { className?: string }) {
               title="Скрыть"
               className={cn(
                 "absolute right-2.5 top-2.5 p-1 transition-colors",
-                b.cover && first
+                cover && first
                   ? "rounded-full bg-black/50 text-white backdrop-blur-sm hover:bg-black/70"
                   : "rounded-md text-vb-silver-faint hover:bg-vb-surface-2 hover:text-vb-silver",
               )}

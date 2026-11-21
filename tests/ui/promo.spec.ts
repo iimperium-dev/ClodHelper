@@ -79,3 +79,35 @@ test("без обложки - кнопка «Посмотреть», файлы 
   await dlg.getByRole("button", { name: "Закрыть" }).click();
   await expect(dlg).toHaveCount(0);
 });
+
+test("баннер по ситуации: только пока не работает ни один прокси", async ({ page }) => {
+  await page.goto("/mock.html?still&promo&when=proxy_down");
+  await expect(page.getByText("Мост активен").first()).toBeVisible({ timeout: 20_000 });
+  await page.waitForTimeout(800);
+  await expect(page.getByRole("region", { name: "Свой прокси за 5 минут" })).toHaveCount(0);
+
+  await page.goto("/mock.html?still&promo&when=proxy_down&down=all");
+  await expect(page.getByRole("region", { name: "Свой прокси за 5 минут" })).toBeVisible({ timeout: 20_000 });
+
+  // Порог в минутах: прокси только что отказал - ещё рано.
+  await page.goto("/mock.html?still&promo&when=proxy_down&down=all&after=30");
+  await expect(page.getByText("Мост активен").first()).toBeVisible({ timeout: 20_000 });
+  await page.waitForTimeout(800);
+  await expect(page.getByRole("region", { name: "Свой прокси за 5 минут" })).toHaveCount(0);
+});
+
+test("баннер «в мастере»: под полем прокси, не на «Обзоре», уходит при вводе", async ({ page }) => {
+  await page.goto("/mock.html?still&promo&when=setup");
+  await expect(page.getByText("Мост активен").first()).toBeVisible({ timeout: 20_000 });
+  await page.waitForTimeout(800);
+  await expect(page.getByRole("region", { name: "Свой прокси за 5 минут" })).toHaveCount(0);
+
+  await page.goto("/mock.html?still&promo&when=setup&fresh&media");
+  const banner = page.getByRole("region", { name: "Свой прокси за 5 минут" });
+  await expect(banner).toBeVisible({ timeout: 20_000 });
+  // В мастере без обложки: фото и видео по кнопке.
+  await expect(banner.getByRole("button", { name: "Фото и видео" })).toHaveCount(0);
+  await expect(banner.getByRole("button", { name: "Посмотреть" })).toBeVisible();
+  await page.getByLabel("Строка прокси").fill("1.2.3.4:8000:u:p");
+  await expect(banner).toHaveCount(0);
+});

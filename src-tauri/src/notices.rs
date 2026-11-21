@@ -66,7 +66,21 @@ pub struct Banner {
     /// Показывать первое медиа обложкой в баннере.
     #[serde(default)]
     pub cover: bool,
+    /// Когда показывать: "always" - на «Обзоре» всегда, "proxy_down" - на
+    /// «Обзоре», только пока не работает ни один прокси, "setup" - в мастере
+    /// первой настройки, рядом с полем прокси.
+    #[serde(default = "default_when")]
+    pub when: String,
+    /// Для "proxy_down": сколько минут прокси должен не работать (0 - сразу).
+    #[serde(default)]
+    pub after_min: u32,
 }
+
+fn default_when() -> String {
+    "always".into()
+}
+
+const WHENS: [&str; 3] = ["always", "proxy_down", "setup"];
 
 /// Фото или видео баннера: ключ файла на сервере и размер в пикселях.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -126,6 +140,11 @@ fn clean_banner(mut b: Banner) -> Banner {
         .take(8)
         .collect();
     b.cover = b.cover && !b.media.is_empty();
+    // Баннер по ситуации или в мастере - не объявление: в колокольчик не идёт.
+    if b.when != "always" {
+        b.bell = false;
+    }
+    b.after_min = b.after_min.min(24 * 60);
     b
 }
 
@@ -156,15 +175,24 @@ pub fn in_bell(n: &Notice) -> bool {
     n.banner.as_ref().is_none_or(|b| b.bell)
 }
 
-/// Действующий баннер: самый свежий, который человек не закрыл.
-pub fn active_banner(s: &crate::settings::Settings) -> Option<BannerView> {
-    cached(s).into_iter().find_map(|n| {
-        let b = n.banner?;
-        if b.dismissible && s.notices_read.contains(&format!("banner:{}", n.id)) {
-            return None;
-        }
-        Some(BannerView { id: n.id, title: n.title, body: n.body, banner: b })
-    })
+/// Действующие баннеры, свежие первыми: все, что человек не закрыл.
+/// Какой из них показать, решает интерфейс: он знает, работает ли прокси и
+/// открыт ли мастер. Баннер с незнакомым условием (от новой админки) не
+/// показывается совсем.
+pub fn active_banners(s: &crate::settings::Settings) -> Vec<BannerView> {
+    cached(s)
+        .into_iter()
+        .filter_map(|n| {
+            let b = n.banner?;
+            if !WHENS.contains(&b.when.as_str()) {
+                return None;
+            }
+            if b.dismissible && s.notices_read.contains(&format!("banner:{}", n.id)) {
+                return None;
+            }
+            Some(BannerView { id: n.id, title: n.title, body: n.body, banner: b })
+        })
+        .collect()
 }
 
 #[derive(Deserialize)]
@@ -629,11 +657,29 @@ mod tests {
         assert!(in_bell(v.iter().find(|n| n.id == "both").unwrap()));
         assert!(in_bell(v.iter().find(|n| n.id == "news").unwrap()));
 
+        let first = |st: &crate::settings::Settings| active_banners(st).into_iter().next().map(|b| b.id);
         let mut st = crate::settings::Settings { notices_cache_server: v, ..Default::default() };
-        assert_eq!(active_banner(&st).map(|b| b.id), Some("promo".into()), "самый свежий");
+        assert_eq!(first(&st), Some("promo".into()), "самый свежий");
         st.notices_read.push("banner:promo".into());
-        assert_eq!(active_banner(&st).map(|b| b.id), Some("both".into()), "закрытый не возвращается");
+        assert_eq!(first(&st), Some("both".into()), "закрытый не возвращается");
         st.notices_read.push("banner:both".into());
-        assert_eq!(active_banner(&st).map(|b| b.id), Some("both".into()), "незакрываемый показывается всегда");
+        assert_eq!(first(&st), Some("both".into()), "незакрываемый показывается всегда");
+    }
+
+    #[test]
+    fn banner_conditions() {
+        let text = r#"{"notices":[
+            {"id":"future","date":"2026-11-23","title":"Новое условие","banner":{"when":"weekend"}},
+            {"id":"down","date":"2026-11-22","title":"Прокси не работает","banner":{"when":"proxy_down","after_min":999999,"bell":true}},
+            {"id":"setup","date":"2026-11-21","title":"Готовый прокси","banner":{"when":"setup"}},
+            {"id":"old","date":"2026-11-20","title":"Без условия","banner":{}}
+        ]}"#;
+        let v = parse(text, "0.9.2").unwrap();
+        let st = crate::settings::Settings { notices_cache_server: v.clone(), ..Default::default() };
+        let got = active_banners(&st);
+        assert_eq!(got.iter().map(|b| b.id.as_str()).collect::<Vec<_>>(), ["down", "setup", "old"], "незнакомое условие не показываем");
+        assert_eq!(got[0].banner.after_min, 24 * 60, "не дольше суток");
+        assert_eq!(got[2].banner.when, "always", "старый баннер - всегда");
+        assert!(!in_bell(v.iter().find(|n| n.id == "down").unwrap()), "баннер по ситуации не идёт в колокольчик");
     }
 }

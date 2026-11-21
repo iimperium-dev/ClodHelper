@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { AlertTriangle, ArrowRight, ArrowUpDown, Loader2 } from "lucide-react";
 import { Button } from "../components/Button";
+import { PromoBanner } from "../components/PromoBanner";
 import { CountryFlag } from "../components/CountryFlag";
 import { WizardFooter, WizardTitle } from "../components/WizardShell";
 import { checkProxy } from "../lib/api";
@@ -205,6 +206,9 @@ export function StepProxy({ initialUrl, onNext, onSkipToTools }: Props) {
             </p>
           ))}
       </div>
+
+      {/* Предложение из админки «в мастере» (например, купить готовый прокси). Нет - ничего. */}
+      {!hasInput && <PromoBanner place="setup" className="mt-4" />}
 
       <WizardFooter
         left={

@@ -469,6 +469,10 @@ export interface BannerView {
   media: BannerMedia[];
   /** Первое медиа - обложкой в самом баннере. */
   cover: boolean;
+  /** Когда показывать: всегда, пока не работает ни один прокси, или в мастере. */
+  when: "always" | "proxy_down" | "setup";
+  /** Для proxy_down: через сколько минут после отказа прокси. */
+  after_min: number;
 }
 
 export interface BannerMedia {

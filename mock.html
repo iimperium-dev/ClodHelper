@@ -168,13 +168,15 @@
       : [],
     proxy_backups_get: {},
     // ?promo - баннер на «Обзоре» (?promo=blue|violet|amber|rose|neutral - цвет).
-    notices_banner: params.has("promo")
-      ? { id: "promo-demo", title: "Свой прокси за 5 минут", body: "Пошаговая инструкция: купить сервер, поднять прокси и подключить его к Clod Helper.",
+    // &when=proxy_down - только пока не работает ни один прокси (вместе с ?down=all),
+    // &when=setup - в мастере (вместе с ?fresh); &after=N - через N минут.
+    notices_banners: params.has("promo")
+      ? [{ id: "promo-demo", when: params.get("when") || "always", after_min: Number(params.get("after") || 0), title: "Свой прокси за 5 минут", body: "Пошаговая инструкция: купить сервер, поднять прокси и подключить его к Clod Helper.",
           accent: params.get("promo") || "emerald", eyebrow: "Новое", dismissible: true,
           buttons: [{ label: "Смотреть", url: "https://example.com/guide" }, { label: "Подробнее", url: "https://example.com" }],
           // &media - фото и видео с обложкой, &media=nocover - без обложки (кнопка «Посмотреть»).
-          media: params.has("media") ? MOCK_MEDIA : [], cover: params.has("media") && params.get("media") !== "nocover" }
-      : null,
+          media: params.has("media") ? MOCK_MEDIA : [], cover: params.has("media") && params.get("media") !== "nocover" }]
+      : [],
     notices_mark_read: [],
     whats_new_take: params.has("whatsnew") ? "0.8.18" : null,
     bridge_file_issue: null,
@@ -390,7 +392,7 @@
         return Object.fromEntries(args.keys.filter((k) => MOCK_FILES[k]).map((k) => [k, "/mock-assets/" + MOCK_FILES[k]]));
       }
       if (cmd === "notices_banner_dismiss") {
-        R.notices_banner = null;
+        R.notices_banners = R.notices_banners.filter((x) => x.id !== args.id);
         return null;
       }
       if (cmd === "notice_event") {

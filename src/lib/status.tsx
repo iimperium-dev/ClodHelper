@@ -204,6 +204,8 @@ interface StatusContextValue {
   setPac: (v: SystemPacStatus | null) => void;
   /** Автонастройку включили, а другая программа её сбросила - сайты не работают. */
   sitesBroken: boolean;
+  /** С какого момента (мс) не работает ни один прокси пула; null - работают. */
+  poolDownSince: number | null;
 }
 
 const StatusContext = createContext<StatusContextValue | null>(null);
@@ -432,6 +434,12 @@ export function StatusProvider({ children }: { children: ReactNode }) {
   const proxies = proxyStatesOf(poolPing, health, quality);
   const orb = orbStateOf(status, proxies);
   const orbPulse = orbPulseOf(orb, proxies);
+  // Отсчёт «прокси не работает уже N минут» - для баннера по ситуации.
+  const [poolDownSince, setPoolDownSince] = useState<number | null>(null);
+  const poolDown = orb === "warn";
+  useEffect(() => {
+    setPoolDownSince((t) => (poolDown ? t ?? Date.now() : null));
+  }, [poolDown]);
 
   return (
     <StatusContext.Provider
@@ -457,6 +465,7 @@ export function StatusProvider({ children }: { children: ReactNode }) {
         pac,
         setPac,
         sitesBroken: !!pac?.supported && pac.enabled && !pac.active,
+        poolDownSince,
       }}
     >
       {children}

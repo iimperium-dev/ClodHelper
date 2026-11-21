@@ -532,8 +532,9 @@ export function noticesMarkRead(ids: string[]): Promise<NoticeItem[]> {
 }
 
 /** Событие уведомления для статистики: shown | clicked | dismissed (один раз, только при включённой статистике). */
-export function noticesBanner(): Promise<BannerView | null> {
-  return invoke<BannerView | null>("notices_banner");
+/** Действующие баннеры, свежие первыми. Какой показать - решает PromoBanner. */
+export function noticesBanners(): Promise<BannerView[]> {
+  return invoke<BannerView[]>("notices_banners");
 }
 
 /** Фото и видео баннера: скачать в кэш программы и получить адреса для показа. */
