@@ -179,8 +179,7 @@ jobs:
           : > build-sums/sums-macos.txt
           for f in src-tauri/target/universal-apple-darwin/release/bundle/dmg/*_${V}_*.dmg; do
             h=$(shasum -a 256 "$f" | cut -d' ' -f1)
-            printf '%s  %s
-' "$h" "$(basename "$f")" >> build-sums/sums-macos.txt
+            printf '%s  %s\n' "$h" "$(basename "$f")" >> build-sums/sums-macos.txt
           done
           test -s build-sums/sums-macos.txt
           cat build-sums/sums-macos.txt
