@@ -241,6 +241,31 @@ function App() {
     if (showNotice) setNoticeBanner(true);
   }, [showNotice]);
   useOnceShown(noticeBanner, markSeen);
+  // Один раз за всё время: окно скрыли (трей, сворачивание) или человек ушёл
+  // на другой раздел - плашка убирается и больше не возвращается.
+  const bannerView = useRef<AppView | null>(null);
+  useEffect(() => {
+    if (!noticeBanner) {
+      bannerView.current = null;
+      return;
+    }
+    bannerView.current = view;
+    const onHide = () => {
+      if (document.visibilityState === "hidden") {
+        markSeen();
+        setNoticeBanner(false);
+      }
+    };
+    document.addEventListener("visibilitychange", onHide);
+    return () => document.removeEventListener("visibilitychange", onHide);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [noticeBanner]);
+  useEffect(() => {
+    if (noticeBanner && bannerView.current !== null && view !== bannerView.current) {
+      markSeen();
+      setNoticeBanner(false);
+    }
+  }, [view, noticeBanner, markSeen]);
   const closeBanner = (then?: () => void) => {
     markSeen();
     setNoticeBanner(false);
@@ -341,12 +366,12 @@ function App() {
           <div
             role="region"
             aria-label="Отчёты и статистика"
-            className="flex items-center gap-3 border-b border-vb-border/60 bg-vb-surface px-5 py-2.5"
+            className="flex items-center gap-3 border-b border-vb-border/60 bg-vb-surface px-5 py-2"
           >
             <Info className="h-4 w-4 shrink-0 text-vb-silver-dim" aria-hidden />
-            <span className="min-w-0 flex-1 text-[13px] text-vb-silver">
+            <span className="min-w-0 flex-1 text-[12px] text-vb-silver">
               {noticeLegacy ? "С этой версии программа отправляет" : "Программа отправляет"} отчёты об ошибках и анонимную
-              статистику. Выключить можно в настройках
+              статистику
             </span>
             <Button variant="ghost" size="sm" onClick={() => closeBanner()}>
               Понятно

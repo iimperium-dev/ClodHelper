@@ -52,7 +52,7 @@ test("настройки: три переключателя с пояснени�
   await stats.click();
   await expect(stats).toHaveAttribute("aria-checked", "false");
   expect((await privacy(page)).usage_stats).toBe(false);
-  await expect(page.getByText("Раз в день: версия, система, работал ли прокси, как обновилась программа. Без адресов и настроек прокси")).toBeVisible();
+  await expect(page.getByText("Раз в день, без адресов и настроек прокси")).toBeVisible();
 });
 
 test("отчёт: успех", async ({ page }) => {
@@ -203,7 +203,7 @@ test("плашка: показ ставит флаг, «Понятно» зак�
   await page.goto("/mock.html?still&noticebanner&platform=win");
   const banner = page.getByRole("region", { name: "Отчёты и статистика" });
   await expect(banner).toBeVisible({ timeout: 20_000 });
-  await expect(banner).toContainText("С этой версии программа отправляет отчёты об ошибках и анонимную статистику. Выключить можно в настройках");
+  await expect(banner).toContainText("С этой версии программа отправляет отчёты об ошибках и анонимную статистику");
   await expect.poll(() => noticeSeen(page)).toBe(true);
   await banner.getByRole("button", { name: "Понятно" }).click();
   await expect(banner).toHaveCount(0);
@@ -397,4 +397,34 @@ test("настройки: не прочиталось - ошибка и «Пов
   await page.evaluate(() => ((window as unknown as { __privacyFailOff: boolean }).__privacyFailOff = true));
   await card.getByRole("button", { name: "Повторить" }).click();
   await expect(card.getByRole("switch")).toHaveCount(3);
+});
+
+test("плашка: после скрытия окна не возвращается", async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as { __vis: string };
+    w.__vis = "visible";
+    Object.defineProperty(document, "visibilityState", { get: () => w.__vis, configurable: true });
+    document.hasFocus = () => w.__vis === "visible";
+  });
+  await page.goto("/mock.html?still&noticebanner&platform=win");
+  const banner = page.getByRole("region", { name: "Отчёты и статистика" });
+  await expect(banner).toBeVisible({ timeout: 20_000 });
+  // Окно спрятали в трей, потом открыли снова.
+  await page.evaluate(() => {
+    (window as unknown as { __vis: string }).__vis = "hidden";
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect(banner).toHaveCount(0);
+  await showWindow(page);
+  await page.waitForTimeout(1500);
+  await expect(banner).toHaveCount(0);
+  expect(await noticeSeen(page)).toBe(true);
+});
+
+test("плашка: уход на другой раздел убирает её", async ({ page }) => {
+  await page.goto("/mock.html?still&noticebanner&platform=win");
+  const banner = page.getByRole("region", { name: "Отчёты и статистика" });
+  await expect(banner).toBeVisible({ timeout: 20_000 });
+  await page.getByRole("tab", { name: "Прокси" }).click();
+  await expect(banner).toHaveCount(0);
 });

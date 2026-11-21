@@ -117,7 +117,7 @@ export function PrivacyCard() {
         <Loader2 className="h-4 w-4 animate-spin text-vb-silver-dim" role="status" aria-label="Загрузка настроек" />
       ) : (
         <>
-          <PrivacySwitches idPrefix="settings" values={state} onChange={change} />
+          <PrivacySwitches idPrefix="settings" toggleSize="sm" values={state} onChange={change} />
           <WhatIsSent />
         </>
       )}

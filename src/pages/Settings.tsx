@@ -84,6 +84,7 @@ export function Settings() {
               onChange={handleAutostartToggle}
               disabled={autostartBusy}
               label="Автозапуск"
+              size="sm"
             />
           )}
         </div>
