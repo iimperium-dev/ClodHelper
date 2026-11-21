@@ -67,18 +67,21 @@ function pinnedTo(pins: Pins | null, i: number): string[] {
   ];
 }
 
-/** Что значит отказ прокси для пользователя - одной строкой. */
-function impactOf(p: ProxyState, i: number, exit: number | null, allMode: boolean, pins: Pins | null, proxies: ProxyState[]): string {
+/**
+ * Что значит отказ прокси для пользователя - одной строкой. null - ничего
+ * не задето: строку о последствиях не показываем вовсе.
+ */
+function impactOf(p: ProxyState, i: number, exit: number | null, allMode: boolean, pins: Pins | null, proxies: ProxyState[]): { text: string; hurts: boolean } | null {
   // Резерв: сейчас ничего не ломает, но подстраховки у своего прокси нет.
   if (p.backupOf !== undefined) {
     const owner = proxies[p.backupOf];
-    return owner ? `Резерв для ${owner.host}: если тот упадёт, этот не подхватит` : "Резервный прокси";
+    return { text: owner ? `Резерв для ${owner.host}: подстраховки сейчас нет` : "Резервный прокси", hurts: false };
   }
   const users = pinnedTo(pins, i);
   // Подменён живым резервом - всё работает, но с другого IP.
   if (p.coveredBy !== undefined) {
     const sub = proxies[p.coveredBy];
-    return `Подменяет резерв ${sub?.host ?? ""}${users.length ? ` - ${users.slice(0, 4).join(", ")} работают через него` : ""}`;
+    return { text: `Работает через резерв ${sub?.host ?? ""}`, hurts: false };
   }
   const parts: string[] = [];
   if (exit === i) {
@@ -88,8 +91,7 @@ function impactOf(p: ProxyState, i: number, exit: number | null, allMode: boolea
     parts.push(alt ? `Основной: «Авто» сейчас идёт через ${alt.host}` : "Основной, а запасных живых нет");
   }
   if (users.length) parts.push(`${p.state === "down" ? "Не работают" : "Сбоят"}: ${users.slice(0, 4).join(", ")}${users.length > 4 ? "…" : ""}`);
-  if (!parts.length) parts.push("Сейчас через него ничего не идёт");
-  return parts.join(" · ");
+  return parts.length ? { text: parts.join(" · "), hurts: true } : null;
 }
 
 /** "N сек/мин/ч назад" для списка ошибок (t - секунды-от-старта моста). */
@@ -175,16 +177,6 @@ export function Overview({ onOpenProxies }: Props) {
   const issues = proxies.map((p, i) => ({ p, i })).filter(({ p }) => p.state === "down" || p.state === "unstable");
   const issueKey = issues.map(({ i, p }) => `${i}:${p.state}`).join(",");
   // Подпись под заголовком: что с прокси - одной фразой.
-  const lostCount = issues.filter(({ p }) => p.backupOf === undefined && p.coveredBy === undefined).length;
-  const issuesNote = !issues.length
-    ? ""
-    : lostCount > 1
-      ? ` · ${lostCount} прокси с проблемами`
-      : lostCount === 1
-        ? ` · прокси ${issues.find(({ p }) => p.backupOf === undefined && p.coveredBy === undefined)!.p.state === "down" ? "не работает" : "сбоит"}`
-        : issues.some(({ p }) => p.coveredBy !== undefined)
-          ? " · работает резервный прокси"
-          : " · резервный прокси не отвечает";
   // Кто за каким прокси закреплён - нужно только при проблемах.
   const [pins, setPins] = useState<Pins | null>(null);
   useEffect(() => {
@@ -314,7 +306,7 @@ export function Overview({ onOpenProxies }: Props) {
           </h1>
           <p className="tnum text-[12px] text-vb-silver-faint">
             {running
-              ? `работает ${formatUptime(health?.uptime_sec ?? status?.uptime_sec)}${issuesNote}`
+              ? `работает ${formatUptime(health?.uptime_sec ?? status?.uptime_sec)}`
               : loading
                 ? " "
                 : bridgeFile && bridgeFile.kind !== "restored"
@@ -435,39 +427,51 @@ export function Overview({ onOpenProxies }: Props) {
               {testResult.error}
             </p>
           )}
-          {/* Прокси с проблемами - каждый отдельно: что с ним и кого задевает */}
+          {/* Прокси с проблемами: одна тихая строка на прокси. Вторая строка -
+              только если что-то правда задето (выход, сервисы, сайты). */}
           {issues.length > 0 && (
-            <ul className="divide-y divide-vb-border/50 border-t border-vb-border/70">
+            <ul className="border-t border-vb-border/70 py-1">
               {issues.map(({ p, i }) => {
                 const name = pins?.labels[p.url];
+                const impact = impactOf(p, i, exitIndex, allMode, pins, proxies);
+                const hurts = impact?.hurts ?? false;
                 return (
-                  <li key={p.url || i} className="flex items-start gap-2.5 px-4 py-2.5">
-                    <AlertCircle
-                      className={cn(
-                        "mt-0.5 h-3.5 w-3.5 shrink-0",
-                        p.state === "down" && p.coveredBy === undefined && p.backupOf === undefined
-                          ? "text-vb-loss"
-                          : "text-vb-warn",
-                      )}
-                    />
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-[12px] text-vb-fg">
-                        {name ? `${name} · ` : ""}
-                        {p.backupOf !== undefined && "резерв "}
-                        <span className="font-mono">{p.host}</span>{" "}
-                        {p.state === "down" ? "не работает" : "нестабилен"}
-                      </span>
-                      {p.reason && <span className="block text-[11px] leading-snug text-vb-silver-faint">{p.reason}</span>}
-                      <span className="block text-[11px] leading-snug text-vb-silver">
-                        {impactOf(p, i, exitIndex, allMode, pins, proxies)}
-                      </span>
-                    </span>
+                  <li key={p.url || i}>
                     <button
                       type="button"
                       onClick={onOpenProxies}
-                      className="shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-vb-silver-dim transition-colors hover:bg-vb-surface-2 hover:text-vb-silver"
+                      title={p.reason ?? undefined}
+                      className="group flex w-full items-start gap-3 px-4 py-2 text-left transition-colors hover:bg-white/[0.02]"
                     >
-                      Прокси →
+                      <span
+                        className={cn(
+                          "mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full",
+                          hurts ? "bg-vb-warn" : "bg-vb-silver-faint/70",
+                        )}
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-baseline gap-2 text-[12px]">
+                          <span className="min-w-0 truncate">
+                            {name && <span className="text-vb-silver">{name} </span>}
+                            <span className="font-mono text-vb-silver-dim">{p.host}</span>
+                          </span>
+                          <span className="ml-auto shrink-0 text-vb-silver-faint">
+                            {p.backupOf !== undefined ? "резерв " : ""}
+                            {p.state === "down" ? "не отвечает" : "сбоит"}
+                          </span>
+                          <ChevronRight className="h-3.5 w-3.5 shrink-0 self-center text-vb-silver-faint/60 transition-transform group-hover:translate-x-0.5" />
+                        </span>
+                        {impact && (
+                          <span
+                            className={cn(
+                              "mt-0.5 block text-[11px] leading-snug",
+                              hurts ? "text-vb-warn/90" : "text-vb-silver-faint",
+                            )}
+                          >
+                            {impact.text}
+                          </span>
+                        )}
+                      </span>
                     </button>
                   </li>
                 );
@@ -496,6 +500,10 @@ export function Overview({ onOpenProxies }: Props) {
                       transition={{ type: "spring", bounce: 0, duration: 0.6 }}
                     />
                   </div>
+                  <span className="tnum flex shrink-0 items-center gap-1.5 text-[12px] text-vb-silver-faint" title="Открытых соединений">
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-vb-emerald" />
+                    <NumberTicker value={health.active} /> сейчас
+                  </span>
                   <Sparkline data={history} width={72} height={20} className="shrink-0 opacity-80" />
                 </div>
                 <div className="tnum mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 whitespace-nowrap text-[12px] text-vb-silver-faint">
@@ -511,10 +519,6 @@ export function Overview({ onOpenProxies }: Props) {
                     </span>{" "}
                     напрямую
                   </span>
-                  <span className="flex items-center gap-1.5">
-                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-vb-emerald" />
-                    <NumberTicker value={health.active} /> сейчас
-                  </span>
                   <button
                     type="button"
                     onClick={() => groups.length > 0 && setErrorsOpen((v) => !v)}
@@ -527,7 +531,7 @@ export function Overview({ onOpenProxies }: Props) {
                           : "hover:text-vb-silver",
                     )}
                   >
-                    {groups.length > 0 ? `перебои · ${lastAgo}` : "без сбоев"}
+                    {groups.length > 0 ? `перебои ${lastAgo}` : "без сбоев"}
                     {groups.length > 0 && (
                       <ChevronDown className={cn("h-3 w-3 transition-transform", errorsOpen && "rotate-180")} />
                     )}
