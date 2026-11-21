@@ -101,7 +101,7 @@ fn should_try_bridge(e: &reqwest::Error) -> bool {
 }
 
 /// Выполнить запрос напрямую; не удалось соединиться - через мост.
-async fn with_fallback<F, Fut, T>(f: F) -> Result<T, String>
+pub(crate) async fn with_fallback<F, Fut, T>(f: F) -> Result<T, String>
 where
     F: Fn(reqwest::Client) -> Fut,
     Fut: std::future::Future<Output = Result<T, reqwest::Error>>,

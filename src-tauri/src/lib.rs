@@ -29,6 +29,7 @@ mod proxy;
 mod regval;
 mod settings;
 mod shim;
+mod shop;
 mod system;
 mod tasks;
 mod telegram;
@@ -117,6 +118,9 @@ pub fn run() {
             show_main_window(app);
         }
     }));
+    // Ссылки clodhelper:// со страницы покупки. Вторая копия, открытая
+    // ссылкой, передаёт её сюда через single-instance (фича deep-link).
+    let builder = builder.plugin(tauri_plugin_deep_link::init());
     // Автозапуск: на Windows - плагин (ключ Run), на macOS - SMAppService
     // (src/autostart.rs); плагин там больше не регистрируется.
     #[cfg(target_os = "windows")]
@@ -261,9 +265,15 @@ pub fn run() {
             // Окна (трей-попап)
             commands::show_main_window,
             commands::quit_app,
+            // Купленный прокси по ссылке
+            shop::shop_link_take,
+            shop::shop_claim,
+            shop::shop_add,
         ])
         .setup(|app| {
             let handles = setup_tray(app.handle())?;
+
+            setup_deep_link(app.handle());
 
             // Трей-монитор: живая иконка (зелёная/жёлтая/красная точка),
             // tooltip со счётчиками и системные уведомления о переходах
@@ -652,6 +662,29 @@ pub(crate) fn set_dock_visible(app: &tauri::AppHandle, visible: bool) {
 }
 
 /// Показать главное окно (меню трея, Dock, кнопка в трей-попапе).
+/// Ссылки clodhelper://add?key=...: при холодном старте (ссылка в
+/// аргументах на Windows, событие открытия на macOS) и в уже запущенной
+/// программе. Сама ссылка ничего не добавляет - только показывает окно.
+fn setup_deep_link(app: &tauri::AppHandle) {
+    use tauri_plugin_deep_link::DeepLinkExt;
+    let dl = app.deep_link();
+    // Схему в реестр пишет установщик; здесь - починка, если запись стёрли
+    // или программу перенесли. Отладочная сборка запись не трогает, чтобы не
+    // перехватить ссылки у установленной программы (CLOD_DEEPLINK_REGISTER=1
+    // - зарегистрировать и её). На macOS схема живёт в Info.plist.
+    #[cfg(target_os = "windows")]
+    if !cfg!(debug_assertions) || std::env::var("CLOD_DEEPLINK_REGISTER").is_ok_and(|v| v == "1") {
+        if let Err(e) = dl.register_all() {
+            tracing::warn!("deep-link: регистрация схемы: {e}");
+        }
+    }
+    if let Ok(Some(urls)) = dl.get_current() {
+        shop::on_links(app, urls.iter().map(|u| u.to_string()));
+    }
+    let handle = app.clone();
+    dl.on_open_url(move |e| shop::on_links(&handle, e.urls().iter().map(|u| u.to_string())));
+}
+
 pub(crate) fn show_main_window(app: &tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         set_dock_visible(app, true);

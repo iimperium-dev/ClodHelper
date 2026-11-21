@@ -583,6 +583,66 @@ fn replace_pool(s: &mut Settings, urls: Vec<String>) {
     retain_labels(s);
 }
 
+/// Адрес прокси без логина и пароля (`host:port`, хост в нижнем регистре):
+/// по нему купленный прокси узнаёт уже добавленный.
+pub fn proxy_addr_key(url: &str) -> Option<String> {
+    let t = url.trim();
+    let full = if t.contains("://") { t.to_string() } else { format!("http://{t}") };
+    let u = url::Url::parse(&full).ok()?;
+    // Порт по умолчанию (:80 у http) url не хранит - берём известный.
+    Some(format!("{}:{}", u.host_str()?.to_ascii_lowercase(), u.port_or_known_default()?))
+}
+
+/// Добавить купленные прокси (URL, имя из магазина). Тот же адрес уже в
+/// пуле - запись меняется на месте: логин и пароль новые, а имя, резервы,
+/// назначения и сайты остаются за ней. Новый адрес - в конец пула. Имя из
+/// магазина ставится, только если своего у прокси нет. Номера записей в
+/// пуле - в ответе (по одному на прокси).
+pub fn upsert_pool(s: &mut Settings, items: &[(String, Option<String>)]) -> Result<Vec<usize>, String> {
+    let mut pool = effective_proxies(s);
+    let mut at = Vec::with_capacity(items.len());
+    for (url, label) in items {
+        let key = proxy_addr_key(url).ok_or("Магазин прислал прокси, который не получилось разобрать")?;
+        let i = match pool.iter().position(|u| proxy_addr_key(u).as_deref() == Some(key.as_str())) {
+            Some(i) => {
+                let old = std::mem::replace(&mut pool[i], url.clone());
+                if old != *url {
+                    if let Some(b) = s.proxy_backups.remove(&old) {
+                        s.proxy_backups.insert(url.clone(), b);
+                    }
+                    if let Some(l) = s.proxy_labels.remove(&old) {
+                        s.proxy_labels.insert(url.clone(), l);
+                    }
+                }
+                i
+            }
+            None => {
+                pool.push(url.clone());
+                pool.len() - 1
+            }
+        };
+        if let Some(l) = label.as_deref().map(str::trim).filter(|l| !l.is_empty()) {
+            s.proxy_labels.entry(url.clone()).or_insert_with(|| l.to_string());
+        }
+        at.push(i);
+    }
+    if pool.len() > 5 {
+        return Err(format!(
+            "В программе помещается 5 прокси, а их уже {}. Удалите лишний на странице «Прокси» и откройте ссылку ещё раз",
+            effective_proxies(s).len()
+        ));
+    }
+    // Прокси пула резервом больше не числится (купленный был чьим-то резервом).
+    for list in s.proxy_backups.values_mut() {
+        list.retain(|b| !pool.contains(b));
+    }
+    s.proxy_backups.retain(|_, list| !list.is_empty());
+    s.proxy_url = pool.first().cloned();
+    s.proxies = pool;
+    retain_labels(s);
+    Ok(at)
+}
+
 /// Задать/убрать имя (тэг) прокси. Пустое имя = убрать.
 /// Блокировать ли телеметрию Claude (по умолчанию - да).
 pub fn claude_telemetry_blocked(s: &Settings) -> bool {
@@ -951,6 +1011,46 @@ mod tests {
         assert_eq!(bridge_upstreams(&s), vec!["a", "a2", "x"]);
         assert!(!s.proxy_backups.contains_key("b"));
         assert!(!s.proxy_labels.contains_key("y"), "имя ушедшего резерва убрано");
+    }
+
+    #[test]
+    fn bought_proxy_updates_same_address_in_place() {
+        let mut s = Settings::default();
+        let old = "http://u:p@185.68.187.138:8000".to_string();
+        s.proxies = vec![old.clone(), "socks5://u:p@93.1.2.3:1080".into()];
+        s.proxy_url = Some(old.clone());
+        s.proxy_labels.insert(old.clone(), "Claude main".into());
+        s.proxy_backups.insert(old.clone(), vec!["http://x:y@5.5.5.5:80".into()]);
+        s.proxy_assignments.insert("anthropic".into(), 0);
+        let new = "http://buyer:pw@185.68.187.138:8000".to_string();
+        let at = upsert_pool(&mut s, &[(new.clone(), Some("Нидерланды".into()))]).unwrap();
+        assert_eq!(at, vec![0]);
+        assert_eq!(s.proxies, vec![new.clone(), "socks5://u:p@93.1.2.3:1080".to_string()]);
+        assert_eq!(s.proxy_url.as_deref(), Some(new.as_str()));
+        assert_eq!(s.proxy_labels.get(&new).map(String::as_str), Some("Claude main"), "своё имя не перетирается");
+        assert!(!s.proxy_labels.contains_key(&old));
+        assert_eq!(s.proxy_backups.get(&new).map(Vec::len), Some(1), "резервы едут за записью");
+        assert_eq!(s.proxy_assignments.get("anthropic"), Some(&0));
+    }
+
+    #[test]
+    fn bought_proxy_is_appended_with_shop_label_and_pool_limit_holds() {
+        let mut s = Settings::default();
+        s.proxies = vec!["http://a:b@1.1.1.1:80".into()];
+        s.proxy_backups.insert("http://a:b@1.1.1.1:80".into(), vec!["http://n:m@2.2.2.2:80".into()]);
+        let at = upsert_pool(&mut s, &[("http://n:m@2.2.2.2:80".into(), Some(" Финляндия ".into()))]).unwrap();
+        assert_eq!(at, vec![1]);
+        assert_eq!(s.proxy_labels.get("http://n:m@2.2.2.2:80").map(String::as_str), Some("Финляндия"));
+        assert!(s.proxy_backups.is_empty(), "бывший резерв стал прокси пула");
+
+        let mut full = Settings::default();
+        full.proxies = (1..=5).map(|i| format!("http://u:p@10.0.0.{i}:80")).collect();
+        let before = full.proxies.clone();
+        assert!(upsert_pool(&mut full.clone(), &[("http://u:p@10.0.0.9:80".into(), None)]).is_err());
+        // Обновление того же адреса в полном пуле - можно.
+        assert_eq!(upsert_pool(&mut full, &[("http://q:w@10.0.0.3:80".into(), None)]).unwrap(), vec![2]);
+        assert_eq!(full.proxies.len(), before.len());
+        assert_eq!(full.proxies[2], "http://q:w@10.0.0.3:80");
     }
 
     #[test]

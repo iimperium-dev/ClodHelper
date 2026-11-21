@@ -31,6 +31,7 @@ import {
   type SpeedEntry,
 } from "../components/ProxyPoolViews";
 import { useStatus } from "../lib/status";
+import { POOL_CHANGED_EVENT } from "../lib/shopClaim";
 import type { AppProfileStatus, ProxyCheckResult, ServiceGroup } from "../lib/types";
 import { fadeInUp, staggerContainer } from "../lib/motion";
 import { cn } from "../lib/cn";
@@ -323,6 +324,13 @@ export function Proxies() {
 
   useEffect(() => {
     void load();
+  }, [load]);
+
+  // Пул поменяли снаружи (купленный прокси по ссылке) - перечитать.
+  useEffect(() => {
+    const on = () => void load();
+    window.addEventListener(POOL_CHANGED_EVENT, on);
+    return () => window.removeEventListener(POOL_CHANGED_EVENT, on);
   }, [load]);
 
   // Гео автоматом для записей без кэша - флаг виден всегда, не только

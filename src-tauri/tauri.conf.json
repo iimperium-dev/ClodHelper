@@ -47,6 +47,13 @@
       "csp": null
     }
   },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["clodhelper"]
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": ["nsis"],

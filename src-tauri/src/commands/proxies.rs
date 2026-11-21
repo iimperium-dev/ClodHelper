@@ -277,6 +277,13 @@ pub async fn proxies_set(urls: Vec<String>) -> Result<Vec<String>, String> {
         .map_err(|e| format!("Внутренняя ошибка: {e}"))?;
         return Ok(Vec::new());
     }
+    restart_with_pool(primary).await?;
+    Ok(settings::effective_proxies(&settings::load()))
+}
+
+/// Пул поменялся: перерегистрация задачи (vbs получает все --upstream) и
+/// перезапуск моста.
+pub(crate) async fn restart_with_pool(primary: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         // Не фатально: без задачи мост перезапустится с одним upstream (легаси).
         if let Err(e) = crate::tasks::register(&primary) {
@@ -285,8 +292,7 @@ pub async fn proxies_set(urls: Vec<String>) -> Result<Vec<String>, String> {
         shim::restart()
     })
     .await
-    .map_err(|e| format!("Внутренняя ошибка: {e}"))??;
-    Ok(settings::effective_proxies(&settings::load()))
+    .map_err(|e| format!("Внутренняя ошибка: {e}"))?
 }
 
 /// Резервы прокси пула: URL прокси → его резервы по порядку.

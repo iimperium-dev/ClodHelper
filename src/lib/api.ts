@@ -634,3 +634,23 @@ export async function claudeChatsExportProgress(): Promise<ChatsExportProgress> 
 export async function revealInFolder(path: string): Promise<void> {
   return invoke<void>("reveal_in_folder", { path });
 }
+
+// ─── Купленный прокси по ссылке clodhelper://add?key=... ─────────
+
+/** Ключ из последней ссылки (один раз; null - ссылок не было). */
+export async function shopLinkTake(): Promise<string | null> {
+  return invoke<string | null>("shop_link_take");
+}
+
+/** Купленные прокси по ключу: напрямую, без связи - через мост. */
+export async function shopClaim(key: string): Promise<import("./shopClaim").Claim> {
+  return invoke<import("./shopClaim").Claim>("shop_claim", { key });
+}
+
+/**
+ * «Добавить» в окне покупки: тот же адрес в пуле - запись обновляется на
+ * месте (имя, резервы и назначения остаются), иначе прокси в конец пула.
+ */
+export async function shopAdd(items: { url: string; label?: string | null }[]): Promise<string[]> {
+  return invoke<string[]>("shop_add", { items });
+}

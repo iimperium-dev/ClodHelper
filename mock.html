@@ -20,6 +20,9 @@
   ?statsoff - ответ уже был; ?privacyfail - privacy_get падает, пока window.__privacyFailOff не true.
   ?reportlimit (429) и ?reportbusy (503) - ошибка отправки; ?reportslow - отправка 9 секунд; __reportNonces.
   ?reportfail - отправка отчёта падает; window.__privacy(), __reports, __uiErrors - для тестов.
+  ?deeplink - программа открыта ссылкой clodhelper://add?key=... (купленный прокси, новый адрес);
+  ?deeplink=update - тот же адрес уже в пуле, ?deeplink=fail - магазин не ответил.
+  window.__shopLink() - ссылка пришла в уже запущенную программу; __shopClaims - запрошенные ключи.
   Используется тестами tests/ui (Playwright).
 -->
 <script>
@@ -206,6 +209,15 @@
     for (const l of listeners) if (l.event === event) callbacks[l.handler]?.({ event, id: l.id, payload });
   };
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // Купленный прокси по ссылке: ключ ждёт, пока окно его заберёт.
+  const SHOP_KEY = "q83vEjRWeJCrze8SNFZ4kKvN7xI0VniQq83vEjRWeJA";
+  let shopPending = params.has("deeplink") ? SHOP_KEY : null;
+  window.__shopClaims = [];
+  window.__shopLink = (key = SHOP_KEY) => {
+    shopPending = key;
+    window.__emit("shop:link", null);
+  };
+  const shopHost = params.get("deeplink") === "update" ? "185.68.187.138:8000" : "45.142.7.19:8000";
   window.__TAURI_INTERNALS__ = {
     metadata: { currentWindow: { label: "main" }, currentWebview: { windowLabel: "main", label: "main" } },
     transformCallback: (cb) => {
@@ -220,6 +232,49 @@
         await new Promise((r) => setTimeout(r, 1500));
         return args.url.startsWith("socks5") ? { mbps: 7.4, bytes: 7400000, secs: 8 } : { mbps: 46.3, bytes: 25000000, secs: 4.3 };
       }
+      if (cmd === "shop_link_take") { const k = shopPending; shopPending = null; return k; }
+      if (cmd === "shop_claim") {
+        window.__shopClaims.push(args.key);
+        await wait(params.has("still") ? 50 : 500);
+        if (params.get("deeplink") === "fail") throw "Нет связи с магазином. Проверьте интернет и попробуйте ещё раз";
+        return {
+          proxies: [{ url: `http://buyer:s3cret@${shopHost}`, socks_url: `socks5://buyer:s3cret@${shopHost.replace(/:d+$/, ":1080")}`,
+            country: "NL", label: "Нидерланды", expires_at: "2026-12-22T00:00:00Z" }],
+          email_masked: "b***@mail.ru",
+        };
+      }
+      // Как бэкенд (settings::upsert_pool): тот же адрес - замена на месте с
+      // переносом имени, новый - в конец, имя из магазина - если своего нет.
+      if (cmd === "shop_add") {
+        await wait(params.has("still") ? 20 : 400);
+        const key = (u) => u.slice(u.lastIndexOf("@") + 1).toLowerCase();
+        const pool = [...R.proxies_get];
+        const labels = { ...R.proxy_labels_get };
+        for (const it of args.items) {
+          const i = pool.findIndex((u) => key(u) === key(it.url));
+          if (i >= 0) {
+            if (labels[pool[i]] !== undefined) { labels[it.url] = labels[pool[i]]; delete labels[pool[i]]; }
+            pool[i] = it.url;
+          } else pool.push(it.url);
+          if (it.label && labels[it.url] === undefined) labels[it.url] = it.label;
+        }
+        if (pool.length > 5) throw "В программе помещается 5 прокси";
+        R.proxies_get = pool;
+        R.proxy_labels_get = labels;
+        (window.__poolWrites ||= []).push([...pool]);
+        return structuredClone(pool);
+      }
+      if (cmd === "proxies_set") {
+        await wait(params.has("still") ? 20 : 400);
+        R.proxies_get = [...args.urls];
+        (window.__poolWrites ||= []).push([...args.urls]);
+        return structuredClone(R.proxies_get);
+      }
+      if (cmd === "proxy_label_set") {
+        R.proxy_labels_get = { ...R.proxy_labels_get, [args.url]: args.label };
+        return structuredClone(R.proxy_labels_get);
+      }
+      if (cmd === "check_proxy") (window.__checked ||= []).push(args.url);
       if (cmd === "apps_layout_get") return layout;
       if (cmd === "apps_layout_set") { layout = args.layout; return null; }
       if (cmd === "leak_guard_set") {
