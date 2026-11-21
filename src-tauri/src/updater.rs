@@ -1,16 +1,16 @@
 //! Обновление Clod Helper в один клик (без подписи Apple и Microsoft).
 //!
-//! Проверка — по манифесту `latest.json` последнего релиза GitHub
+//! Проверка - по манифесту `latest.json` последнего релиза GitHub
 //! (iimperium-dev/ClodHelper): ссылка `releases/latest/download/…` идёт
-//! через сайт и CDN, а не через API — без лимита «60 запросов в час на IP».
+//! через сайт и CDN, а не через API - без лимита «60 запросов в час на IP».
 //! Манифест подписан ключом разработчика (ed25519, `latest.json.sig`;
-//! подписывает scripts/publish-release.mjs на его машине — на GitHub
-//! закрытого ключа нет). Подпись не сошлась — обновление не ставим: так не
+//! подписывает scripts/publish-release.mjs на его машине - на GitHub
+//! закрытого ключа нет). Подпись не сошлась - обновление не ставим: так не
 //! пройдёт подмена файлов релиза (утёкший токен, взлом аккаунта, зеркало).
-//! В манифесте — SHA-256 установщиков; скачанный файл сверяется с ним:
-//!   - macOS: `*_universal.dmg` — новая версия встаёт на место текущей,
+//! В манифесте - SHA-256 установщиков; скачанный файл сверяется с ним:
+//!   - macOS: `*_universal.dmg` - новая версия встаёт на место текущей,
 //!     старая уходит в ~/Library/Application Support/ClodHelper-backup;
-//!   - Windows: `*_x64-setup.exe` (NSIS) — тихая установка поверх текущей
+//!   - Windows: `*_x64-setup.exe` (NSIS) - тихая установка поверх текущей
 //!     в профиль пользователя (без UAC), новая версия стартует сама.
 
 use serde::{Deserialize, Serialize};
@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 const REPO: &str = "iimperium-dev/ClodHelper";
 
 /// Открытые ключи подписи манифеста (ed25519, base64 сырых 32 байт).
-/// Несколько — на время смены ключа: новый добавить сюда заранее, выпустить
+/// Несколько - на время смены ключа: новый добавить сюда заранее, выпустить
 /// версию, и только потом подписывать новым.
 const UPDATE_KEYS: &[&str] = &["dkN/Vz8GRDntm9Ra94VI+slYMi3kgsIv2rbZoB8hjow="];
 
@@ -50,7 +50,7 @@ pub struct UpdateProgress {
     /// download → verify → install → restart.
     pub stage: &'static str,
     pub received: u64,
-    /// Размер установщика; 0 — сервер не сообщил.
+    /// Размер установщика; 0 - сервер не сообщил.
     pub total: u64,
 }
 
@@ -66,12 +66,12 @@ struct Manifest {
 
 #[derive(Debug, Deserialize)]
 struct ManifestFile {
-    /// Имя файла в релизе (как его назвал GitHub — пробелы стали точками).
+    /// Имя файла в релизе (как его назвал GitHub - пробелы стали точками).
     file: String,
     sha256: String,
-    /// «Что нового» именно для этой ОС (manifest ≥0.8.11). Пустой список —
+    /// «Что нового» именно для этой ОС (manifest ≥0.8.11). Пустой список -
     /// в релизе для этой ОС ничего нового: обновление не предлагаем, люди не
-    /// получают уведомление о версии, которая им ничего не даёт. Нет поля —
+    /// получают уведомление о версии, которая им ничего не даёт. Нет поля -
     /// старый манифест: берём общий список.
     #[serde(default)]
     highlights: Option<Vec<String>>,
@@ -91,13 +91,13 @@ fn client() -> Result<reqwest::Client, String> {
         .map_err(|e| format!("Обновления: {e}"))
 }
 
-/// Есть ли версия новее текущей. None — уже последняя.
+/// Есть ли версия новее текущей. None - уже последняя.
 pub async fn check() -> Result<Option<UpdateInfo>, String> {
     let m = fetch_manifest().await.map_err(|e| format!("Не удалось проверить обновления: {e}"))?;
     Ok(update_from(m, env!("CARGO_PKG_VERSION"), PLATFORM))
 }
 
-/// Манифест последнего релиза — только с верной подписью.
+/// Манифест последнего релиза - только с верной подписью.
 async fn fetch_manifest() -> Result<Manifest, String> {
     let c = client()?;
     let base = format!("https://github.com/{REPO}/releases/latest/download");
@@ -118,12 +118,12 @@ async fn fetch_manifest() -> Result<Manifest, String> {
     serde_json::from_slice(&body).map_err(|e| format!("манифест не читается: {e}"))
 }
 
-/// Подпись манифеста (base64 64 байт ed25519) — одним из наших ключей.
+/// Подпись манифеста (base64 64 байт ed25519) - одним из наших ключей.
 fn verify_manifest(body: &[u8], sig: &[u8], keys: &[&str]) -> Result<(), String> {
     use base64::Engine;
     use ed25519_dalek::{Signature, VerifyingKey};
     let b64 = base64::engine::general_purpose::STANDARD;
-    let bad = || "Подпись обновления не сошлась — не ставлю (файлы релиза могли подменить)".to_string();
+    let bad = || "Подпись обновления не сошлась - не ставлю (файлы релиза могли подменить)".to_string();
     let sig = b64.decode(String::from_utf8_lossy(sig).trim()).map_err(|_| bad())?;
     let sig = Signature::from_slice(&sig).map_err(|_| bad())?;
     let ok = keys.iter().any(|k| {
@@ -135,12 +135,12 @@ fn verify_manifest(body: &[u8], sig: &[u8], keys: &[&str]) -> Result<(), String>
 }
 
 /// Обновление из проверенного манифеста: новее `current`, со своим
-/// установщиком. Ссылка — на файл того же релиза.
+/// установщиком. Ссылка - на файл того же релиза.
 fn update_from(m: Manifest, current: &str, platform: &str) -> Option<UpdateInfo> {
     if parse_ver(&m.version)? <= parse_ver(current)? {
         return None;
     }
-    // Тег и версия подписаны вместе — должны совпадать.
+    // Тег и версия подписаны вместе - должны совпадать.
     if m.tag.trim_start_matches('v') != m.version {
         return None;
     }
@@ -174,7 +174,7 @@ async fn download_verified(
     let trusted = check()
         .await?
         .filter(|t| t.version == info.version)
-        .ok_or("Обновление на сервере изменилось — проверьте ещё раз")?;
+        .ok_or("Обновление на сервере изменилось - проверьте ещё раз")?;
     let c = client()?;
     let file = urlencoding_decode(trusted.url.rsplit('/').next().unwrap_or_default());
     let want = trusted.sha256.clone();
@@ -203,7 +203,7 @@ async fn download_verified(
     let got = bytes.len() as u64;
     progress(UpdateProgress { stage: "verify", received: got, total: total.max(got) });
     if format!("{:x}", hasher.finalize()) != want {
-        return Err("Файл обновления повреждён (контрольная сумма не совпала) — не ставлю".into());
+        return Err("Файл обновления повреждён (контрольная сумма не совпала) - не ставлю".into());
     }
     Ok((file, bytes))
 }
@@ -220,7 +220,7 @@ fn work_dir() -> Result<std::path::PathBuf, String> {
 }
 
 /// Скачать, проверить, поставить и перезапуститься (после вызова приложение
-/// должно завершиться — новую версию запустит фоновый скрипт).
+/// должно завершиться - новую версию запустит фоновый скрипт).
 #[cfg(not(target_os = "windows"))]
 pub async fn install(
     info: &UpdateInfo,
@@ -268,7 +268,7 @@ pub async fn install(
         return Err("Не удалось распаковать обновление".into());
     }
 
-    // Замена после выхода: старую — в резервные копии, новую — на место.
+    // Замена после выхода: старую - в резервные копии, новую - на место.
     let backup_dir = dirs::data_dir()
         .ok_or("Нет папки данных")?
         .join("ClodHelper-backup");
@@ -296,18 +296,18 @@ pub async fn install(
     Ok(())
 }
 
-/// Ключи NSIS-установщика Tauri (как у его штатного апдейтера): /S — без
-/// окон (белое окно /P выглядело чужеродно — вместо него наша заставка,
-/// update_splash.rs); /UPDATE — поверх текущей версии, без её удаления и
-/// без пересоздания ярлыков, которые пользователь мог убрать; /R —
+/// Ключи NSIS-установщика Tauri (как у его штатного апдейтера): /S - без
+/// окон (белое окно /P выглядело чужеродно - вместо него наша заставка,
+/// update_splash.rs); /UPDATE - поверх текущей версии, без её удаления и
+/// без пересоздания ярлыков, которые пользователь мог убрать; /R -
 /// запустить новую версию после установки.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 const NSIS_UPDATE_ARGS: [&str; 3] = ["/S", "/UPDATE", "/R"];
 
 /// Windows: скачать и проверить установщик, запустить его. Установка
-/// в профиль пользователя (currentUser) — без UAC. Приложение сразу после
-/// этого выходит (update_install); установщик дождётся выхода — запущенную
-/// копию он и сам закрывает — и запустит новую версию. Мост работает из
+/// в профиль пользователя (currentUser) - без UAC. Приложение сразу после
+/// этого выходит (update_install); установщик дождётся выхода - запущенную
+/// копию он и сам закрывает - и запустит новую версию. Мост работает из
 /// своей папки и обновится при первом старте новой версии.
 #[cfg(target_os = "windows")]
 pub async fn install(
@@ -324,7 +324,7 @@ pub async fn install(
         .args(NSIS_UPDATE_ARGS)
         .spawn()
         .map_err(|e| format!("Не удалось запустить установщик: {e}"))?;
-    // Заставка — украшение: не запустилась, обновление всё равно идёт.
+    // Заставка - украшение: не запустилась, обновление всё равно идёт.
     if let Err(e) = crate::update_splash::spawn(&work, child.id(), &info.version) {
         tracing::warn!("{e}");
     }
@@ -363,7 +363,7 @@ mod tests {
         assert!(verify_manifest(body, &signed(&sk, body), &[&pk]).is_ok());
         // Ключ на смену: годится любой из списка.
         assert!(verify_manifest(body, &signed(&sk, body), &[&other_pk, &pk]).is_ok());
-        // Чужой ключ, изменённый манифест, мусор вместо подписи — отказ.
+        // Чужой ключ, изменённый манифест, мусор вместо подписи - отказ.
         assert!(verify_manifest(body, &signed(&other, body), &[&pk]).is_err());
         assert!(verify_manifest(br#"{"version":"9.9.9"}"#, &signed(&sk, body), &[&pk]).is_err());
         assert!(verify_manifest(body, b"not base64!", &[&pk]).is_err());
@@ -407,7 +407,7 @@ mod tests {
         assert!(update_from(manifest("0.9.0", "v0.9.0", exe, "abc"), "0.8.8", "windows-x86_64").is_none());
         assert!(update_from(manifest("0.9.0", "v0.9.0", exe, &sha), "0.8.8", "linux").is_none());
 
-        // Свои пункты у ОС: пусто — для этой ОС ничего нового, не предлагаем.
+        // Свои пункты у ОС: пусто - для этой ОС ничего нового, не предлагаем.
         let per_os: Manifest = serde_json::from_value(serde_json::json!({
             "version": "0.9.0", "tag": "v0.9.0", "highlights": ["Только Windows"],
             "platforms": {

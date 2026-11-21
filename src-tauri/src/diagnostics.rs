@@ -1,8 +1,8 @@
 //! «Отчёт для поддержки»: всё, что нужно, чтобы понять проблему человека
-//! удалённо, — одним текстом, который он пересылает разработчику.
+//! удалённо, - одним текстом, который он пересылает разработчику.
 //!
-//! Без секретов: адреса прокси — только host:port (логин и пароль никогда не
-//! попадают в отчёт), чужие прокси-переменные — тоже без учётных данных.
+//! Без секретов: адреса прокси - только host:port (логин и пароль никогда не
+//! попадают в отчёт), чужие прокси-переменные - тоже без учётных данных.
 
 use std::fmt::Write as _;
 use std::time::Duration;
@@ -25,7 +25,7 @@ fn mask_proxy_value(v: &str) -> String {
 pub fn report() -> String {
     let mut r = String::new();
     let s = crate::settings::load_with_presets();
-    let _ = writeln!(r, "=== Clod Helper — отчёт для поддержки ===");
+    let _ = writeln!(r, "=== Clod Helper - отчёт для поддержки ===");
     let _ = writeln!(r, "Версия: {}", env!("CARGO_PKG_VERSION"));
     let _ = writeln!(
         r,
@@ -152,8 +152,8 @@ pub fn report() -> String {
             r,
             "Системный прокси Windows: флаги={} PAC={} прокси={}",
             c.flags,
-            c.pac_url.as_deref().map(|u| u.split('?').next().unwrap_or(u).to_string()).unwrap_or_else(|| "—".into()),
-            c.server.as_deref().map(mask_proxy_value).unwrap_or_else(|| "—".into()),
+            c.pac_url.as_deref().map(|u| u.split('?').next().unwrap_or(u).to_string()).unwrap_or_else(|| "-".into()),
+            c.server.as_deref().map(mask_proxy_value).unwrap_or_else(|| "-".into()),
         );
     }
     for site in &s.sites {

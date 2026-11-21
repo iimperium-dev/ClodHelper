@@ -11,7 +11,7 @@ interface Props {
 }
 
 /*
-  Шаг 3: честный итог. Пиллы — из РЕАЛЬНОГО shim-теста (запрос через мост),
+  Шаг 3: честный итог. Пиллы - из РЕАЛЬНОГО shim-теста (запрос через мост),
   а не из выбранных галочек: если проверка не прошла, говорим об этом прямо
   и ведём в приложение чинить, а не рисуем зелёное.
 */
@@ -42,7 +42,7 @@ export function StepDone({ result, onFinish }: Props) {
             Соединение через мост проверено настоящим запросом
             {result.test.external_ip && (
               <>
-                {" — внешний IP "}
+                {" - внешний IP "}
                 <span className="font-mono text-vb-silver">{result.test.external_ip}</span>
               </>
             )}
@@ -54,7 +54,7 @@ export function StepDone({ result, onFinish }: Props) {
         ) : (
           <>
             {result.test.error ?? "Запрос через мост не прошёл."} Чаще всего это
-            значит, что прокси не отвечает — проверьте его в разделе «Прокси».
+            значит, что прокси не отвечает - проверьте его в разделе «Прокси».
           </>
         )}
       </p>
@@ -68,13 +68,13 @@ export function StepDone({ result, onFinish }: Props) {
           {result.env_on ? (
             <>
               <Globe className="h-4 w-4 shrink-0 text-vb-emerald" />
-              Системное проксирование включено — терминал, VS Code и Claude Code
+              Системное проксирование включено - терминал, VS Code и Claude Code
               уже идут через мост
             </>
           ) : (
             <>
               <Globe className="h-4 w-4 shrink-0 text-vb-warn" />
-              Системное проксирование не включилось — включите его в
+              Системное проксирование не включилось - включите его в
               «Приложениях» → Claude Desktop → ⚙ → «Claude Code в терминале»
             </>
           )}
@@ -83,13 +83,13 @@ export function StepDone({ result, onFinish }: Props) {
           <AppWindow className="h-4 w-4 shrink-0 text-vb-silver-dim" />
           {isMac ? (
             <>
-              Claude Desktop, браузер и другие программы — в разделе
+              Claude Desktop, браузер и другие программы - в разделе
               «Приложения»
             </>
           ) : (
             <>
               Дальше: «Приложения» → Claude Desktop → «Подключить». Там же
-              кнопкой «Добавить» — отдельный браузер для сайта Claude
+              кнопкой «Добавить» - отдельный браузер для сайта Claude
             </>
           )}
         </div>

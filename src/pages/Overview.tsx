@@ -39,7 +39,7 @@ interface Props {
   onOpenProxies: () => void;
 }
 
-/** Названия сервисов назначений — как в «Прокси». */
+/** Названия сервисов назначений - как в «Прокси». */
 const SERVICE_NAMES: Record<string, string> = {
   anthropic: "Claude",
   openai: "ChatGPT",
@@ -67,7 +67,7 @@ function pinnedTo(pins: Pins | null, i: number): string[] {
   ];
 }
 
-/** Что значит отказ прокси для пользователя — одной строкой. */
+/** Что значит отказ прокси для пользователя - одной строкой. */
 function impactOf(p: ProxyState, i: number, exit: number | null, allMode: boolean, pins: Pins | null, proxies: ProxyState[]): string {
   // Резерв: сейчас ничего не ломает, но подстраховки у своего прокси нет.
   if (p.backupOf !== undefined) {
@@ -75,14 +75,14 @@ function impactOf(p: ProxyState, i: number, exit: number | null, allMode: boolea
     return owner ? `Резерв для ${owner.host}: если тот упадёт, этот не подхватит` : "Резервный прокси";
   }
   const users = pinnedTo(pins, i);
-  // Подменён живым резервом — всё работает, но с другого IP.
+  // Подменён живым резервом - всё работает, но с другого IP.
   if (p.coveredBy !== undefined) {
     const sub = proxies[p.coveredBy];
-    return `Подменяет резерв ${sub?.host ?? ""}${users.length ? ` — ${users.slice(0, 4).join(", ")} работают через него` : ""}`;
+    return `Подменяет резерв ${sub?.host ?? ""}${users.length ? ` - ${users.slice(0, 4).join(", ")} работают через него` : ""}`;
   }
   const parts: string[] = [];
   if (exit === i) {
-    parts.push(allMode ? "Через него идёт весь трафик — сейчас он стоит" : "Через него сейчас выход в интернет");
+    parts.push(allMode ? "Через него идёт весь трафик - сейчас он стоит" : "Через него сейчас выход в интернет");
   } else if (i === 0 && !allMode) {
     const alt = exit !== null ? proxies[exit] : undefined;
     parts.push(alt ? `Основной: «Авто» сейчас идёт через ${alt.host}` : "Основной, а запасных живых нет");
@@ -92,7 +92,7 @@ function impactOf(p: ProxyState, i: number, exit: number | null, allMode: boolea
   return parts.join(" · ");
 }
 
-/** "N сек/мин/ч назад" для списка ошибок (t — секунды-от-старта моста). */
+/** "N сек/мин/ч назад" для списка ошибок (t - секунды-от-старта моста). */
 function agoLabel(uptimeSec: number, t: number): string {
   const d = Math.max(0, uptimeSec - t);
   if (d < 60) return `${d} сек назад`;
@@ -100,7 +100,7 @@ function agoLabel(uptimeSec: number, t: number): string {
   return `${Math.floor(d / 3600)} ч назад`;
 }
 
-/** Техническую строку моста — в короткую человеческую причину. */
+/** Техническую строку моста - в короткую человеческую причину. */
 function humanError(msg: string): string {
   if (/unreachable|No route|os error 51|os error 65/i.test(msg)) return "Не было интернета на Mac";
   if (/логин\/пароль|407/.test(msg)) return "Прокси не принял логин или пароль";
@@ -111,7 +111,7 @@ function humanError(msg: string): string {
   return msg.length > 60 ? `${msg.slice(0, 57)}…` : msg;
 }
 
-/** Сгруппировать одинаковые причины: свежие — первыми, с количеством. */
+/** Сгруппировать одинаковые причины: свежие - первыми, с количеством. */
 function errorGroups(
   errors: { t: number; msg: string }[],
   uptimeSec: number,
@@ -139,7 +139,7 @@ function errorGroups(
 }
 
 /*
-  Обзор — hero-зона статуса (НЕ карточка: открытая композиция с орбом),
+  Обзор - hero-зона статуса (НЕ карточка: открытая композиция с орбом),
   живые метрики с тикерами и sparkline, и группа управления одной
   поверхностью с hairline-разделителями (вместо трёх отдельных карточек).
   Описания «для чайника» живут в «?»-подсказках, не в инлайн-тексте.
@@ -170,10 +170,10 @@ export function Overview({ onOpenProxies }: Props) {
 
   const loading = status === null;
   const running = status?.running ?? false;
-  // Прокси с проблемами: каждый — отдельной строкой с последствиями.
+  // Прокси с проблемами: каждый - отдельной строкой с последствиями.
   const issues = proxies.map((p, i) => ({ p, i })).filter(({ p }) => p.state === "down" || p.state === "unstable");
   const issueKey = issues.map(({ i, p }) => `${i}:${p.state}`).join(",");
-  // Подпись под заголовком: что с прокси — одной фразой.
+  // Подпись под заголовком: что с прокси - одной фразой.
   const lostCount = issues.filter(({ p }) => p.backupOf === undefined && p.coveredBy === undefined).length;
   const issuesNote = !issues.length
     ? ""
@@ -184,7 +184,7 @@ export function Overview({ onOpenProxies }: Props) {
         : issues.some(({ p }) => p.coveredBy !== undefined)
           ? " · работает резервный прокси"
           : " · резервный прокси не отвечает";
-  // Кто за каким прокси закреплён — нужно только при проблемах.
+  // Кто за каким прокси закреплён - нужно только при проблемах.
   const [pins, setPins] = useState<Pins | null>(null);
   useEffect(() => {
     if (!issueKey) return;
@@ -202,7 +202,7 @@ export function Overview({ onOpenProxies }: Props) {
 
   // ── Действия моста ──
   // Все команды могут реально упасть (порт занят, exe удалён, PowerShell
-  // отказал) — без catch клик выглядел бы как «нажал и ничего»: спиннер
+  // отказал) - без catch клик выглядел бы как «нажал и ничего»: спиннер
   // мигнул, ошибки нет. Показываем её строкой под hero.
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -229,7 +229,7 @@ export function Overview({ onOpenProxies }: Props) {
     setReport(null);
     setActionError(null);
     try {
-      // Заодно — свежий пинг: рядом с выходным IP должна стоять актуальная цифра.
+      // Заодно - свежий пинг: рядом с выходным IP должна стоять актуальная цифра.
       const [t, r] = await Promise.all([
         shimTest(),
         privacyCheck().catch(() => null),
@@ -270,10 +270,10 @@ export function Overview({ onOpenProxies }: Props) {
     }
   };
 
-  // Через какой прокси реально идёт трафик моста. «Весь трафик» — строго
+  // Через какой прокси реально идёт трафик моста. «Весь трафик» - строго
   // через один (закреплённый за Claude, иначе основной), без запасных.
-  // Умный режим («Авто») — первый работающий по порядку пула (мост так и
-  // переключается). IP — ровно одно место на экране; после «Проверить» —
+  // Умный режим («Авто») - первый работающий по порядку пула (мост так и
+  // переключается). IP - ровно одно место на экране; после «Проверить» -
   // реальный выходной IP.
   const allMode = health?.mode === "all";
   // Сам прокси пула (по индексу моста) или резерв, который его подменяет.
@@ -289,10 +289,10 @@ export function Overview({ onOpenProxies }: Props) {
   const exitProxy = exitIndex !== null ? proxies[exitIndex] : undefined;
   const exitIp =
     report?.exit?.ip ?? (testResult?.ok && testResult.external_ip ? testResult.external_ip : exitProxy?.host ?? null);
-  // «мс» — всегда TCP-пинг прокси, как в «Прокси». Время запроса из
+  // «мс» - всегда TCP-пинг прокси, как в «Прокси». Время запроса из
   // «Проверить» (TLS до сайта через прокси + ответ сервиса, секунды) сюда
   // не годится: рядом с IP его читали как пинг. Выход не совпал ни с одним
-  // прокси пула (у провайдера выходной IP другой) — пинг не показываем.
+  // прокси пула (у провайдера выходной IP другой) - пинг не показываем.
   const exitMs = proxies.find((p) => p.host === exitIp)?.ms ?? undefined;
   const exitState = testResult && !testResult.ok ? "down" : (exitProxy?.state ?? "unknown");
   const spare = allMode ? 0 : poolIdx.filter((i) => i !== exitIndex && isUsable(proxies[i].state)).length;
@@ -415,7 +415,7 @@ export function Overview({ onOpenProxies }: Props) {
               Проверить
             </Button>
           </div>
-          {/* Проверка приватности — вердикт по пунктам */}
+          {/* Проверка приватности - вердикт по пунктам */}
           <AnimatePresence>
             {report && (
               <motion.div
@@ -434,7 +434,7 @@ export function Overview({ onOpenProxies }: Props) {
               {testResult.error}
             </p>
           )}
-          {/* Прокси с проблемами — каждый отдельно: что с ним и кого задевает */}
+          {/* Прокси с проблемами - каждый отдельно: что с ним и кого задевает */}
           {issues.length > 0 && (
             <ul className="divide-y divide-vb-border/50 border-t border-vb-border/70">
               {issues.map(({ p, i }) => {
@@ -564,7 +564,7 @@ export function Overview({ onOpenProxies }: Props) {
           {(bridgeOutdated || (running && oldBridge)) && (
             <div className="flex items-center justify-between gap-3 rounded-lg border border-vb-border bg-vb-surface-2/60 px-4 py-2.5">
               <p className="text-[12px] text-vb-silver">
-                Новый мост{versions?.bundled ? ` ${versions.bundled}` : ""} — стабильнее при сбоях прокси
+                Новый мост{versions?.bundled ? ` ${versions.bundled}` : ""} - стабильнее при сбоях прокси
               </p>
               <Button variant="secondary" size="sm" onClick={handleBridgeUpdate} disabled={updatingBridge}>
                 {updatingBridge && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
@@ -607,7 +607,7 @@ function PrivacyRows({ report }: { report: PrivacyReport }) {
       title: report.ip_hidden ? "Через мост ваш IP скрыт" : "Через мост виден ваш настоящий IP",
       sub: report.exit
         ? `Видят ${report.exit.ip}${report.exit.country ? ` · ${report.exit.country}` : ""}${
-            report.home ? ` — настоящий ${report.home.ip}` : ""
+            report.home ? ` - настоящий ${report.home.ip}` : ""
           }`
         : undefined,
     });
@@ -622,12 +622,12 @@ function PrivacyRows({ report }: { report: PrivacyReport }) {
     ok: report.leaking_apps.length === 0,
     title:
       report.leaking_apps.length === 0
-        ? "Приложения из вашего списка — через мост"
+        ? "Приложения из вашего списка - через мост"
         : `Мимо моста: ${report.leaking_apps.join(", ")}`,
-    // Мост — не VPN: остальные программы компьютера ходят напрямую.
+    // Мост - не VPN: остальные программы компьютера ходят напрямую.
     sub:
       report.leaking_apps.length > 0
-        ? "Подробности — в «Приложениях»"
+        ? "Подробности - в «Приложениях»"
         : "Остальные программы работают напрямую, как обычно",
   });
   const allOk = rows.every((r) => r.ok);

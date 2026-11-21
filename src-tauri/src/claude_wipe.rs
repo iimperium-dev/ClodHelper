@@ -7,9 +7,9 @@
 //! claude.ai, кэш под аккаунт, журналы и временные файлы.
 //!
 //! Не трогаем (если не выбрано удаление локальных чатов):
-//!   - чаты и проекты в облаке — они на серверах Anthropic, в самом аккаунте;
+//!   - чаты и проекты в облаке - они на серверах Anthropic, в самом аккаунте;
 //!   - локальные сессии вкладки Code и задачи Cowork (claude-code-sessions,
-//!     local-agent-mode-sessions, ~/.claude/projects) — они разложены по
+//!     local-agent-mode-sessions, ~/.claude/projects) - они разложены по
 //!     папкам аккаунта и вернутся, если снова войти в прошлый. Перед
 //!     удалением их можно выгрузить в архив (`claude_chats_export`);
 //!   - настройки MCP и прочие свои настройки (из файлов настроек убираются
@@ -27,7 +27,7 @@
 //! ключей.
 //!
 //! Ключ к полноте: любой ключ JSON, в имени которого есть UUID (id
-//! аккаунта, организации, сессии), — запись «под аккаунт». Их убираем все,
+//! аккаунта, организации, сессии), - запись «под аккаунт». Их убираем все,
 //! а не по списку: новые версии Claude добавляют такие ключи постоянно.
 
 use std::collections::BTreeSet;
@@ -95,10 +95,10 @@ pub struct Scan {
     /// Найден ли Claude Code (~/.claude.json или ~/.claude).
     pub code_found: bool,
     pub groups: Vec<GroupInfo>,
-    /// Claude Desktop сейчас запущен — перед очисткой его закроем.
+    /// Claude Desktop сейчас запущен - перед очисткой его закроем.
     pub desktop_running: bool,
     /// Claude Code, запущенный отдельно (терминал, VS Code): закроем,
-    /// если очищаем Claude Code или чаты, — иначе он запишет данные обратно.
+    /// если очищаем Claude Code или чаты, - иначе он запишет данные обратно.
     pub cli_running: u32,
     /// Локальные сессии вкладки Code и Cowork, которые остаются.
     pub kept_sessions: u32,
@@ -114,7 +114,7 @@ pub struct Running {
 pub struct WipeResult {
     pub removed_bytes: u64,
     pub removed_items: u32,
-    /// Что удалить не удалось (путь — причина).
+    /// Что удалить не удалось (путь - причина).
     pub failed: Vec<String>,
     /// Claude Desktop был запущен и закрыт для очистки.
     pub closed_desktop: bool,
@@ -195,7 +195,7 @@ const DESKTOP_REMOVE: &[(Group, &str)] = &[
     (Group::Device, "ant-did"),
     (Group::Device, "ant-device-registry.json"),
     (Group::Device, "ccd-ids.json"),
-    // Поколение аппаратного ключа устройства (сами ключи — в TPM, их
+    // Поколение аппаратного ключа устройства (сами ключи - в TPM, их
     // удаляем отдельно: Action::TpmKey).
     (Group::Device, "ant-device-key-generation.json"),
     // Соль id камер и микрофонов, которые видит страница (постоянный отпечаток).
@@ -258,7 +258,7 @@ const DESKTOP_REMOVE: &[(Group, &str)] = &[
     (Group::Cache, "declarative_performance_observer.db-journal"),
 ];
 
-/// config.json Claude Desktop: всё остальное — токены, id аккаунта,
+/// config.json Claude Desktop: всё остальное - токены, id аккаунта,
 /// доверенное устройство, дата первого запуска, кэш под аккаунт.
 const DESKTOP_CONFIG_KEEP: &[&str] = &[
     "locale",
@@ -267,13 +267,13 @@ const DESKTOP_CONFIG_KEEP: &[&str] = &[
     "updaterLastSeenVersion",
     "hostGitConfinedInstall",
     "remote_marketplace_migration_done_v1",
-    // Тема оформления — своя настройка, не про аккаунт.
+    // Тема оформления - своя настройка, не про аккаунт.
     "userThemeMode",
 ];
 
 /// claude_desktop_config.json → preferences: устройство и его привязки.
 const DESKTOP_PREFS_DROP: &[&str] = &[
-    // Имя устройства для удалённого доступа — сервер видит его у аккаунта.
+    // Имя устройства для удалённого доступа - сервер видит его у аккаунта.
     "remoteToolsDeviceName",
     // Связка с расширением Claude для Chrome: id устройства и браузера.
     "chromeExtension",
@@ -364,7 +364,7 @@ const CODE_DIR_REMOVE: &[(Group, &str)] = &[
     (Group::Account, "policy-limits.json"),
     (Group::Account, "mcp-needs-auth-cache.json"),
     (Group::Account, "bridge-pointer.json"),
-    // Каталог моделей: имена файлов — id организации и хэш аккаунта.
+    // Каталог моделей: имена файлов - id организации и хэш аккаунта.
     (Group::Account, "cache/model-catalog"),
     (Group::Logs, "telemetry"),
     (Group::Logs, "debug"),
@@ -480,7 +480,7 @@ fn targets(env: &Env) -> Vec<Target> {
         push(Group::Login, true, Action::Keychain("Claude Code-credentials"));
         push(Group::Login, true, Action::Keychain("Claude Code-device-keys"));
     }
-    // Локальные чаты — отдельная цель (группа Chats), по умолчанию не трогаем.
+    // Локальные чаты - отдельная цель (группа Chats), по умолчанию не трогаем.
     for d in &env.desktop_dirs {
         for rel in DESKTOP_CHATS {
             push(Group::Chats, false, Action::Remove(d.join(rel)));
@@ -538,7 +538,7 @@ pub fn env() -> Env {
                     e.desktop_extra.push((Group::Logs, pkg.join("LocalCache").join("Local").join("Claude").join("logs")));
                 }
             }
-            // Журналы — в %LOCALAPPDATA%\Claude\logs. Саму папку не трогаем:
+            // Журналы - в %LOCALAPPDATA%\Claude\logs. Саму папку не трогаем:
             // в ней может стоять программа (старый установщик).
             e.desktop_extra.push((Group::Logs, l.join("Claude").join("logs")));
             e.code_extra.push(l.join("claude-cli-nodejs"));
@@ -596,7 +596,7 @@ pub fn env() -> Env {
 
 // ─── Размеры ────────────────────────────────────────────────────────
 
-/// Размер файла/папки без перехода по ссылкам (ссылка — 0). None — пути нет.
+/// Размер файла/папки без перехода по ссылкам (ссылка - 0). None - пути нет.
 fn size_of(p: &Path) -> Option<(u64, u32)> {
     let meta = std::fs::symlink_metadata(p).ok()?;
     if meta.file_type().is_symlink() {
@@ -622,7 +622,7 @@ fn size_of(p: &Path) -> Option<(u64, u32)> {
     Some((bytes, 1))
 }
 
-/// JSON-объект из файла. Ok(None) — файла нет; Err — есть, но не читается
+/// JSON-объект из файла. Ok(None) - файла нет; Err - есть, но не читается
 /// (занят, повреждён). Такой файл нельзя молча пропускать: в нём могут
 /// остаться токены.
 fn read_json_checked(p: &Path) -> Result<Option<Map<String, Value>>, String> {
@@ -680,7 +680,7 @@ fn has_uuid(s: &str) -> bool {
 
 /// id аккаунтов и организаций, которые видны на этом компьютере: папки,
 /// разложенные как <аккаунт>/<организация>, ключи настроек и сохранённые
-/// значения — в том числе прошлых аккаунтов из резервных копий.
+/// значения - в том числе прошлых аккаунтов из резервных копий.
 fn account_ids(env: &Env) -> BTreeSet<String> {
     let mut ids = BTreeSet::new();
     let mut add = |s: &str| {
@@ -829,7 +829,7 @@ fn json_edit(action: &Action, ids: &BTreeSet<String>) -> Edit {
         Action::DesktopConfig(_) => map.retain(|k, _| DESKTOP_CONFIG_KEEP.contains(&k.as_str())),
         Action::CodeConfig(_) => {
             map.retain(|k, _| !code_key_is_account(k));
-            // У проектов — id последних сессий и их счётчики.
+            // У проектов - id последних сессий и их счётчики.
             if let Some(Value::Object(projects)) = map.get_mut("projects") {
                 for p in projects.values_mut() {
                     if let Value::Object(p) = p {
@@ -914,7 +914,7 @@ pub fn scan_env(env: &Env) -> Scan {
     }
 }
 
-/// Размеры папок — в несколько потоков: большие папки считаются параллельно.
+/// Размеры папок - в несколько потоков: большие папки считаются параллельно.
 fn sizes_parallel(all: &[Target]) -> Vec<Option<(u64, u32)>> {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let next = AtomicUsize::new(0);
@@ -1036,16 +1036,16 @@ pub fn wipe_env(env: &Env, include_desktop: bool, include_code: bool, include_ch
                     res.removed_bytes += b;
                     res.removed_items += n;
                 }
-                Err(e) => res.failed.push(format!("{} — {e}", p.display())),
+                Err(e) => res.failed.push(format!("{} - {e}", p.display())),
             },
             Action::Keychain(service) => keychain_delete(service),
             Action::TpmKey(name) => match tpm_delete(name) {
                 Ok(()) => res.removed_items += 1,
-                Err(e) => res.failed.push(format!("Ключ устройства {name} — {e}")),
+                Err(e) => res.failed.push(format!("Ключ устройства {name} - {e}")),
             },
             Action::Credential(name) => match credential_delete(name) {
                 Ok(()) => res.removed_items += 1,
-                Err(e) => res.failed.push(format!("Учётные данные {name} — {e}")),
+                Err(e) => res.failed.push(format!("Учётные данные {name} - {e}")),
             },
             other => match json_edit(other, &ids) {
                 Edit::Write(map, n) => {
@@ -1059,22 +1059,22 @@ pub fn wipe_env(env: &Env, include_desktop: bool, include_code: bool, include_ch
                     };
                     match write_json(path, map) {
                         Ok(()) => res.removed_items += n as u32,
-                        Err(e) => res.failed.push(format!("{} — {e}", path.display())),
+                        Err(e) => res.failed.push(format!("{} - {e}", path.display())),
                     }
                 }
                 Edit::Broken(e) => match other {
-                    // config.json Claude Desktop пересоздаёт сам — испорченный удаляем целиком.
+                    // config.json Claude Desktop пересоздаёт сам - испорченный удаляем целиком.
                     Action::DesktopConfig(p) => match remove(p) {
                         Ok((b, n)) => {
                             res.removed_bytes += b;
                             res.removed_items += n;
                         }
-                        Err(e2) => res.failed.push(format!("{} — {e}; {e2}", p.display())),
+                        Err(e2) => res.failed.push(format!("{} - {e}; {e2}", p.display())),
                     },
                     Action::DesktopPrefs(p)
                     | Action::Scrub(p)
                     | Action::LocalState(p)
-                    | Action::CodeConfig(p) => res.failed.push(format!("{} — {e}", p.display())),
+                    | Action::CodeConfig(p) => res.failed.push(format!("{} - {e}", p.display())),
                     _ => {}
                 },
                 Edit::None => {}
@@ -1086,7 +1086,7 @@ pub fn wipe_env(env: &Env, include_desktop: bool, include_code: bool, include_ch
 
 #[cfg(target_os = "macos")]
 fn keychain_delete(service: &str) {
-    // Записей может быть несколько — удаляем, пока находятся.
+    // Записей может быть несколько - удаляем, пока находятся.
     for _ in 0..5 {
         let ok = std::process::Command::new("/usr/bin/security")
             .args(["delete-generic-password", "-s", service])
@@ -1103,7 +1103,7 @@ fn keychain_delete(_service: &str) {}
 
 // ─── Хранилища Windows: TPM и Диспетчер учётных данных ──────────────
 
-/// Список ключей TPM и учётных данных — не чаще раза в 30 секунд:
+/// Список ключей TPM и учётных данных - не чаще раза в 30 секунд:
 /// открывать TPM на каждый скан дорого.
 #[cfg(target_os = "windows")]
 static OS_STORES: Mutex<Option<(Instant, Vec<String>, Vec<String>)>> = Mutex::new(None);
@@ -1402,11 +1402,11 @@ fn ask_desktop_to_quit(_pids: &[u32]) {
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn ask_desktop_to_quit(_pids: &[u32]) {}
 
-/// Закрыть всё, что пишет в данные Claude: Desktop (сначала вежливо —
-/// он сохраняет состояние и выходит; не вышел — завершаем), его Claude Code,
-/// а с `with_cli` — и отдельно запущенный Claude Code. Иначе работающая
+/// Закрыть всё, что пишет в данные Claude: Desktop (сначала вежливо -
+/// он сохраняет состояние и выходит; не вышел - завершаем), его Claude Code,
+/// а с `with_cli` - и отдельно запущенный Claude Code. Иначе работающая
 /// программа запишет аккаунт и id обратно сразу после очистки.
-/// Ok(true) — Claude Desktop был запущен.
+/// Ok(true) - Claude Desktop был запущен.
 fn close_claude(env: &Env, with_cli: bool) -> Result<bool, String> {
     let first = processes(env);
     let was_running = !first.desktop.is_empty();
@@ -1416,7 +1416,7 @@ fn close_claude(env: &Env, with_cli: bool) -> Result<bool, String> {
             kill(&processes(env).desktop);
             if !wait_until(5, || !processes(env).desktop.is_empty()) {
                 return Err(
-                    "Claude Desktop не закрылся — закройте его вручную (в трее тоже) и нажмите «Очистить» снова".into()
+                    "Claude Desktop не закрылся - закройте его вручную (в трее тоже) и нажмите «Очистить» снова".into()
                 );
             }
         }
@@ -1432,7 +1432,7 @@ fn close_claude(env: &Env, with_cli: bool) -> Result<bool, String> {
     if !left.is_empty() {
         kill(&left);
         if !wait_until(6, || !rest(&processes(env)).is_empty()) {
-            return Err("Claude Code не закрылся — закройте его в терминале или редакторе и нажмите «Очистить» снова".into());
+            return Err("Claude Code не закрылся - закройте его в терминале или редакторе и нажмите «Очистить» снова".into());
         }
     }
     // Процесс вышел, но система ещё отпускает его файлы.
@@ -1456,7 +1456,7 @@ fn running_env(env: &Env) -> Running {
     Running { desktop_running: !p.desktop.is_empty(), cli_running: p.cli.len() as u32 }
 }
 
-/// Только запущенные процессы — для частого опроса (скан папок дорогой).
+/// Только запущенные процессы - для частого опроса (скан папок дорогой).
 pub fn running() -> Running {
     running_env(&env())
 }
@@ -1475,23 +1475,23 @@ pub fn wipe(
         return Err("Данные Claude Desktop на этом компьютере не найдены".into());
     }
     let export = include_chats && export_chats && crate::claude_chats_export::has_chats(&env);
-    // До закрытия Claude: архив уже сохраняется отдельной кнопкой — ждём его.
+    // До закрытия Claude: архив уже сохраняется отдельной кнопкой - ждём его.
     if export && crate::claude_chats_export::progress().active {
-        return Err("Сейчас сохраняется архив чатов — дождитесь его и нажмите «Очистить» снова".into());
+        return Err("Сейчас сохраняется архив чатов - дождитесь его и нажмите «Очистить» снова".into());
     }
     // Desktop закрываем всегда: его вкладка Code пишет в данные Claude Code.
     let closed = close_claude(&env, include_code || include_chats)?;
     tracing::info!(
         "очистка данных Claude (Desktop: {include_desktop}, Code: {include_code}, чаты: {include_chats}, архив: {export})"
     );
-    // Сначала архив: не сохранился или вошёл не целиком — ничего не удаляем.
+    // Сначала архив: не сохранился или вошёл не целиком - ничего не удаляем.
     let archive = if export {
         let a = crate::claude_chats_export::export_env(&env)
             .map_err(|e| format!("Архив чатов не сохранился, ничего не удалено: {e}"))?;
         if a.skipped > 0 {
             return Err(format!(
-                "В архив не вошло файлов: {} (их держит другая программа) — ничего не удалено. \
-                 Архив сохранён в «Загрузки», список — в README.md внутри. Закройте программы, \
+                "В архив не вошло файлов: {} (их держит другая программа) - ничего не удалено. \
+                 Архив сохранён в «Загрузки», список - в README.md внутри. Закройте программы, \
                  которые могут держать файлы Claude, и очистите ещё раз.",
                 a.skipped
             ));
@@ -1578,7 +1578,7 @@ mod tests {
                 r#"{{"mcpServers":{{"fs":{{"command":"npx"}}}},"preferences":{{"sidebarMode":"default","remoteToolsDeviceName":"MYPC","chromeExtension":{{"pairedDeviceId":"dev1"}},"bypassPermissionsGateByAccount":{{"{ACC}":true}},"coworkModelAutoFallbackByAccount":{{"{OLD_ACC}":true}},"epitaxyPrefs":{{"x.{ACC}":true,"dframe-group-scopes":{{"{ACC}/{ORG}":1}},"modelSwitchCacheWarningSkip.{OLD_ACC}":1,"keep":1}}}}}}"#
             ),
         );
-        // Сессии Code — остаются.
+        // Сессии Code - остаются.
         let sess = d.join("claude-code-sessions").join(ACC).join(ORG).join("local_1.json");
         write(&sess, "{}");
         let cowork = d.join("local-agent-mode-sessions").join(ACC).join(ORG).join("scheduled-tasks.json");
@@ -1674,12 +1674,12 @@ mod tests {
         assert!(tmp.join("other.txt").exists(), "чужие временные файлы не трогаем");
         assert!(transcript.exists() && code_dir.join("settings.json").exists(), "чаты Code остаются");
 
-        // Повторная очистка — ничего не ломает и ничего не находит.
+        // Повторная очистка - ничего не ломает и ничего не находит.
         let again = scan_env(&env);
         assert!(again.groups.iter().all(|g| g.id == Group::Chats), "остались только чаты: {:?}", again.groups);
         assert_eq!(again.kept_sessions, 1);
 
-        // Отдельно — локальные чаты: удаляются только по своему флагу.
+        // Отдельно - локальные чаты: удаляются только по своему флагу.
         let r = wipe_env(&env, false, false, true);
         assert!(r.failed.is_empty(), "{:?}", r.failed);
         assert!(!sess.exists() && !cowork.exists(), "чаты Desktop удалены");

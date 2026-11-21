@@ -1,6 +1,6 @@
-//! Управление шимом `local-proxy.py` — статус, старт/стоп/рестарт, ping-тест.
+//! Управление шимом `local-proxy.py` - статус, старт/стоп/рестарт, ping-тест.
 //!
-//! Шим — это Python-процесс который слушает 127.0.0.1:8889 и форвардит трафик в
+//! Шим - это Python-процесс который слушает 127.0.0.1:8889 и форвардит трафик в
 //! купленный HTTP-прокси с автоматической авторизацией. Устанавливается через
 //! `claude-desktop-setup.ps1`, автозапускается через .vbs в Startup-папке.
 //!
@@ -10,7 +10,7 @@
 //! - uptime процесса
 //! - живой ли HTTP-ответ через сам шим
 //!
-//! Старт/стоп используют тот же .vbs-механизм что и инсталлятор — это
+//! Старт/стоп используют тот же .vbs-механизм что и инсталлятор - это
 //! сохраняет инвариант "после ребута шим запустится так же как сейчас".
 
 use std::path::PathBuf;
@@ -21,7 +21,7 @@ use serde::Serialize;
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
 /// Пользователь явно остановил мост (кнопка «Остановить»/меню трея). Пока флаг
-/// взведён, watchdog НЕ поднимает мост — иначе ручная остановка жила бы 5 сек
+/// взведён, watchdog НЕ поднимает мост - иначе ручная остановка жила бы 5 сек
 /// и кнопка была бы бесполезной. Любой явный start() снимает флаг; при старте
 /// приложения флаг чист → авто-подъём работает как обычно.
 static MANUALLY_STOPPED: AtomicBool = AtomicBool::new(false);
@@ -35,7 +35,7 @@ pub(crate) fn manually_stopped() -> bool {
 pub const LISTEN_PORT: u16 = 8889;
 /// Легаси python-мост (для миграции/детекта старых установок).
 const SHIM_FILENAME: &str = "local-proxy.py";
-/// Новый мост — самостоятельный exe (НЕ python.exe). Критично: killswitch
+/// Новый мост - самостоятельный exe (НЕ python.exe). Критично: killswitch
 /// блокирует python.exe, а мост на python.exe душил сам себя. exe-мост под
 /// своим именем не попадает под блок → killswitch не рубит собственный мост.
 #[cfg(target_os = "windows")]
@@ -73,7 +73,7 @@ impl ShimStatus {
     }
 }
 
-/// Результат "Тест" — HTTP-запрос через шим до публичного echo-сервиса.
+/// Результат "Тест" - HTTP-запрос через шим до публичного echo-сервиса.
 #[derive(Debug, Clone, Serialize)]
 pub struct ShimTestResult {
     pub ok: bool,
@@ -107,7 +107,7 @@ pub fn status() -> ShimStatus {
             .map(|s| s.to_string_lossy().to_string())
             .collect();
         let cmdline = cmdline_parts.join(" ");
-        // exe-мост опознаём по имени; python-мост — по наличию local-proxy.py в argv.
+        // exe-мост опознаём по имени; python-мост - по наличию local-proxy.py в argv.
         if is_legacy_python && !cmdline.contains(SHIM_FILENAME) {
             continue;
         }
@@ -117,9 +117,9 @@ pub fn status() -> ShimStatus {
         let (upstream_masked, upstream_host, upstream_port) =
             split_upstream(upstream_raw.as_deref());
 
-        // start_time() — секунды с EPOCH; сравнивать надо с текущим epoch-
-        // временем. (System::uptime() — секунды с БУТА: разница уходила в
-        // минус → saturating 0 → UI вечно показывал «—».)
+        // start_time() - секунды с EPOCH; сравнивать надо с текущим epoch-
+        // временем. (System::uptime() - секунды с БУТА: разница уходила в
+        // минус → saturating 0 → UI вечно показывал «-».)
         let now_epoch = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -142,7 +142,7 @@ pub fn status() -> ShimStatus {
 
 /// Одна таблица процессов на всё приложение. Раньше каждый вызов status()
 /// (UI каждые 5с + watchdog каждые 5с) собирал с нуля ВСЁ о каждом процессе
-/// системы — CPU, память, диск, окружение, cwd: ~6% CPU в простое на Mac.
+/// системы - CPU, память, диск, окружение, cwd: ~6% CPU в простое на Mac.
 fn process_table() -> &'static std::sync::Mutex<System> {
     static TABLE: std::sync::OnceLock<std::sync::Mutex<System>> = std::sync::OnceLock::new();
     TABLE.get_or_init(|| std::sync::Mutex::new(System::new()))
@@ -157,7 +157,7 @@ fn refresh_process_table(sys: &mut System) {
     );
 }
 
-/// Мост слушает свой порт? Дешёвый TCP-connect вместо скана процессов —
+/// Мост слушает свой порт? Дешёвый TCP-connect вместо скана процессов -
 /// основной сигнал для watchdog'а.
 fn port_alive() -> bool {
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], LISTEN_PORT));
@@ -250,7 +250,7 @@ pub fn stop() -> Result<usize, String> {
         if !is_bridge_exe && !is_legacy_python {
             continue;
         }
-        // exe-мост — по имени; python-мост — по local-proxy.py в argv.
+        // exe-мост - по имени; python-мост - по local-proxy.py в argv.
         let kill_it = if is_bridge_exe {
             true
         } else {
@@ -277,7 +277,7 @@ pub fn stop() -> Result<usize, String> {
 /// удалённый runner-vbs), пересоздать её из текущих настроек и попробовать ещё
 /// раз. Легаси .vbs из Startup остаётся последним fallback для старых установок.
 pub fn start() -> Result<(), String> {
-    // Явный запуск снимает ручную остановку — watchdog снова сторожит.
+    // Явный запуск снимает ручную остановку - watchdog снова сторожит.
     MANUALLY_STOPPED.store(false, Ordering::Relaxed);
 
     // Уже запущенный вручную мост тоже считается успехом. Настройку задачи
@@ -285,7 +285,7 @@ pub fn start() -> Result<(), String> {
     if status().running {
         return Ok(());
     }
-    // Файл моста пропал (антивирус) — вернуть из копии в программе.
+    // Файл моста пропал (антивирус) - вернуть из копии в программе.
     crate::bridge_file::ensure(false)?;
 
     let mut task_error = None;
@@ -372,13 +372,13 @@ fn start_legacy(task_error: Option<String>) -> Result<(), String> {
     Ok(())
 }
 
-/// На macOS легаси-автозапуска через .vbs не бывает: задача (LaunchAgent) —
+/// На macOS легаси-автозапуска через .vbs не бывает: задача (LaunchAgent) -
 /// единственный путь запуска.
 #[cfg(not(target_os = "windows"))]
 fn start_legacy(task_error: Option<String>) -> Result<(), String> {
     Err(match task_error {
         Some(e) => format!("Не удалось запустить мост: {e}"),
-        None => "Автозапуск моста не настроен — пройдите мастер установки".into(),
+        None => "Автозапуск моста не настроен - пройдите мастер установки".into(),
     })
 }
 
@@ -401,17 +401,17 @@ pub fn restart() -> Result<(), String> {
 
 // ─── Watchdog (авто-подъём упавшего шима) ────────────────────────
 
-/// Интервал опроса живости шима. 5с — баланс: быстро поднять после падения,
+/// Интервал опроса живости шима. 5с - баланс: быстро поднять после падения,
 /// но не дёргать sysinfo слишком часто.
 const WATCHDOG_INTERVAL_SEC: u64 = 5;
 
 /// Фоновый супервайзер: раз в WATCHDOG_INTERVAL_SEC проверяет, жив ли шим, и
-/// если упал — поднимает через start(). Это закрывает корневую боль: при пике
+/// если упал - поднимает через start(). Это закрывает корневую боль: при пике
 /// деплоя (ssh/scp/docker через тот же upstream-прокси) python-процесс мог
 /// падать, и связь Claude Code пропадала НАМЕРТВО до ручного «Перезапустить».
 /// Теперь упавший шим поднимается сам за ~5с, деплой/стрим не «гаснут».
 ///
-/// Запускается в отдельном OS-потоке (не async) — sysinfo синхронный, а нам
+/// Запускается в отдельном OS-потоке (не async) - sysinfo синхронный, а нам
 /// нужен надёжный бесконечный цикл, переживающий любые ошибки start().
 /// Анти-флаппинг: после успешного подъёма ждём дольше, чтобы не штормить
 /// рестартами, если шим падает сразу (например, занят порт / битый upstream).
@@ -428,16 +428,16 @@ pub fn spawn_watchdog() {
                 std::thread::sleep(Duration::from_secs(WATCHDOG_INTERVAL_SEC));
                 continue;
             }
-            // Порт отвечает — мост жив, скан процессов не нужен.
+            // Порт отвечает - мост жив, скан процессов не нужен.
             if port_alive() || status().running {
                 consecutive_revivals = 0;
             } else {
-                // шим мёртв — пытаемся поднять. start() идемпотентен (через .vbs).
+                // шим мёртв - пытаемся поднять. start() идемпотентен (через .vbs).
                 match start() {
                     Ok(()) => {
                         consecutive_revivals += 1;
                         tracing::warn!(
-                            "watchdog: шим был мёртв — поднял (попытка #{})",
+                            "watchdog: шим был мёртв - поднял (попытка #{})",
                             consecutive_revivals
                         );
                     }
@@ -481,7 +481,7 @@ pub fn bridge_exe_path() -> Option<PathBuf> {
     install_dir().map(|d| d.join(BRIDGE_EXE))
 }
 
-/// Путь к local-proxy.py в установленной копии (легаси — для миграции/детекта).
+/// Путь к local-proxy.py в установленной копии (легаси - для миграции/детекта).
 pub fn shim_script_path() -> Option<PathBuf> {
     install_dir().map(|d| d.join(SHIM_FILENAME))
 }
@@ -489,7 +489,7 @@ pub fn shim_script_path() -> Option<PathBuf> {
 /// Скопировать мост из ресурсов в папку установки (мост уже остановлен).
 ///
 /// macOS: перезапись подписанного бинарника НА МЕСТЕ ломает кэш подписи ядра
-/// (тот же inode) — следующий запуск убивается SIGKILL. Поэтому копируем во
+/// (тот же inode) - следующий запуск убивается SIGKILL. Поэтому копируем во
 /// временный файл рядом, ставим +x, снимаем карантин (унаследован от
 /// скачанного .app) и атомарно подменяем rename'ом: новый inode, а при сбое
 /// копирования старый мост остаётся на месте.
@@ -513,13 +513,13 @@ pub fn install_bridge_binary(src: &std::path::Path, dst: &std::path::Path) -> st
     std::fs::copy(src, dst).map(|_| ())
 }
 
-// Примечание: write_startup_vbs (легаси-автозапуск через Startup) удалён —
+// Примечание: write_startup_vbs (легаси-автозапуск через Startup) удалён -
 // автозапуск теперь регистрирует tasks::register (Планировщик + RestartOnFailure).
 
 // ─── Test (ping) ─────────────────────────────────────────────────
 
 /// Проверить что шим реально проксирует трафик: запрос на echo-сервис через
-/// `http://127.0.0.1:8889` → если получили IP — всё работает.
+/// `http://127.0.0.1:8889` → если получили IP - всё работает.
 pub async fn test() -> ShimTestResult {
     let started = std::time::Instant::now();
     let proxy = match reqwest::Proxy::http(crate::claude_policy::PROXY_URL) {

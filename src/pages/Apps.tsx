@@ -36,7 +36,7 @@ import { fadeInUp, staggerContainer } from "../lib/motion";
 import { isMac } from "../lib/platform";
 import { cn } from "../lib/cn";
 
-/** Статус по соединениям: раз в 5с, после действия — чаще (ждём переключения). */
+/** Статус по соединениям: раз в 5с, после действия - чаще (ждём переключения). */
 const TRAFFIC_POLL_MS = 5_000;
 const TRAFFIC_FAST_MS = 1_500;
 const FAST_TICKS = 20;
@@ -60,10 +60,10 @@ function trafficStatus(t: AppTraffic | undefined, idle: string): RowStatus {
 }
 
 /*
-  Приложения: один список одинаковых строк. У каждой — статус по ЖИВЫМ
+  Приложения: один список одинаковых строк. У каждой - статус по ЖИВЫМ
   соединениям (через мост / мимо моста) и одна кнопка, если что-то не так.
-  Claude Desktop и Telegram — такие же строки; их настройка — та же кнопка
-  «Подключить», а не отдельные панели. macOS и Windows — одна логика:
+  Claude Desktop и Telegram - такие же строки; их настройка - та же кнопка
+  «Подключить», а не отдельные панели. macOS и Windows - одна логика:
   соединения считаются по lsof / netstat.
 */
 export function Apps() {
@@ -79,6 +79,20 @@ export function Apps() {
   const [savedLayout, setSavedLayout] = useState<AppsLayout | null | undefined>(undefined);
   const [editing, setEditing] = useState(false);
   const [settingsId, setSettingsId] = useState<string | null>(null);
+  // Открытые приложения, которым сменили прокси: он применится только после
+  // перезапуска - до тех пор строка это показывает и предлагает перезапуск.
+  const [restartPending, setRestartPending] = useState<Set<string>>(new Set());
+  const clearPending = (id: string) =>
+    setRestartPending((old) => {
+      if (!old.has(id)) return old;
+      const next = new Set(old);
+      next.delete(id);
+      return next;
+    });
+  // Приложение закрыли - при следующем запуске прокси и так будет новый.
+  useEffect(() => {
+    for (const id of restartPending) if (traffic[id] && !traffic[id].running) clearPending(id);
+  }, [traffic, restartPending]);
 
   // Раскладка (вид, папки, порядок): загрузка один раз, сохранение с паузой.
   useEffect(() => {
@@ -107,10 +121,10 @@ export function Apps() {
     setApps(await appsList().catch(() => []));
   }, []);
 
-  // Настоящие иконки программ — и своих, и встроенных (у приложений Store —
-  // логотип из пакета); фирменная плитка — только если иконку не достать.
+  // Настоящие иконки программ - и своих, и встроенных (у приложений Store -
+  // логотип из пакета); фирменная плитка - только если иконку не достать.
   // Каждый путь запрашиваем один раз: если иконку не удалось достать, ответ
-  // пустой — повторный запрос по изменению icons зациклил бы опрос.
+  // пустой - повторный запрос по изменению icons зациклил бы опрос.
   const askedIcons = useRef(new Set<string>());
   useEffect(() => {
     if (!apps) return;
@@ -140,7 +154,7 @@ export function Apps() {
     void load();
     void loadSetup();
     void loadTraffic();
-    // Скрытое окно не опрашиваем; после действия — чаще, пока не переключится.
+    // Скрытое окно не опрашиваем; после действия - чаще, пока не переключится.
     let timer = 0;
     const tick = () => {
       if (!document.hidden) void loadTraffic();
@@ -170,18 +184,28 @@ export function Apps() {
       label: isMac ? "Ярлык в «Программы»" : "Ярлык в меню Пуск",
       run: () =>
         appsCreateShortcut(app.id, "start_menu").then(() =>
-          isMac ? "Ярлык в «Программах» — перетащите его в Dock" : "Ярлык в Пуске",
+          isMac ? "Ярлык в «Программах» - перетащите его в Dock" : "Ярлык в Пуске",
         ),
     },
   ];
 
-  /** Статус, главная кнопка и меню строки — по соединениям. */
+  /** Статус, главная кнопка и меню строки - по соединениям. */
   /** Строка + «Убрать из списка» у любого приложения (встроенные прячутся,
-      вернуть — через «Добавить»). */
+      вернуть - через «Добавить»). */
   const describe = (
     app: AppProfileStatus,
   ): { status: RowStatus | null; action: RowAction | null; menu: RowAction[] } => {
-    const r = describeInner(app);
+    let r = describeInner(app);
+    if (restartPending.has(app.id) && traffic[app.id]?.running) {
+      r = {
+        ...r,
+        status: { tone: "warn", text: "Прокси сменён - перезапустите" },
+        action: {
+          label: "Перезапустить",
+          run: () => after(appsRelaunch(app.id)).then(() => clearPending(app.id)),
+        },
+      };
+    }
     return {
       ...r,
       menu: [
@@ -205,7 +229,7 @@ export function Apps() {
     if (app.id === CLAUDE_ID) {
       const policy = claude?.policy;
       const menu = shortcutMenu(app);
-      // macOS стирает управляемые настройки — их возвращает служба; политику
+      // macOS стирает управляемые настройки - их возвращает служба; политику
       // HKLM на Windows система не трогает, служба не нужна.
       if (isMac && policy?.configured && policy.auto_restore === false) {
         menu.push({
@@ -222,7 +246,7 @@ export function Apps() {
       }
       if (policy && !policy.configured) {
         if (policy.conflict) {
-          return { status: { tone: "warn", text: "Задан чужой прокси Claude — Helper его не меняет" }, action: null, menu };
+          return { status: { tone: "warn", text: "Задан чужой прокси Claude - Helper его не меняет" }, action: null, menu };
         }
         return {
           status: { tone: "warn", text: "Прокси Claude не настроен" },
@@ -237,7 +261,7 @@ export function Apps() {
         };
       }
       const st = trafficStatus(t, "Настроен · откроется через мост");
-      if (st.tone === "warn") return { status: { tone: "warn", text: "Открыт до настройки — идёт мимо моста" }, action: relaunch, menu };
+      if (st.tone === "warn") return { status: { tone: "warn", text: "Открыт до настройки - идёт мимо моста" }, action: relaunch, menu };
       if (st.tone === "muted" && t?.running) return { status: { tone: "ok", text: "Через мост" }, action: null, menu };
       return { status: st, action: null, menu };
     }
@@ -261,7 +285,7 @@ export function Apps() {
       };
       const menu: RowAction[] = [{ label: "Открыть окно прокси в Telegram", run: connect.run }];
       if (telegram && !telegram.socks_ready) {
-        return { status: { tone: "warn", text: "Мосту нужно обновление — «Обновить» в Обзоре" }, action: null, menu: [] };
+        return { status: { tone: "warn", text: "Мосту нужно обновление - «Обновить» в Обзоре" }, action: null, menu: [] };
       }
       if (tgWaiting) {
         return { status: { tone: "warn", text: "В окне Telegram нажмите «Подключить»" }, action: connect, menu };
@@ -271,7 +295,7 @@ export function Apps() {
         return { status: { tone: "warn", text: "Через другой прокси, мимо моста" }, action: connect, menu };
       }
       // Прямой выход закрыт защитой, а прокси в Telegram не включён: он без
-      // связи и соединений нет вовсе — раньше это выглядело как «без соединений».
+      // связи и соединений нет вовсе - раньше это выглядело как «без соединений».
       if (telegram?.guarded && t?.running && t.via_bridge === 0) {
         return { status: { tone: "warn", text: "Без связи: в Telegram не включён прокси" }, action: connect, menu };
       }
@@ -292,7 +316,7 @@ export function Apps() {
           label: "Отключить",
           run: () =>
             after(appsOpenExtension(app.id, ext.id)).then(
-              () => `Выключите ${ext.name} в открывшейся вкладке — перезапуск не нужен`,
+              () => `Выключите ${ext.name} в открывшейся вкладке - перезапуск не нужен`,
             ),
         },
         menu: [...shortcutMenu(app), ...remove],
@@ -305,7 +329,7 @@ export function Apps() {
   const removeApp = async (id: string) => {
     try {
       setApps(await appsRemove(id));
-      // Telegram и Claude теряют и защиту от утечек — перечитать их статус.
+      // Telegram и Claude теряют и защиту от утечек - перечитать их статус.
       void loadSetup();
     } catch {
       await load();
@@ -367,7 +391,7 @@ export function Apps() {
         />
       )}
 
-      {/* Список — одна поверхность, hairline-разделители */}
+      {/* Список - одна поверхность, hairline-разделители */}
       <motion.section variants={fadeInUp} className="mt-5">
         {apps === null ? (
           <div className="surface-card flex items-center justify-center gap-2 p-8 text-[13px] text-vb-silver-dim">
@@ -376,7 +400,7 @@ export function Apps() {
           </div>
         ) : apps.length === 0 ? (
           <div className="surface-card p-8 text-center text-[13px] text-vb-silver-dim">
-            Приложений пока нет — добавьте своё через кнопку выше.
+            Приложений пока нет - добавьте своё через кнопку выше.
           </div>
         ) : (
           <AppsBoard
@@ -407,7 +431,13 @@ export function Apps() {
               if (app) void removeApp(app.id);
               setSettingsId(null);
             }}
-            onRelaunch={() => (app ? after(appsRelaunch(app.id)) : Promise.resolve())}
+            onRelaunch={() =>
+              app ? after(appsRelaunch(app.id)).then(() => clearPending(app.id)) : Promise.resolve()
+            }
+            needsRestart={!!app && restartPending.has(app.id) && !!traffic[app.id]?.running}
+            onProxySaved={(id) => {
+              if (traffic[id]?.running) setRestartPending((old) => new Set(old).add(id));
+            }}
             onChanged={(list) => {
               if (list) setApps(list);
               void loadSetup();
@@ -421,7 +451,7 @@ export function Apps() {
   );
 }
 
-/** Переключатель вида — сегмент в духе iOS: подложка перетекает пружиной. */
+/** Переключатель вида - сегмент в духе iOS: подложка перетекает пружиной. */
 function ViewSwitch({ value, onChange }: { value: AppsView; onChange: (v: AppsView) => void }) {
   const opts: { id: AppsView; label: string; icon: typeof List }[] = [
     { id: "list", label: "Список", icon: List },

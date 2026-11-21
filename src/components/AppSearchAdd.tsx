@@ -9,7 +9,7 @@ import { cn } from "../lib/cn";
 import { isMac } from "../lib/platform";
 
 interface Props {
-  /** Пути приложений, уже видных в списке, — их не предлагаем. Убранные
+  /** Пути приложений, уже видных в списке, - их не предлагаем. Убранные
    *  (в том числе встроенные) находятся: выбор возвращает их в список. */
   existing: string[];
   onAdd: (name: string, path: string) => Promise<void>;
@@ -17,10 +17,10 @@ interface Props {
 }
 
 /*
-  Добавление приложения: пишете название — поиск среди установленных
-  программ (macOS — Spotlight, Windows — меню «Пуск» и «Приложения и
+  Добавление приложения: пишете название - поиск среди установленных
+  программ (macOS - Spotlight, Windows - меню «Пуск» и «Приложения и
   возможности»; русские имена и транслит: «телег» → Telegram). Выбор подсказки сразу добавляет. Папка
-  справа — ручной выбор .app / .exe, если программы нет в поиске.
+  справа - ручной выбор .app / .exe, если программы нет в поиске.
   Клавиатура: ↑/↓, Enter, Esc.
 */
 /** Ключ сравнения путей: на Windows регистр и «/» против «\» не важны. */
@@ -35,15 +35,15 @@ export function AppSearchAdd({ existing, onAdd, onClose }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [icons, setIcons] = useState<Record<string, string>>({});
   const seq = useRef(0);
-  // Список приложений перерисовывается от опросов статуса — в зависимости
+  // Список приложений перерисовывается от опросов статуса - в зависимости
   // эффекта поиска его не берём, иначе поиск перезапускался бы сам.
   const known = useRef(new Set<string>());
   known.current = new Set(existing.map(pathKey));
-  /** Пути, за иконками которых уже ходили (удачно или нет) — не повторяем. */
+  /** Пути, за иконками которых уже ходили (удачно или нет) - не повторяем. */
   const asked = useRef(new Set<string>());
 
   // Настоящие иконки найденных программ: на Windows приходят в самом ответе,
-  // на macOS — подгружаются после подсказок.
+  // на macOS - подгружаются после подсказок.
   useEffect(() => {
     const need = results.filter((r) => !r.icon).map((r) => r.path).filter((p) => !asked.current.has(p));
     if (need.length === 0) return;
@@ -86,7 +86,7 @@ export function AppSearchAdd({ existing, onAdd, onClose }: Props) {
   const pickManually = async () => {
     const selected = await openDialog({
       multiple: false,
-      // macOS: .app — это папка-бандл, но диалог выбирает её как файл.
+      // macOS: .app - это папка-бандл, но диалог выбирает её как файл.
       filters: [{ name: "Программа", extensions: [isMac ? "app" : "exe"] }],
       defaultPath: isMac ? "/Applications" : undefined,
     });
@@ -163,7 +163,7 @@ export function AppSearchAdd({ existing, onAdd, onClose }: Props) {
           >
             {results.length === 0 ? (
               <li className="px-4 py-2.5 text-[12px] text-vb-silver-faint">
-                Не нашлось — выберите вручную через папку справа
+                Не нашлось - выберите вручную через папку справа
               </li>
             ) : (
               results.map((r, i) => {

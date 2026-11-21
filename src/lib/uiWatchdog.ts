@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
   Сторож окна. Изредка (после часов работы) WebKit оставлял раздел
   прозрачным: анимация появления не доигрывалась, и «Обзор»/«Прокси»
   выглядели чёрными. Сторож раз в секунду проверяет, видна ли текущая
-  страница; если она прозрачна дольше 2 с — пишет диагностику в журнал
+  страница; если она прозрачна дольше 2 с - пишет диагностику в журнал
   (ui.log) и доигрывает анимации, чтобы содержимое появилось. Заодно
   в журнал уходят ошибки JS.
 */
@@ -14,7 +14,7 @@ let rafTicks = 0;
 let lastLog = "";
 
 function log(level: string, message: string) {
-  // Одинаковые подряд не пишем — журнал не должен разрастаться.
+  // Одинаковые подряд не пишем - журнал не должен разрастаться.
   if (message === lastLog) return;
   lastLog = message;
   void invoke("ui_log", { level, message }).catch(() => {});
@@ -46,10 +46,10 @@ function heal(page: HTMLElement) {
     try {
       a.finish();
     } catch {
-      /* бесконечные анимации finish не умеют — пропускаем */
+      /* бесконечные анимации finish не умеют - пропускаем */
     }
   }
-  // Значения, оставленные анимацией в style, — к конечному виду.
+  // Значения, оставленные анимацией в style, - к конечному виду.
   const els = [page, ...Array.from(page.querySelectorAll<HTMLElement>("*"))].slice(0, 400);
   for (const el of els) {
     if (el.style.opacity !== "" && Number.parseFloat(el.style.opacity) < LOW && opacity(el) < LOW) {
@@ -92,7 +92,7 @@ export function startUiWatchdog() {
     if (now - stuckSince < 2000) return;
     const before = `hidden=${document.hidden} raf/s=${raf} page.op=${opacity(page)} ${describeAnimations()} view=${location.hash || location.search}`;
     heal(page);
-    log("warn", `невидимая страница — восстановлено. ${before} → page.op=${opacity(page)}`);
+    log("warn", `невидимая страница - восстановлено. ${before} → page.op=${opacity(page)}`);
     stuckSince = 0;
   }, 1000);
 }

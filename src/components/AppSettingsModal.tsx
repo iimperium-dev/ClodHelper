@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, Loader2, X } from "lucide-react";
+import { Check, Loader2, RotateCw, X } from "lucide-react";
 import { Toggle } from "./Toggle";
 import { CountryFlag } from "./CountryFlag";
 import { CopyIp, hostOnly, hostPort, loadGeoCache, saveGeoCache } from "../pages/Proxies";
@@ -33,9 +33,9 @@ import { useStatus, type ProxyState } from "../lib/status";
 
 type CodeMode = "off" | "ai" | "all";
 const CODE_MODES: { id: CodeMode; title: string; sub: string }[] = [
-  { id: "ai", title: "Через прокси только AI", sub: "Claude и другие AI — через прокси; npm, git, загрузки — напрямую, не тратя трафик прокси" },
+  { id: "ai", title: "Через прокси только AI", sub: "Claude и другие AI - через прокси; npm, git, загрузки - напрямую, не тратя трафик прокси" },
   { id: "all", title: "Через прокси всё", sub: "Если что-то не качается из вашей страны (Docker, часть Google Cloud и т.п.)" },
-  { id: "off", title: "Выключено", sub: "Claude Code в терминале — напрямую, без Clod Helper" },
+  { id: "off", title: "Выключено", sub: "Claude Code в терминале - напрямую, без Clod Helper" },
 ];
 
 /** Сервис защиты от утечек (брандмауэр: pf на macOS, Windows) по id приложения. */
@@ -43,12 +43,12 @@ const GUARD_OF: Record<string, { id: string; sub: string }> = {
   "claude-desktop": {
     id: "claude",
     sub: isMac
-      ? "Брандмауэр закрывает прямой выход к Claude — IP не уйдёт, даже если программа обойдёт мост"
-      : "Брандмауэр закрывает прямой выход к Claude и WebRTC — IP не уйдёт, даже если программа обойдёт мост",
+      ? "Брандмауэр закрывает прямой выход к Claude - IP не уйдёт, даже если программа обойдёт мост"
+      : "Брандмауэр закрывает прямой выход к Claude и WebRTC - IP не уйдёт, даже если программа обойдёт мост",
   },
   telegram: {
     id: "telegram",
-    sub: "Если прокси упадёт, Telegram не переключится на прямое соединение — будет ждать прокси",
+    sub: "Если прокси упадёт, Telegram не переключится на прямое соединение - будет ждать прокси",
   },
   // Только Windows: на Mac брандмауэр не различает программы.
   ...(isMac
@@ -56,19 +56,19 @@ const GUARD_OF: Record<string, { id: string; sub: string }> = {
     : {
         codex: {
           id: "codex",
-          sub: "Брандмауэр закрывает WebRTC (голос, звонки) — он ходит мимо прокси и выдаёт настоящий IP",
+          sub: "Брандмауэр закрывает WebRTC (голос, звонки) - он ходит мимо прокси и выдаёт настоящий IP",
         },
       }),
 };
 
-/** Встроенные, чей прокси — назначение сервиса (мост роутит по доменам). */
+/** Встроенные, чей прокси - назначение сервиса (мост роутит по доменам). */
 const GROUP_OF: Record<string, string> = {
   "claude-desktop": "anthropic",
   codex: "openai",
   telegram: "telegram",
 };
 
-/** Строка выбора прокси: как в «Прокси» — имя, флаг и страна, IP (копируется), пинг. */
+/** Строка выбора прокси: как в «Прокси» - имя, флаг и страна, IP (копируется), пинг. */
 function ProxyChoice({
   title,
   hint,
@@ -123,7 +123,7 @@ function ProxyChoice({
         disabled && "cursor-default",
       )}
     >
-      {/* Радио-кружок: выбранный — зелёный с точкой */}
+      {/* Радио-кружок: выбранный - зелёный с точкой */}
       <span
         className={cn(
           "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-colors",
@@ -144,9 +144,7 @@ function ProxyChoice({
           </span>
           {hint && <span className="truncate text-[11px] text-vb-silver-faint">{hint}</span>}
           {badge && (
-            <span className="shrink-0 rounded-md border border-vb-emerald/30 bg-vb-emerald/[0.07] px-1.5 py-[3px] text-[10px] font-medium leading-none text-vb-emerald">
-              {badge}
-            </span>
+            <span className="shrink-0 text-[11px] text-vb-emerald/80">{badge}</span>
           )}
         </span>
         {url && (
@@ -193,13 +191,18 @@ interface Props {
   /** Действия приложения, что раньше жили в меню «…» строки (ярлыки у
       Claude, «Отключить прокси Claude», окно прокси Telegram…). */
   actions?: RowAction[];
+  /** Прокси приложения сменили, а оно открыто - ждёт перезапуска. */
+  needsRestart?: boolean;
+  /** Новый прокси сохранён (приложению с флагом запуска нужен перезапуск). */
+  onProxySaved?: (appId: string) => void;
 }
 
 /*
-  Настройки приложения — шторка в духе iOS: прокси (Авто / конкретный из
+  Настройки приложения - шторка в духе iOS: прокси (Авто / конкретный из
   пула), «весь трафик или только AI», папка, ярлыки, убрать из списка.
-  Изменения сохраняются сразу; если приложение открыто — предлагаем
-  перезапустить через мост (прокси применяется при запуске).
+  Выбор прокси - черновик: снизу всплывает «Сохранить» / ✕, без
+  сохранения ничего не меняется. Сохранили, а приложение открыто - та же
+  панель предлагает перезапустить его: прокси применяется при запуске.
 */
 export function AppSettingsModal({
   app,
@@ -212,7 +215,13 @@ export function AppSettingsModal({
   onChanged,
   onClose,
   actions = [],
+  needsRestart = false,
+  onProxySaved,
 }: Props) {
+  /** Выбранный, но ещё не сохранённый прокси (null - изменений нет). */
+  const [draft, setDraft] = useState<number | null>(null);
+  /** Панель перезапуска закрыли крестиком - в этот раз не показываем. */
+  const [restartHidden, setRestartHidden] = useState(false);
   const [pool, setPool] = useState<string[]>([]);
   const [labels, setLabels] = useState<Record<string, string>>({});
   const [assign, setAssign] = useState<Record<string, number>>({});
@@ -220,19 +229,19 @@ export function AppSettingsModal({
   const [note, setNote] = useState<string | null>(null);
   const [policy, setPolicy] = useState<BrowserPolicyStatus | null>(null);
   const [guard, setGuard] = useState<LeakGuardStatus | null>(null);
-  /** Claude Desktop: мост не выпускает его телеметрию (null — ещё не знаем). */
+  /** Claude Desktop: мост не выпускает его телеметрию (null - ещё не знаем). */
   const [telemetryOff, setTelemetryOff] = useState<boolean | null>(null);
-  // Тело прокручено — под закреплённой шапкой появляется линия.
+  // Тело прокручено - под закреплённой шапкой появляется линия.
   const [scrolled, setScrolled] = useState(false);
-  // Системные переменные прокси (Claude Code в терминале) — общее состояние.
+  // Системные переменные прокси (Claude Code в терминале) - общее состояние.
   const { env, setEnv, health, refresh, proxies } = useStatus();
-  // Гео прокси — общий с экраном «Прокси» кэш; недостающее проверяем фоном.
+  // Гео прокси - общий с экраном «Прокси» кэш; недостающее проверяем фоном.
   const [geo, setGeo] = useState<Record<string, ProxyCheckResult>>(loadGeoCache);
   const envOn = !!env?.present && !!env.points_to_bridge;
   const envForeign = !!env?.present && !env.points_to_bridge;
   const guardOf = app ? GUARD_OF[app.id] : undefined;
 
-  // Загрузка — только при открытии другого приложения (по id): родитель
+  // Загрузка - только при открытии другого приложения (по id): родитель
   // перерисовывается после каждого действия, и по ссылке на app/onClose окно
   // сбрасывало подсказку «Сохранено» / текст ошибки сразу после показа.
   const appId = app?.id;
@@ -240,6 +249,8 @@ export function AppSettingsModal({
     if (!appId) return;
     setNote(null);
     setScrolled(false);
+    setDraft(null);
+    setRestartHidden(false);
     void Promise.all([
       proxiesGet().then(setPool).catch(() => {}),
       proxyLabelsGet().then(setLabels).catch(() => {}),
@@ -290,7 +301,7 @@ export function AppSettingsModal({
 
   // Режим Claude Code вне приложения: переменные прокси (вкл/выкл) и режим
   // общего входа моста (только AI / всё). Через него ходят только программы,
-  // понимающие системный прокси, — остальные приложения он не трогает.
+  // понимающие системный прокси, - остальные приложения он не трогает.
   const codeMode: CodeMode | null = !env ? null : !envOn ? "off" : health?.mode === "all" ? "all" : "ai";
   const pickCodeMode = (m: CodeMode) => {
     if (m === codeMode) return;
@@ -301,10 +312,10 @@ export function AppSettingsModal({
       }
       if (!envOn) setEnv(await setGlobalProxyEnv());
       if ((health?.mode === "all") !== (m === "all")) await bridgeSetRouteMode(m === "all" ? "all" : "smart");
-      // Полное обновление статуса может идти секунды — не держим окно занятым.
+      // Полное обновление статуса может идти секунды - не держим окно занятым.
       void refresh();
       return null;
-    }, m === "off" ? "Выключено — новые окна терминала пойдут напрямую" : "Сохранено — действует в новых окнах терминала");
+    }, m === "off" ? "Выключено - новые окна терминала пойдут напрямую" : "Сохранено - действует в новых окнах терминала");
   };
 
   const toggleGuard = () => {
@@ -361,26 +372,50 @@ export function AppSettingsModal({
     return r;
   };
 
+  // Выбор - только черновик; сохраняет кнопка на панели снизу.
   const pickProxy = (v: number) => {
-    if (!app || v === current) return;
+    if (!app || busy) return;
+    setDraft(v === current ? null : v);
+  };
+
+  const saveDraft = () => {
+    if (!app || draft === null) return;
+    const v = draft;
     if (group) {
+      // Сервис (Claude, ChatGPT, Telegram): мост перезапускается и сразу ведёт
+      // его через новый прокси - перезапуск приложения не нужен.
       const next = { ...assign };
       if (v < 0) delete next[group];
       else next[group] = v;
-      setAssign(next);
-      void run(() => proxyAssignmentsSet(next), "Сохранено — мост перезапущен");
+      void run(async () => {
+        await proxyAssignmentsSet(next);
+        setAssign(next);
+        setDraft(null);
+        return null;
+      }, "Сохранено - мост перезапущен");
     } else {
-      void run(() => saveTraffic(v < 0 ? null : v, app.full_proxy ?? null), "Сохранено");
+      void run(async () => {
+        const r = await saveTraffic(v < 0 ? null : v, app.full_proxy ?? null);
+        setDraft(null);
+        setRestartHidden(false);
+        onProxySaved?.(app.id);
+        return r;
+      });
     }
   };
 
+  const relaunchNow = () => void run(onRelaunch, "Перезапущено через новый прокси");
+  const selectedV = draft ?? current;
+  const bar: "save" | "restart" | null =
+    draft !== null ? "save" : needsRestart && !restartHidden && app?.installed ? "restart" : null;
+
   const liveOf = (url: string) => proxies.find((p) => p.url === url);
-  // Один IP на разных портах — показываем с портом, иначе строки неотличимы.
+  // Один IP на разных портах - показываем с портом, иначе строки неотличимы.
   const shownOf = (url: string) =>
     pool.filter((u) => hostOnly(u) === hostOnly(url)).length > 1 ? hostPort(url) : hostOnly(url);
   const options = [
     // «Авто» = основной прокси пула (при его падении мост уходит на запасные)
-    { v: -1, title: "Авто", hint: "основной, при сбое — запасной", badge: undefined as string | undefined, url: pool[0] },
+    { v: -1, title: "Авто", hint: "основной, при сбое - запасной", badge: undefined as string | undefined, url: pool[0] },
     ...pool.map((url, i) => ({
       v: i,
       title: labels[url] || `Прокси ${i + 1}`,
@@ -413,9 +448,9 @@ export function AppSettingsModal({
             onMouseDown={(e) => e.stopPropagation()}
             role="dialog"
             aria-label={`Настройки ${app.name}`}
-            className="flex max-h-full w-full max-w-[400px] flex-col overflow-hidden rounded-2xl border border-vb-border bg-vb-surface shadow-[0_24px_64px_rgba(0,0,0,0.6)]"
+            className="relative flex max-h-full w-full max-w-[400px] flex-col overflow-hidden rounded-2xl border border-vb-border bg-vb-surface shadow-[0_24px_64px_rgba(0,0,0,0.6)]"
           >
-            {/* Шапка — закреплена, листается только тело */}
+            {/* Шапка - закреплена, листается только тело */}
             <div
               className={cn(
                 "flex shrink-0 items-center gap-3 border-b p-4 pb-3 transition-colors",
@@ -449,7 +484,7 @@ export function AppSettingsModal({
             </div>
 
             <div
-              className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+              className={cn("min-h-0 flex-1 overflow-y-auto overscroll-contain", bar && "pb-16")}
               onScroll={(e) => setScrolled(e.currentTarget.scrollTop > 0)}
             >
               {/* Прокси */}
@@ -471,8 +506,8 @@ export function AppSettingsModal({
                         shown={o.url ? shownOf(o.url) : undefined}
                         geo={o.url ? geo[hostPort(o.url)] : undefined}
                         live={o.url ? liveOf(o.url) : undefined}
-                        selected={o.v === current}
-                        busy={busy}
+                        selected={o.v === selectedV}
+                        busy={busy && o.v === selectedV}
                         disabled={busy}
                         onPick={() => pickProxy(o.v)}
                       />
@@ -481,7 +516,7 @@ export function AppSettingsModal({
                 </div>
               </Section>
 
-              {/* Защита от утечек (брандмауэр): Claude и Telegram — включается при подключении */}
+              {/* Защита от утечек (брандмауэр): Claude и Telegram - включается при подключении */}
               {((guardOf && guard) || telemetryOff !== null) && (
                 <Section>
                   {guardOf && guard && (
@@ -493,11 +528,11 @@ export function AppSettingsModal({
                       <Toggle checked={guardOn} disabled={busy} onChange={toggleGuard} label="Не пускать мимо прокси" />
                     </div>
                   )}
-                  {/* Приложение обновилось из Store — правило WebRTC стоит на прежнюю версию */}
+                  {/* Приложение обновилось из Store - правило WebRTC стоит на прежнюю версию */}
                   {guardOf && guardOn && (guard?.stale ?? "").split(",").includes(guardOf.id) && (
                     <div className="flex items-center justify-between gap-3 px-3.5 py-2.5">
                       <span className="min-w-0 text-[11px] leading-snug text-vb-warn">
-                        Приложение обновилось — защита WebRTC стоит на прежнюю версию
+                        Приложение обновилось - защита WebRTC стоит на прежнюю версию
                       </span>
                       <button
                         type="button"
@@ -509,7 +544,7 @@ export function AppSettingsModal({
                       </button>
                     </div>
                   )}
-                  {/* Claude Desktop: отчёты об ошибках (имя компьютера, железо) — не выпускать */}
+                  {/* Claude Desktop: отчёты об ошибках (имя компьютера, железо) - не выпускать */}
                   {telemetryOff !== null && (
                     <div className="flex items-center justify-between gap-3 px-3.5 py-2.5">
                       <span className="min-w-0">
@@ -530,7 +565,7 @@ export function AppSettingsModal({
                 </Section>
               )}
 
-              {/* Claude: Claude Code вне приложения — системные переменные + режим моста */}
+              {/* Claude: Claude Code вне приложения - системные переменные + режим моста */}
               {app.id === "claude-desktop" && env && (
                 <Section title="Claude Code в терминале и VS Code">
                   {CODE_MODES.map((o) => (
@@ -555,29 +590,29 @@ export function AppSettingsModal({
                   ))}
                   {envForeign && (
                     <p className="px-3.5 py-2 text-[11px] leading-snug text-vb-warn">
-                      В системе задан чужой прокси — выбор режима заменит его на мост
+                      В системе задан чужой прокси - выбор режима заменит его на мост
                     </p>
                   )}
                 </Section>
               )}
 
-              {/* Трафик — только для запускаемых с --proxy-server */}
+              {/* Трафик - только для запускаемых с --proxy-server */}
               {launchable && (
                 <Section>
                   <div className="flex items-center justify-between gap-3 px-3.5 py-2.5">
                     <span className="min-w-0">
                       <span className="block text-[13px] text-vb-fg">Весь трафик через прокси</span>
                       <span className="block text-[11px] text-vb-silver-faint">
-                        {current >= 0
-                          ? "С выбранным прокси — всегда весь"
+                        {selectedV >= 0
+                          ? "С выбранным прокси - всегда весь"
                           : policy
                             ? "Иначе через прокси только AI и ваши сайты («Сайты»)"
                             : "Иначе через прокси только AI-сайты"}
                       </span>
                     </span>
                     <Toggle
-                      checked={current >= 0 || app.full_proxy}
-                      disabled={busy || current >= 0}
+                      checked={selectedV >= 0 || app.full_proxy}
+                      disabled={busy || selectedV >= 0}
                       onChange={() =>
                         void run(() => saveTraffic(current < 0 ? null : current, !app.full_proxy), "Сохранено")
                       }
@@ -609,7 +644,7 @@ export function AppSettingsModal({
                           const next = await browserPolicySet(app.id, !policy.configured);
                           setPolicy(next);
                           return null;
-                        }, policy.configured ? "Снято — перезапустите браузер" : "Готово — перезапустите браузер")
+                        }, policy.configured ? "Снято - перезапустите браузер" : "Готово - перезапустите браузер")
                       }
                       label="Всегда через мост"
                     />
@@ -676,7 +711,54 @@ export function AppSettingsModal({
               </Section>
             </div>
 
-            {/* Итог действия — внизу окна, виден при любой прокрутке */}
+            {/* Плавающая панель: сохранить выбранный прокси / перезапустить */}
+            <AnimatePresence>
+              {bar && (
+                <motion.div
+                  key="bar"
+                  initial={{ opacity: 0, y: 18, scale: 0.94, x: "-50%" }}
+                  animate={{ opacity: 1, y: 0, scale: 1, x: "-50%" }}
+                  exit={{ opacity: 0, y: 14, scale: 0.96, x: "-50%" }}
+                  transition={{ type: "spring", bounce: 0.28, duration: 0.45 }}
+                  className={cn(
+                    "absolute left-1/2 z-10 flex items-center gap-1 rounded-full border border-vb-border bg-vb-surface-2/80 p-1 shadow-[0_10px_30px_rgba(0,0,0,0.5)] backdrop-blur-xl",
+                    note ? "bottom-12" : "bottom-3",
+                  )}
+                >
+                  <button
+                    type="button"
+                    onClick={() => (bar === "save" ? setDraft(null) : setRestartHidden(true))}
+                    disabled={busy}
+                    aria-label={bar === "save" ? "Отменить" : "Не сейчас"}
+                    title={bar === "save" ? "Отменить" : "Не сейчас"}
+                    className="flex h-8 w-8 items-center justify-center rounded-full text-vb-silver-dim transition-colors hover:bg-vb-surface hover:text-vb-fg active:scale-[0.94] disabled:opacity-40"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                  <motion.button
+                    key={bar}
+                    type="button"
+                    initial={{ opacity: 0, filter: "blur(4px)" }}
+                    animate={{ opacity: 1, filter: "blur(0px)" }}
+                    transition={{ duration: 0.22 }}
+                    onClick={bar === "save" ? saveDraft : relaunchNow}
+                    disabled={busy}
+                    className="flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full bg-vb-emerald px-4 text-[13px] font-semibold text-vb-bg transition-[filter,transform] hover:brightness-110 active:scale-[0.97] disabled:opacity-70"
+                  >
+                    {busy ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : bar === "save" ? (
+                      <Check className="h-3.5 w-3.5" />
+                    ) : (
+                      <RotateCw className="h-3.5 w-3.5" />
+                    )}
+                    {bar === "save" ? "Сохранить" : "Перезапустить с новым прокси"}
+                  </motion.button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* Итог действия - внизу окна, виден при любой прокрутке */}
             <AnimatePresence>
               {note && (
                 <motion.p

@@ -23,7 +23,7 @@ use super::*;
 
 #[tauri::command]
 pub async fn shim_status() -> Result<ShimStatus, String> {
-    // Скан процессов sysinfo — сотни миллисекунд; с главного потока — фриз.
+    // Скан процессов sysinfo - сотни миллисекунд; с главного потока - фриз.
     tokio::task::spawn_blocking(shim::status)
         .await
         .map_err(|e| format!("Внутренняя ошибка: {e}"))
@@ -31,7 +31,7 @@ pub async fn shim_status() -> Result<ShimStatus, String> {
 
 #[tauri::command]
 pub async fn shim_start() -> Result<(), String> {
-    // Запуск через .vbs — синхронный shell, обернём в blocking чтобы не
+    // Запуск через .vbs - синхронный shell, обернём в blocking чтобы не
     // блокировать tokio executor.
     tokio::task::spawn_blocking(shim::start)
         .await
@@ -60,7 +60,7 @@ pub async fn shim_test() -> ShimTestResult {
 #[tauri::command]
 pub fn shim_script_path() -> Option<String> {
     // Сигнал «мост установлен» для App.tsx (Dashboard vs Wizard).
-    // Новый маркер — clod-bridge.exe; легаси — local-proxy.py (установки,
+    // Новый маркер - clod-bridge.exe; легаси - local-proxy.py (установки,
     // где exe ещё не появился).
     shim::bridge_exe_path()
         .filter(|p| p.exists())

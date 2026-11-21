@@ -1,8 +1,8 @@
-//! Windows: действие с правами администратора — ровно одно окно UAC.
+//! Windows: действие с правами администратора - ровно одно окно UAC.
 //!
 //! Скрипты операции пишутся в свежую папку настроек Helper
 //! (%APPDATA%\Clod Helper\<операция>-<pid>-<nonce>), а не в общий %TEMP%:
-//! «скрытый elevated powershell из темпа» — хрестоматийная AV-эвристика, а
+//! «скрытый elevated powershell из темпа» - хрестоматийная AV-эвристика, а
 //! чистильщики темпа могут удалить файл между записью и запуском. Elevated
 //! `powershell -File <главный скрипт>` пишет итог (JSON) в result.json рядом:
 //! stdout elevated-процесса нам недоступен. Папка удаляется после операции.
@@ -60,7 +60,7 @@ pub fn run(operation: &str, scripts: &[(&str, &str)], arguments: &str) -> Result
 /// Обёртка без прав: поднимает скрытый elevated powershell и ждёт его.
 /// Отказ в окне UAC (ERROR_CANCELLED, 1223) отличаем от прочих сбоев.
 fn wrapper(script: &Path, arguments: &str, result: &Path) -> String {
-    // В путях Windows не бывает кавычек: пути — в двойных кавычках внутри
+    // В путях Windows не бывает кавычек: пути - в двойных кавычках внутри
     // командной строки, апострофы экранируются для PowerShell-литерала.
     let arguments = format!(
         "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{}\" {} -ResultPath \"{}\"",
@@ -108,8 +108,8 @@ pub fn powershell() -> Command {
     command
 }
 
-/// Прочитать состояние скриптом без прав администратора: тело скрипта —
-/// в `-Command`, без временных файлов. stdout — одна строка JSON.
+/// Прочитать состояние скриптом без прав администратора: тело скрипта -
+/// в `-Command`, без временных файлов. stdout - одна строка JSON.
 pub fn read_status(script: &str, arguments: &str) -> Result<String, String> {
     let output = powershell()
         .arg("-Command")

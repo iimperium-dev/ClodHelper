@@ -16,9 +16,9 @@ function formatDate(d: string): string {
 
 /*
   Колокольчик в заголовке окна: обновления и рассылки разработчика
-  (notices.json в репозитории). Непрочитанное — светящийся кружок с числом.
-  Панель: «Прочитать все», клик по уведомлению — прочитано; у обновления —
-  «Обновить», у рассылки со ссылкой — «Подробнее».
+  (notices.json в репозитории). Непрочитанное - светящийся кружок с числом.
+  Панель: «Прочитать все», клик по уведомлению - прочитано; у обновления -
+  «Обновить», у рассылки со ссылкой - «Подробнее».
 */
 export function NotificationBell() {
   const [items, setItems] = useState<NoticeItem[]>([]);
@@ -27,10 +27,10 @@ export function NotificationBell() {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const bellRef = useRef<HTMLButtonElement | null>(null);
 
-  // Пустой ответ (null) — пустой список: колокольчик не должен ронять окно.
+  // Пустой ответ (null) - пустой список: колокольчик не должен ронять окно.
   const reload = useCallback(() => void noticesList().then((l) => setItems(l ?? [])).catch(() => {}), []);
 
-  // Окно открыли — проверить рассылки сразу, не дожидаясь фоновой проверки.
+  // Окно открыли - проверить рассылки сразу, не дожидаясь фоновой проверки.
   useEffect(() => {
     const onFocus = () => void noticesRefresh().catch(() => {});
     window.addEventListener("focus", onFocus);
@@ -42,7 +42,7 @@ export function NotificationBell() {
     const subs = [
       listen("notices:changed", reload),
       listen("update:available", reload),
-      // Клик по уведомлению в углу экрана — открыть колокольчик на нём.
+      // Клик по уведомлению в углу экрана - открыть колокольчик на нём.
       listen<string>("notices:open", (e) => {
         setFocusId(e.payload);
         setOpen(true);

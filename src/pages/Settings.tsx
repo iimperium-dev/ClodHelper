@@ -12,7 +12,7 @@ import { cn } from "../lib/cn";
 
 /*
   Настройки: автозапуск GUI и версии. Прокси-пул и назначения живут в
-  своём разделе «Прокси» (сайдбар) — здесь только системное.
+  своём разделе «Прокси» (сайдбар) - здесь только системное.
 */
 export function Settings() {
   const { health, task } = useStatus();
@@ -106,19 +106,19 @@ export function Settings() {
         <div className="flex items-center justify-between px-4 py-3">
           <span className="text-[13px] text-vb-silver-dim">Clod Helper</span>
           <span className="font-mono text-[12px] text-vb-silver">
-            {appVersion ? `v${appVersion}` : "—"}
+            {appVersion ? `v${appVersion}` : "-"}
           </span>
         </div>
         <div className="flex items-center justify-between px-4 py-3">
           <span className="text-[13px] text-vb-silver-dim">Мост</span>
           <span className="font-mono text-[12px] text-vb-silver">
-            {health ? `v${health.version}` : "—"}
+            {health ? `v${health.version}` : "-"}
           </span>
         </div>
         <div className="flex items-center justify-between px-4 py-3">
           <span className="text-[13px] text-vb-silver-dim">Мост запускается сам</span>
           <span className={cn("text-[12px]", task?.registered ? "text-vb-emerald" : "text-vb-warn")}>
-            {task === null ? "—" : task.registered ? "да" : "нет"}
+            {task === null ? "-" : task.registered ? "да" : "нет"}
           </span>
         </div>
       </motion.section>

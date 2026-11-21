@@ -9,13 +9,13 @@ import { isMac } from "../lib/platform";
 const LIFETIME_MS = 12_000;
 
 /*
-  Уведомление «Доступно обновление» в углу экрана — как у Telegram: карточка
+  Уведомление «Доступно обновление» в углу экрана - как у Telegram: карточка
   с логотипом, въезжает сбоку, тает через 12 с (полоска внизу показывает
-  остаток). Клик — главное окно с окном обновления. Окно прозрачное и не
+  остаток). Клик - главное окно с окном обновления. Окно прозрачное и не
   забирает фокус (update_notify.rs), звук играет Rust.
 */
 export function UpdateToast() {
-  // Что показываем: «update-X» — вышло обновление, иначе id рассылки.
+  // Что показываем: «update-X» - вышло обновление, иначе id рассылки.
   const id = new URLSearchParams(window.location.search).get("n") ?? "";
   const isUpdate = id === "" || id.startsWith("update-");
   const [title, setTitle] = useState(isUpdate ? "Доступно обновление" : "");
@@ -64,7 +64,7 @@ export function UpdateToast() {
   const remaining = Math.max(0, left.current / LIFETIME_MS);
 
   return (
-    // Windows — угол над панелью задач (снизу), macOS — под строкой меню.
+    // Windows - угол над панелью задач (снизу), macOS - под строкой меню.
     <div className={`flex h-screen w-screen justify-end p-4 ${isMac ? "items-start" : "items-end"}`}>
       <AnimatePresence
         onExitComplete={() => void (action.current === "open" ? updateToastOpen(id || undefined) : updateToastClose())}

@@ -55,7 +55,7 @@ export function AppIcon({
 
 /**
  * Иконка с «выезжающей шестерёнкой»: при наведении на приложение снизу на
- * логотип выезжает (с поворотом) половинка кружка-шестерёнки — клик по ней
+ * логотип выезжает (с поворотом) половинка кружка-шестерёнки - клик по ней
  * открывает настройки приложения.
  */
 export function IconWithGear({
@@ -67,13 +67,13 @@ export function IconWithGear({
 }: {
   show: boolean;
   size: number;
-  /** Для подписи кнопки: «Настройки — Telegram». */
+  /** Для подписи кнопки: «Настройки - Telegram». */
   name: string;
   onSettings?: () => void;
   children: React.ReactNode;
 }) {
-  // Крупнее, чем раньше (была 42% иконки — терялась); появляется коротко и
-  // ровно, без пружины и вращения — те дёргали кнопку.
+  // Крупнее, чем раньше (была 42% иконки - терялась); появляется коротко и
+  // ровно, без пружины и вращения - те дёргали кнопку.
   const g = Math.round(Math.max(20, size * 0.56));
   return (
     <div className="relative shrink-0" style={{ width: size, height: size }}>
@@ -92,7 +92,7 @@ export function IconWithGear({
               e.stopPropagation();
               onSettings();
             }}
-            aria-label={`Настройки — ${name}`}
+            aria-label={`Настройки - ${name}`}
             title="Настройки"
             style={{ width: g, height: g, left: (size - g) / 2, bottom: -g / 2 }}
             className="group/gear absolute z-10 flex items-center justify-center rounded-full border border-vb-border-strong bg-vb-surface text-vb-fg shadow-[0_4px_10px_rgba(0,0,0,0.45)] transition-colors hover:border-vb-emerald/70 hover:bg-vb-emerald/15 hover:text-vb-emerald"
@@ -120,8 +120,8 @@ interface Props {
 }
 
 /*
-  Плитка для вида «Сетка» — как иконка на домашнем экране iOS: крупная
-  иконка, подпись, точка статуса в углу. В режиме упорядочивания — «−»
+  Плитка для вида «Сетка» - как иконка на домашнем экране iOS: крупная
+  иконка, подпись, точка статуса в углу. В режиме упорядочивания - «−»
   для удаления из списка (покачивание задаёт обёртка).
 */
 export function AppTile({ name, icon, installed, status, editing, onRemove, onSettings }: Props) {

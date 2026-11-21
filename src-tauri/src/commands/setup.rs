@@ -21,7 +21,7 @@ use super::*;
 
 // ВАЖНО: синхронные #[tauri::command] выполняются в ГЛАВНОМ потоке окна.
 // Любая команда, спавнящая PowerShell/сканирующая процессы, обязана быть
-// async + spawn_blocking — иначе UI виснет («не отвечает»), особенно под
+// async + spawn_blocking - иначе UI виснет («не отвечает»), особенно под
 // 5-секундным поллингом Dashboard. Проверено вживую: сумма sync-команд
 // замораживала окно наглухо.
 
@@ -87,7 +87,7 @@ pub async fn claude_proxy_enable(app: AppHandle) -> Result<crate::claude_proxy::
         crate::claude_policy::enable()
     }).await.map_err(|e| e.to_string())??;
     // Claude Code вне приложения (Терминал, VS Code) настройку Claude Desktop
-    // не видит — ему нужны системные переменные прокси. Включаем вместе с
+    // не видит - ему нужны системные переменные прокси. Включаем вместе с
     // Claude; чужой прокси не трогаем. Через прокси идёт только AI (умный режим).
     let _ = tokio::task::spawn_blocking(|| {
         if !crate::env_proxy::read().present {
@@ -140,7 +140,7 @@ pub fn launch_claude_code() -> Result<(), String> {
     // Open a new Windows Terminal (preferred) or PowerShell window with
     // `claude` ready to run. Detached so it survives our app's lifetime.
     // wt запускаем НАПРЯМУЮ: через `cmd /c start` спавн «успешен» даже когда
-    // wt не установлен (успех у cmd, не у wt) — fallback никогда не срабатывал
+    // wt не установлен (успех у cmd, не у wt) - fallback никогда не срабатывал
     // и кнопка молча ничего не открывала.
     let try_wt = Command::new("wt")
         .args(["powershell", "-NoExit", "-Command", "claude"])
@@ -179,8 +179,8 @@ pub fn launch_cursor() -> Result<(), String> {
 #[cfg(target_os = "windows")]
 #[tauri::command]
 pub fn launch_cursor() -> Result<(), String> {
-    // Предпочитаем ярлык «Cursor (proxy)» — он несёт --proxy-server. Если его
-    // нет (пользователь удалил) — запускаем Cursor.exe напрямую с флагом.
+    // Предпочитаем ярлык «Cursor (proxy)» - он несёт --proxy-server. Если его
+    // нет (пользователь удалил) - запускаем Cursor.exe напрямую с флагом.
     // Desktop через known-folder (OneDrive-aware).
     let shortcut = system::cursor_shortcut_path()
         .ok_or_else(|| "Не нашёл рабочий стол".to_string())?;
@@ -198,7 +198,7 @@ pub fn launch_cursor() -> Result<(), String> {
     }
 
     // Прокси у Cursor живёт в settings.json (http.proxy), не во флаге запуска,
-    // поэтому просто запускаем Cursor.exe — он подхватит прокси из настроек.
+    // поэтому просто запускаем Cursor.exe - он подхватит прокси из настроек.
     let exe = system::find_cursor_exe()
         .ok_or_else(|| "Cursor не найден на этом ПК".to_string())?;
     let mut cmd = Command::new(&exe);
@@ -265,7 +265,7 @@ pub async fn setup_cursor() -> Result<CursorSetupResult, String> {
 #[cfg(target_os = "windows")]
 #[tauri::command]
 pub async fn setup_cursor(app: AppHandle) -> Result<CursorSetupResult, String> {
-    // Создаёт ярлык «Cursor (proxy)». Сам мост уже поднят шимом — здесь только
+    // Создаёт ярлык «Cursor (proxy)». Сам мост уже поднят шимом - здесь только
     // ярлык, поэтому запускаем скрипт блокирующе и читаем результат.
     let script = resolve_resource(&app, "cursor-setup.ps1")?;
     let output = run_ps_capture(&script, &[]).await?;
@@ -313,11 +313,11 @@ pub async fn run_install(
     cursor: bool,
     proxy_url: String,
 ) -> Result<(), String> {
-    // Легаси-установка через PS-скрипты; новый мастер — wizard_install.
+    // Легаси-установка через PS-скрипты; новый мастер - wizard_install.
     if cfg!(not(target_os = "windows")) {
-        return Err("Легаси-установка доступна только на Windows — используйте мастер".into());
+        return Err("Легаси-установка доступна только на Windows - используйте мастер".into());
     }
-    // Validate proxy first — fail fast with a friendly message.
+    // Validate proxy first - fail fast with a friendly message.
     proxy::parse(&proxy_url)?;
 
     // Open a debug log file so we can read what actually happened even if the
@@ -351,7 +351,7 @@ pub async fn run_install(
     emit_verbose(&app, format!("⓶ resources_dir = {}", resources_dir.display()));
 
     // ─── DIAGNOSTIC: prove powershell.exe actually works from this process ──
-    // (verbose-only — hidden from default UI; still written to file log)
+    // (verbose-only - hidden from default UI; still written to file log)
     emit_verbose(&app, "");
     emit_verbose(&app, "── ДИАГНОСТИКА ──");
     log_line(&log_file, "--- diagnostic ---");
@@ -373,10 +373,10 @@ pub async fn run_install(
     let need_desktop = matches!(mode, Some(InstallMode::Desktop) | Some(InstallMode::Both));
 
     // ВАЖНО: Bridge должен подняться ПЕРВЫМ. Claude Code в шаге 3 прописывает
-    // HTTPS_PROXY=http://127.0.0.1:8889 — если bridge ещё не работает, CLI
+    // HTTPS_PROXY=http://127.0.0.1:8889 - если bridge ещё не работает, CLI
     // не сможет связаться с Anthropic. Поэтому desktop-setup (он же setup
-    // bridge'а) идёт всегда — даже если выбран только Cursor.
-    // Если Claude Desktop не выбран — не создаём его ярлык (иначе на
+    // bridge'а) идёт всегда - даже если выбран только Cursor.
+    // Если Claude Desktop не выбран - не создаём его ярлык (иначе на
     // cursor-only установке появился бы лишний ярлык Claude Desktop).
     emit(&app, "");
     emit(&app, "▸ Запускаем локальный прокси-bridge…");
@@ -388,7 +388,7 @@ pub async fn run_install(
     run_ps_script(&app, &log_file, &desktop_ps1, &bridge_args).await?;
     emit(&app, "✓ Bridge запущен на 127.0.0.1:8889");
 
-    // Автозапуск: setup-скрипт кладёт легаси .vbs в Startup — заменяем его
+    // Автозапуск: setup-скрипт кладёт легаси .vbs в Startup - заменяем его
     // задачей Планировщика с RestartOnFailure (упавший мост поднимается сам).
     // Не фатально: при ошибке легаси .vbs остаётся рабочим запасным путём.
     emit(&app, "▸ Настраиваем автозапуск моста (Планировщик задач)…");
@@ -397,7 +397,7 @@ pub async fn run_install(
         Ok(Ok(())) => emit(&app, "✓ Задача ClodBridge зарегистрирована (автоперезапуск при падении)"),
         Ok(Err(e)) => {
             log_line(&log_file, &format!("WARN: task register failed: {e}"));
-            emit(&app, format!("⚠ Планировщик не настроен ({e}) — остаётся автозапуск через Startup"));
+            emit(&app, format!("⚠ Планировщик не настроен ({e}) - остаётся автозапуск через Startup"));
         }
         Err(e) => log_line(&log_file, &format!("WARN: task register join: {e}")),
     }
@@ -416,7 +416,7 @@ pub async fn run_install(
         emit(&app, "✓ Claude Code установлен");
     }
     if need_desktop {
-        // bridge уже запустили выше — здесь ничего дополнительного делать
+        // bridge уже запустили выше - здесь ничего дополнительного делать
         // не надо. Сообщение для пользователя:
         emit(&app, "");
         emit(&app, "✓ Claude Desktop настроен");
@@ -443,7 +443,7 @@ pub async fn run_install(
 
 /// Найти путь к bundled-ресурсу `name` (из папки `resources/`).
 /// В dev-режиме папка `resources/` лежит не внутри resource_dir (target/debug/),
-/// а в src-tauri/resources/ — поэтому делаем fallback на CARGO_MANIFEST_DIR.
+/// а в src-tauri/resources/ - поэтому делаем fallback на CARGO_MANIFEST_DIR.
 pub(crate) fn resolve_resource(app: &AppHandle, name: &str) -> Result<std::path::PathBuf, String> {
     let resources_dir = app
         .path()
@@ -463,7 +463,7 @@ pub(crate) fn resolve_resource(app: &AppHandle, name: &str) -> Result<std::path:
 
 /// Запустить PS-скрипт блокирующе и вернуть объединённый stdout+stderr (UTF-8).
 /// Используется для коротких операций без стриминга в UI (например setup_cursor
-/// с Dashboard). Ошибка — только если powershell не стартовал.
+/// с Dashboard). Ошибка - только если powershell не стартовал.
 #[cfg(target_os = "windows")]
 pub(crate) async fn run_ps_capture(
     script: &std::path::Path,
@@ -621,7 +621,7 @@ pub(crate) async fn run_ps_script(
     }
 
     // Tauri's resource_dir() returns Windows UNC-extended paths like
-    // `\\?\C:\...`. PowerShell refuses those — strip the prefix so the script
+    // `\\?\C:\...`. PowerShell refuses those - strip the prefix so the script
     // is invoked with a plain drive path.
     let raw = script.to_string_lossy();
     let cleaned = raw
@@ -672,7 +672,7 @@ pub(crate) async fn run_ps_script(
 
     // Live streaming: spawn child, read stdout/stderr line-by-line on separate
     // threads, emit to UI as soon as each line arrives. Critical correctness:
-    // join the reader threads BEFORE child.wait() — otherwise wait() can close
+    // join the reader threads BEFORE child.wait() - otherwise wait() can close
     // the pipes before drainage completes (this caused the earlier "1 line"
     // bug). Calling wait() AFTER joining is safe because pipe EOF means the
     // child has already exited.

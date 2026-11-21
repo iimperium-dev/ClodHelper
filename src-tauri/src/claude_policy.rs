@@ -44,7 +44,7 @@ const POLICY_KEY: &str = r"SOFTWARE\Policies\Claude";
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 const OWNER_KEY: &str = r"SOFTWARE\ClodHelper\ClaudeProxyPolicy";
 
-/// Reads the 64-bit machine policy and ownership record, without elevation —
+/// Reads the 64-bit machine policy and ownership record, without elevation -
 /// straight from the registry: PowerShell costs seconds on every poll.
 #[cfg(target_os = "windows")]
 pub fn status() -> Result<ClaudePolicyStatus, String> {
@@ -86,7 +86,7 @@ fn status_from(fixed: &RegValue, pac: &RegValue, owner: &RegValue) -> Result<Cla
     })
 }
 
-/// Original value from Helper's ownership record; None — no record. Only an
+/// Original value from Helper's ownership record; None - no record. Only an
 /// absent or empty original is valid: a damaged record is never trusted.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn owned_original(owner: &RegValue) -> Result<Option<RegValue>, String> {
@@ -118,7 +118,7 @@ pub fn enable() -> Result<ClaudePolicyStatus, String> {
         return Err(format!("Политика Claude: {conflict}"));
     }
     // macOS: уже настроенным без службы автовосстановления повторный Enable
-    // её доставит (политика при этом не меняется — значение уже наше).
+    // её доставит (политика при этом не меняется - значение уже наше).
     if current.configured && current.managed && (current.auto_restore || cfg!(target_os = "windows")) {
         return Ok(current);
     }
@@ -166,7 +166,7 @@ fn elevate(action: &str) -> Result<ClaudePolicyStatus, String> {
         .and_then(Result::ok)
         .and_then(|st| {
             let list = crate::leak_guard::with_service(&st, "claude", true).ok()?;
-            // Уже включена с тем же набором — второй раз правила не трогаем.
+            // Уже включена с тем же набором - второй раз правила не трогаем.
             (!st.enabled || st.services != list).then_some(list)
         });
     let outcome = match guard {
@@ -186,8 +186,8 @@ fn elevate(action: &str) -> Result<ClaudePolicyStatus, String> {
     parse_elevated_result(&outcome)
 }
 
-/// Главный скрипт «Подключить»: сначала защита от утечек (молча — её сбой не
-/// мешает политике), затем политика: её итог и код выхода — итог операции.
+/// Главный скрипт «Подключить»: сначала защита от утечек (молча - её сбой не
+/// мешает политике), затем политика: её итог и код выхода - итог операции.
 /// `services` уже проверен leak_guard::normalize: только claude/telegram.
 #[cfg(target_os = "windows")]
 fn enable_with_guard(services: &str) -> String {
@@ -223,17 +223,17 @@ pub fn status() -> Result<ClaudePolicyStatus, String> {
 /// macOS: one system password prompt via `do shell script … with
 /// administrator privileges`. The script travels as base64 inside the command
 /// (no root-executed file a user process could swap) and always exits 0, so
-/// its JSON reaches stdout even on failure — osascript drops stdout of a
+/// its JSON reaches stdout even on failure - osascript drops stdout of a
 /// failing command.
 #[cfg(not(target_os = "windows"))]
 fn elevate(action: &str) -> Result<ClaudePolicyStatus, String> {
     use base64::Engine;
     let encoded = base64::engine::general_purpose::STANDARD.encode(POLICY_SCRIPT);
-    // Enable кладёт копию скрипта в root-папку — её запускает служба
+    // Enable кладёт копию скрипта в root-папку - её запускает служба
     // автовосстановления (LaunchDaemon). Пишет root в root-owned каталог:
     // пользовательский процесс подменить копию не может.
     let shell = if action == "Enable" {
-        // В том же окне пароля — защита от утечек для Claude (по умолчанию):
+        // В том же окне пароля - защита от утечек для Claude (по умолчанию):
         // из России Claude напрямую не работает, прямой выход только выдаёт IP.
         let guard = crate::leak_guard::status()
             .ok()
@@ -322,7 +322,7 @@ mod tests {
             .contains("PAC policy exists"));
     }
 
-    /// Статус из реестра — те же случаи, что в tests/claude-proxy-policy.Tests.ps1.
+    /// Статус из реестра - те же случаи, что в tests/claude-proxy-policy.Tests.ps1.
     #[test]
     fn registry_status_matches_policy_script_rules() {
         use RegValue::{Absent, Other, Str};
@@ -346,14 +346,14 @@ mod tests {
         let st = status_from(&s(PROXY_URL), &Absent, &Absent).unwrap();
         assert!(st.configured && !st.managed && st.conflict.is_some());
 
-        // Чужие прокси и PAC — конфликт; пустая строка — нет.
+        // Чужие прокси и PAC - конфликт; пустая строка - нет.
         assert!(status_from(&s("http://corp:3128"), &Absent, &Absent).unwrap().conflict.unwrap().contains("не принадлежит Helper"));
         assert!(status_from(&Other("DWord".into()), &Absent, &Absent).unwrap().conflict.is_some());
         assert!(status_from(&s(""), &Absent, &Absent).unwrap().conflict.is_none());
         let pac = status_from(&s(PROXY_URL), &s(""), &owner(absent)).unwrap();
         assert!(pac.pac_configured && !pac.configured && pac.conflict.unwrap().contains("PAC"));
 
-        // Изменено вне Helper после включения — конфликт; откат к исходному — нет.
+        // Изменено вне Helper после включения - конфликт; откат к исходному - нет.
         assert!(status_from(&s("http://other:1"), &Absent, &owner(absent)).unwrap().conflict.unwrap().contains("изменена вне"));
         assert!(status_from(&Absent, &Absent, &owner(absent)).unwrap().conflict.is_none());
         assert!(status_from(&s(""), &Absent, &owner(empty)).unwrap().conflict.is_none());
@@ -401,7 +401,7 @@ mod tests {
         let policy = op.find("'policy.ps1') -Action $Action").unwrap();
         assert!(guard < policy, "сначала защита, потом политика");
         assert!(op.contains("-Services 'claude,telegram'"));
-        // Итог операции — итог политики, а не защиты.
+        // Итог операции - итог политики, а не защиты.
         assert!(op.contains("-ResultPath $ResultPath"));
         assert!(op.trim_end().ends_with("exit $LASTEXITCODE"));
     }

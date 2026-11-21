@@ -9,7 +9,7 @@ import type { ProxyCheckResult } from "../lib/types";
 import { cn } from "../lib/cn";
 
 /** Инструкция «Свой прокси» на сайте проекта. */
-const OWN_PROXY_GUIDE = "https://iimperium-dev.github.io/ClodHelper/proxy/";
+const OWN_PROXY_GUIDE = "https://clodhelper.com/proxy/";
 
 interface Props {
   initialUrl: string | null;
@@ -20,7 +20,7 @@ interface Props {
 
 /*
   Шаг 1 нового мастера: приветствие + умный ввод прокси.
-  Парсер — тот же parseProxyInput, что в разделе «Прокси» (любые форматы
+  Парсер - тот же parseProxyInput, что в разделе «Прокси» (любые форматы
   шопов, эскалация при неоднозначности). Гео-проверка информативная, НЕ
   блокирует «Дальше»: настоящая проверка соединения будет на шаге установки.
 */
@@ -72,7 +72,7 @@ export function StepProxy({ initialUrl, onNext, onSkipToTools }: Props) {
         Вставьте прокси
       </h2>
       <p className="mt-1.5 text-[13px] text-vb-silver-dim">
-        Вставьте строку прокси целиком — формат любой, мы сами разберём её на
+        Вставьте строку прокси целиком - формат любой, мы сами разберём её на
         части. Дальше всё настроится автоматически.
       </p>
 
@@ -130,8 +130,8 @@ export function StepProxy({ initialUrl, onNext, onSkipToTools }: Props) {
               {needsReview && (
                 <p className="mb-2 text-[12px] text-vb-warn">
                   {ambiguous
-                    ? "Формат неоднозначный — проверьте, где хост, а где логин:"
-                    : "Не до конца уверен в разборе — проверьте поля:"}
+                    ? "Формат неоднозначный - проверьте, где хост, а где логин:"
+                    : "Не до конца уверен в разборе - проверьте поля:"}
                 </p>
               )}
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px]">
@@ -206,7 +206,7 @@ export function StepProxy({ initialUrl, onNext, onSkipToTools }: Props) {
                       exit={{ opacity: 0 }}
                       className="text-[12px] text-vb-silver-dim"
                     >
-                      Быстрая проверка не прошла — не страшно: настоящая
+                      Быстрая проверка не прошла - не страшно: настоящая
                       проверка будет на следующем шаге.
                     </motion.div>
                   ) : null}
@@ -214,7 +214,7 @@ export function StepProxy({ initialUrl, onNext, onSkipToTools }: Props) {
                 {isRu && (
                   <div className="mt-2 flex items-start gap-2 rounded-lg border border-vb-warn/30 bg-vb-warn/5 px-3 py-2 text-[12px] text-vb-warn">
                     <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                    Этот прокси в России. Claude его не примет — нужен зарубежный.
+                    Этот прокси в России. Claude его не примет - нужен зарубежный.
                   </div>
                 )}
               </div>

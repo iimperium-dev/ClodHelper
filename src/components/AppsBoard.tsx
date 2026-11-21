@@ -39,12 +39,12 @@ const LONG_PRESS_MS = 450;
 const SPRING = { type: "spring", bounce: 0.18, duration: 0.42 } as const;
 const LAND = { type: "spring", bounce: 0.2, duration: 0.32 } as const;
 
-/** Нажатие на приложение: ещё не перетаскивание — ждём сдвига или долгого нажатия. */
+/** Нажатие на приложение: ещё не перетаскивание - ждём сдвига или долгого нажатия. */
 interface Press {
   id: string;
   x0: number;
   y0: number;
-  /** Где внутри элемента схватили — «призрак» держится за ту же точку. */
+  /** Где внутри элемента схватили - «призрак» держится за ту же точку. */
   offX: number;
   offY: number;
   w: number;
@@ -62,7 +62,7 @@ const sameLayout = (a: AppsLayout, b: AppsLayout) =>
   a.folders.length === b.folders.length &&
   a.folders.every((f, i) => f.id === b.folders[i].id && f.apps.join() === b.folders[i].apps.join());
 
-/** Ближайший прокручиваемый предок — для автопрокрутки у краёв при перетаскивании. */
+/** Ближайший прокручиваемый предок - для автопрокрутки у краёв при перетаскивании. */
 function scrollParent(el: HTMLElement | null): HTMLElement | null {
   for (let n = el?.parentElement; n; n = n.parentElement) {
     const oy = getComputedStyle(n).overflowY;
@@ -72,11 +72,11 @@ function scrollParent(el: HTMLElement | null): HTMLElement | null {
 }
 
 /*
-  Приложения папками — списком или сеткой, с режимом упорядочивания как в
-  iOS: долгое нажатие (или правый клик → «Упорядочить») — иконки
+  Приложения папками - списком или сеткой, с режимом упорядочивания как в
+  iOS: долгое нажатие (или правый клик → «Выбрать») - иконки
   покачиваются; схваченное приложение едет за курсором, а соседи живьём
-  расступаются, освобождая место (в том числе в другой папке). Отпустили —
-  приложение мягко «садится» в своё новое место. Клик по пустому месту —
+  расступаются, освобождая место (в том числе в другой папке). Отпустили -
+  приложение мягко «садится» в своё новое место. Клик по пустому месту -
   выход из режима.
 */
 export function AppsBoard({
@@ -109,21 +109,21 @@ export function AppsBoard({
   const scroller = useRef<HTMLElement | null>(null);
   const raf = useRef<number | null>(null);
 
-  // Последние значения — для слушателей окна, живущих дольше одного рендера.
+  // Последние значения - для слушателей окна, живущих дольше одного рендера.
   const latest = useRef({ layout, grid, editing, onLayout, onEditing, apps, describe, onLaunch, reduced });
   latest.current = { layout, grid, editing, onLayout, onEditing, apps, describe, onLaunch, reduced };
 
-  /** Куда встанет приложение, если отпустить в точке (x, y). null — оставить как есть. */
+  /** Куда встанет приложение, если отпустить в точке (x, y). null - оставить как есть. */
   const targetAt = (x: number, y: number, id: string, cur: AppsLayout): Target | null => {
     for (const el of document.elementsFromPoint(x, y)) {
       const h = el as HTMLElement;
       const app = h.dataset?.dropApp;
       if (app) {
-        if (app === id) return null; // над своим же местом — уже на месте
+        if (app === id) return null; // над своим же местом - уже на месте
         const f = cur.folders.find((x) => x.apps.includes(app));
         if (!f) return null;
         const r = h.getBoundingClientRect();
-        // Сетка — до/после по горизонтали, список — по вертикали.
+        // Сетка - до/после по горизонтали, список - по вертикали.
         const after = latest.current.grid ? x > r.left + r.width / 2 : y > r.top + r.height / 2;
         if (!after) return { beforeApp: app };
         const rest = f.apps.filter((a) => a !== id);
@@ -132,7 +132,7 @@ export function AppsBoard({
       }
       const folder = h.dataset?.dropFolder;
       if (folder) {
-        // Пустое место своей папки — не дёргаем в конец; чужой — в её конец.
+        // Пустое место своей папки - не дёргаем в конец; чужой - в её конец.
         if (cur.folders.find((f) => f.id === folder)?.apps.includes(id)) return null;
         return { folder };
       }
@@ -168,7 +168,7 @@ export function AppsBoard({
     raf.current = requestAnimationFrame(tick);
   };
 
-  // Слушатели окна — стабильные обёртки: компонент перерисовывается во время
+  // Слушатели окна - стабильные обёртки: компонент перерисовывается во время
   // перетаскивания, а снять нужно ровно те функции, что повесили.
   const handlers = useRef({ move: (_e: PointerEvent) => {}, up: () => {} });
   const stable = useRef({
@@ -191,7 +191,7 @@ export function AppsBoard({
     const dist = Math.hypot(e.clientX - p.x0, e.clientY - p.y0);
     if (!p.dragging) {
       if (!p.armed) {
-        // Сдвинули до долгого нажатия — это не «схватить».
+        // Сдвинули до долгого нажатия - это не «схватить».
         if (dist > 6) {
           if (p.timer !== null) window.clearTimeout(p.timer);
           press.current = null;
@@ -221,7 +221,7 @@ export function AppsBoard({
     if (p.timer !== null) window.clearTimeout(p.timer);
     const L = latest.current;
     if (!p.dragging) {
-      // Короткий тап (не в режиме упорядочивания) — открыть приложение.
+      // Короткий тап (не в режиме упорядочивания) - открыть приложение.
       if (!p.fired && !L.editing && L.grid) {
         const app = L.apps.find((a) => a.id === p.id);
         if (app?.installed) {
@@ -298,7 +298,6 @@ export function AppsBoard({
 
   const openMenu = (e: React.MouseEvent, app: AppProfileStatus, info: RowInfo) => {
     e.preventDefault();
-    const current = layout.folders.find((f) => f.apps.includes(app.id))?.id;
     const items: MenuItem[] = [];
     if (app.installed) {
       items.push(
@@ -311,17 +310,9 @@ export function AppsBoard({
       }
     }
     items.push({ divider: true, label: "", run: () => {} });
-    items.push({ header: true, label: "Переместить в папку", run: () => {} });
-    for (const f of layout.folders) {
-      items.push({
-        label: f.name,
-        checked: f.id === current,
-        run: () => onLayout(moveApp(layout, app.id, { folder: f.id })),
-      });
-    }
-    items.push({ divider: true, label: "", run: () => {} });
-    items.push({ label: "Настройки…", run: () => onSettings(app.id) });
-    items.push({ label: "Упорядочить", run: () => onEditing(true) });
+    items.push({ label: "Настройки", run: () => onSettings(app.id) });
+    // «Выбрать» - режим перетаскивания: в нём же приложения переносят по папкам.
+    items.push({ label: "Выбрать", run: () => onEditing(true) });
     items.push({ label: "Убрать из списка", danger: true, run: () => onRemove(app.id) });
     setMenu({ x: e.clientX, y: e.clientY, items });
   };
@@ -338,7 +329,7 @@ export function AppsBoard({
   const deleteFolder = (id: string) =>
     onLayout({ ...layout, folders: layout.folders.filter((f) => f.id !== id) });
 
-  // Папка, куда переезжает схваченное приложение (если не своя) — подсвечиваем.
+  // Папка, куда переезжает схваченное приложение (если не своя) - подсвечиваем.
   const fromFolder = drag ? layout.folders.find((f) => f.apps.includes(drag.id))?.id : undefined;
   const intoFolder = drag ? shown.folders.find((f) => f.apps.includes(drag.id))?.id : undefined;
   const hotFolder = intoFolder !== fromFolder ? intoFolder : undefined;
@@ -399,7 +390,7 @@ export function AppsBoard({
                 )}
               </AnimatePresence>
 
-              {/* Заголовок папки: в режиме упорядочивания — переименование */}
+              {/* Заголовок папки: в режиме упорядочивания - переименование */}
               <div className="relative mb-1.5 flex h-6 items-center gap-2 px-1" data-drop-folder={folder.id}>
                 {editing && !drag ? (
                   <input
@@ -485,7 +476,7 @@ export function AppsBoard({
         </AnimatePresence>
       </div>
 
-      {/* «Призрак» схваченного приложения — едет за курсором поверх всего */}
+      {/* «Призрак» схваченного приложения - едет за курсором поверх всего */}
       {drag &&
         dragged &&
         createPortal(
@@ -526,10 +517,10 @@ export function AppsBoard({
 }
 
 /*
-  Элемент доски: нажатие передаётся доске (она решает — тап, долгое
+  Элемент доски: нажатие передаётся доске (она решает - тап, долгое
   нажатие или перетаскивание). В режиме упорядочивания плитки покачиваются
   (только плитки: так в iOS; строки списка не качаются). Пока приложение
-  тащат, на его месте — мягкий «слот», куда оно сядет.
+  тащат, на его месте - мягкий «слот», куда оно сядет.
 */
 function BoardItem({
   id,
@@ -550,7 +541,7 @@ function BoardItem({
   onContextMenu: (e: React.MouseEvent) => void;
   children: React.ReactNode;
 }) {
-  // Своя фаза покачивания у каждой иконки — как в iOS, не синхронно.
+  // Своя фаза покачивания у каждой иконки - как в iOS, не синхронно.
   const phase = useRef(Math.random() * 0.12);
   const wobble = editing && grid && !reduced && !placeholder;
 

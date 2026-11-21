@@ -16,7 +16,7 @@ pub const PROFILE_ID: &str = "claude-desktop";
 pub const PROXY_PORT: u16 = 8890;
 #[cfg(target_os = "windows")]
 const LAUNCHER: &str = include_str!("../resources/claude-desktop-launch.ps1");
-/// macOS: exe_path — путь к бандлу `Claude.app`.
+/// macOS: exe_path - путь к бандлу `Claude.app`.
 #[cfg(not(target_os = "windows"))]
 const LAUNCHER: &str = include_str!("../resources/claude-desktop-launch.sh");
 static INSTALL_CACHE: Mutex<Option<(Instant, Option<Installation>)>> = Mutex::new(None);
@@ -41,7 +41,7 @@ fn launch_args() -> String {
     String::new()
 }
 
-/// macOS: тот же лаунчер, что у ярлыка, — через stdin, без временных файлов.
+/// macOS: тот же лаунчер, что у ярлыка, - через stdin, без временных файлов.
 #[cfg(not(target_os = "windows"))]
 fn run_script(arguments: &str) -> Result<String, String> {
     use std::io::Write;
@@ -116,7 +116,7 @@ pub fn detect_fresh() -> Result<Option<Installation>, String> {
 }
 
 /// Windows: та же логика, что Resolve-ClaudeDesktopInstallation в
-/// claude-desktop-launch.ps1, но без PowerShell (Get-AppxPackage — секунды
+/// claude-desktop-launch.ps1, но без PowerShell (Get-AppxPackage - секунды
 /// на каждый опрос): пакет Store из реестра пакетов пользователя (новые
 /// версии первыми), иначе известные папки установщика.
 #[cfg(target_os = "windows")]
@@ -142,7 +142,7 @@ pub fn detect_fresh() -> Result<Option<Installation>, String> {
             }
         }
     }
-    // Только известные папки установщика — Claude Code CLI из PATH не берём.
+    // Только известные папки установщика - Claude Code CLI из PATH не берём.
     let Some(local) = dirs::data_local_dir() else { return Ok(None) };
     for rel in ["AnthropicClaude", "Claude", "Programs\\claude-desktop", "Programs\\Claude", "Programs\\AnthropicClaude"] {
         let root = local.join(rel);
@@ -150,7 +150,7 @@ pub fn detect_fresh() -> Result<Option<Installation>, String> {
         if direct.is_file() {
             return found(direct, None, LaunchKind::ExeFlag);
         }
-        // Squirrel оставляет несколько app-* после обновлений — новейшая версия.
+        // Squirrel оставляет несколько app-* после обновлений - новейшая версия.
         let mut versions: Vec<(Vec<u32>, PathBuf)> = std::fs::read_dir(&root)
             .into_iter()
             .flatten()

@@ -17,6 +17,7 @@ import {
   globalProxyEnv,
   proxiesPing,
   shimStatus,
+  systemPacStatus,
 } from "./api";
 import type {
   BridgeFileIssue,
@@ -26,17 +27,20 @@ import type {
   GlobalProxyEnv,
   ProxyPing,
   ShimStatus,
+  SystemPacStatus,
 } from "./types";
 
 const POLL_INTERVAL_MS = 5_000;
+/** Автонастройку сайтов проверяем каждый 3-й тик (~15 с). */
+const PAC_CHECK_EVERY_TICKS = 3;
 /** Сэмплов истории трафика для sparkline (~3.3 мин при 5с-тике). */
 const HISTORY_LEN = 40;
 /** Пинг прокси-пула: раз в 5 минут (лёгкий TCP-connect, но не спамим). */
 const POOL_PING_INTERVAL_MS = 5 * 60_000;
-/** Не ответивший прокси переизмеряем раньше — через 20 с. */
+/** Не ответивший прокси переизмеряем раньше - через 20 с. */
 const POOL_RECHECK_MS = 20_000;
-/** Скан процессов (shimStatus) при живом /healthz — раз в N тиков (~30с):
-    healthz и так доказывает, что мост жив, а скан — самый дорогой вызов. */
+/** Скан процессов (shimStatus) при живом /healthz - раз в N тиков (~30с):
+    healthz и так доказывает, что мост жив, а скан - самый дорогой вызов. */
 const PROCESS_SCAN_EVERY_TICKS = 6;
 /** Окно оценки стабильности прокси: последние N тиков (~1 мин). */
 const QUALITY_WINDOW = 12;
@@ -56,34 +60,34 @@ export interface UpstreamQuality {
 export type OrbState = "loading" | "ok" | "warn" | "down";
 
 /**
- * Одна правда о каждом прокси пула — для «Обзора», «Прокси», сайдбара,
+ * Одна правда о каждом прокси пула - для «Обзора», «Прокси», сайдбара,
  * трея и окна настроек приложения. Источники: настоящий запрос через
  * прокси (proxies_ping), TCP-пинг и живые счётчики моста.
- *   ok       — работает;
- *   slow     — работает, но долго подключается;
- *   unstable — часть подключений моста за минуту не прошла;
- *   down     — не работает (reason — почему);
- *   unknown  — ещё не проверяли.
+ *   ok       - работает;
+ *   slow     - работает, но долго подключается;
+ *   unstable - часть подключений моста за минуту не прошла;
+ *   down     - не работает (reason - почему);
+ *   unknown  - ещё не проверяли.
  */
 export type ProxyLive = "ok" | "slow" | "unstable" | "down" | "unknown";
 
 export interface ProxyState {
   url: string;
   host: string;
-  /** TCP-пинг, мс (null — порт не ответил, undefined — не мерили). */
+  /** TCP-пинг, мс (null - порт не ответил, undefined - не мерили). */
   ms?: number | null;
   state: ProxyLive;
   reason?: string;
-  /** Резерв какого прокси пула (индекс); undefined — сам прокси пула. */
+  /** Резерв какого прокси пула (индекс); undefined - сам прокси пула. */
   backupOf?: number;
   /** Прокси пула не работает, но его подменяет этот резерв (индекс). */
   coveredBy?: number;
 }
 
-/** Прокси пула (без резервов) — с исходными индексами. */
+/** Прокси пула (без резервов) - с исходными индексами. */
 export const poolOnly = (proxies: ProxyState[]) => proxies.filter((p) => p.backupOf === undefined);
 
-/** Медленно — дольше этого подключение к прокси. */
+/** Медленно - дольше этого подключение к прокси. */
 export const SLOW_MS = 1500;
 
 /** Работает ли прокси (для выбора выхода и счёта запасных). */
@@ -103,7 +107,7 @@ export function proxyStatesOf(
   quality: UpstreamQuality[],
 ): ProxyState[] {
   const n = Math.max(poolPing.length, health?.upstreams.length ?? 0);
-  // Чей резерв — из проверки пула, а пока её нет — из /healthz моста.
+  // Чей резерв - из проверки пула, а пока её нет - из /healthz моста.
   const parentOf = (i: number): number | undefined => {
     const fromPing = poolPing[i]?.backup_of;
     if (typeof fromPing === "number") return fromPing;
@@ -116,12 +120,12 @@ export function proxyStatesOf(
     const q = quality[i];
     const url = p?.url ?? health?.upstreams[i]?.url ?? "";
     const base = { url, host: p?.host || hostOf(url), ms: p?.ms, backupOf: parentOf(i) };
-    // Мост прямо сейчас ходит через этот прокси без сбоев — он работает,
+    // Мост прямо сейчас ходит через этот прокси без сбоев - он работает,
     // что бы ни показала наша отдельная проверка (её тестовые адреса бывают
     // недоступны из страны пользователя или через конкретный прокси).
     const u = health?.upstreams[i];
     const bridgeProves = !!u && u.healthy && u.ok > 0 && (u.fail_streak ?? 0) === 0 && q?.state !== "down";
-    // Настоящий запрос через прокси не прошёл (или порт закрыт) — не работает,
+    // Настоящий запрос через прокси не прошёл (или порт закрыт) - не работает,
     // какой бы красивый ни был TCP-пинг.
     if (p && (p.alive === false || p.ms === null) && !bridgeProves) {
       return { ...base, state: "down" as const, reason: p.error ?? "Прокси не отвечает" };
@@ -136,7 +140,7 @@ export function proxyStatesOf(
       }
       return { ...base, state: p.ms !== null && p.ms !== undefined && p.ms > SLOW_MS ? ("slow" as const) : ("ok" as const) };
     }
-    // Своей проверки ещё нет — судим по мосту.
+    // Своей проверки ещё нет - судим по мосту.
     if (q?.state === "down") return { ...base, state: "down" as const, reason: "Мост не может через него подключиться" };
     if (q?.state === "unstable") {
       return {
@@ -148,7 +152,7 @@ export function proxyStatesOf(
     return { ...base, state: q || bridgeProves ? ("ok" as const) : ("unknown" as const) };
   });
   // Упавший прокси с живым резервом: трафик идёт через резерв (мост так
-  // и делает — первый живой по порядку).
+  // и делает - первый живой по порядку).
   states.forEach((s, i) => {
     if (s.backupOf !== undefined || s.state !== "down") return;
     const j = states.findIndex((b) => b.backupOf === i && (b.state === "ok" || b.state === "slow"));
@@ -171,13 +175,13 @@ interface StatusContextValue {
   task: BridgeTaskStatus | null;
   env: GlobalProxyEnv | null;
   exeLegacy: boolean;
-  /** Версии моста (null — ещё не узнали). */
+  /** Версии моста (null - ещё не узнали). */
   versions: BridgeVersions | null;
   /** Качество каждого прокси пула (по индексу health.upstreams). */
   quality: UpstreamQuality[];
-  /** Состояние каждого прокси пула (по индексу) — одно на всё UI. */
+  /** Состояние каждого прокси пула (по индексу) - одно на всё UI. */
   proxies: ProxyState[];
-  /** Итоговое состояние для орба/логотипа/сайдбара/трея — одно на всё UI. */
+  /** Итоговое состояние для орба/логотипа/сайдбара/трея - одно на всё UI. */
   orb: OrbState;
   /** История трафика текущей сессии GUI (для sparkline). */
   history: TrafficSample[];
@@ -192,6 +196,11 @@ interface StatusContextValue {
   /** Файл моста пропал (антивирус): восстановлен / удаляется снова / нет копии. */
   bridgeFile: BridgeFileIssue | null;
   setBridgeFile: (v: BridgeFileIssue | null) => void;
+  /** «Сайты во всех браузерах»: состояние системной автонастройки. */
+  pac: SystemPacStatus | null;
+  setPac: (v: SystemPacStatus | null) => void;
+  /** Автонастройку включили, а другая программа её сбросила - сайты не работают. */
+  sitesBroken: boolean;
 }
 
 const StatusContext = createContext<StatusContextValue | null>(null);
@@ -219,9 +228,10 @@ export function StatusProvider({ children }: { children: ReactNode }) {
   const [history, setHistory] = useState<TrafficSample[]>([]);
   const [poolPing, setPoolPing] = useState<ProxyPing[]>([]);
   const [bridgeFile, setBridgeFile] = useState<BridgeFileIssue | null>(null);
+  const [pac, setPac] = useState<SystemPacStatus | null>(null);
   const lastTotal = useRef<number | null>(null);
   /** Поколение refresh: устаревший ответ (интервальный тик, обогнанный ручным
-      refresh после действия) не должен перезатирать более свежее состояние —
+      refresh после действия) не должен перезатирать более свежее состояние -
       иначе UI на 5с «откатывается» и sparkline рисует ложные всплески. */
   const gen = useRef(0);
 
@@ -251,7 +261,7 @@ export function StatusProvider({ children }: { children: ReactNode }) {
           }, POOL_RECHECK_MS)
         : null;
     } catch {
-      /* пул может быть пуст / команда недоступна — не страшно */
+      /* пул может быть пуст / команда недоступна - не страшно */
     }
   };
   const refreshPoolPingRef = useRef(refreshPoolPing);
@@ -260,7 +270,7 @@ export function StatusProvider({ children }: { children: ReactNode }) {
   /** Пересчитать качество прокси по дельтам счётчиков /healthz. */
   const wasHealthy = useRef<boolean[]>([]);
   const updateQuality = useCallback((h: BridgeHealth) => {
-    // Мост только что перестал достукиваться до прокси — сразу проверяем его
+    // Мост только что перестал достукиваться до прокси - сразу проверяем его
     // по-настоящему, а не ждём планового круга (до 5 минут).
     const nowHealthy = h.upstreams.map((u) => u.healthy);
     if (nowHealthy.some((ok, i) => !ok && wasHealthy.current[i] !== false)) {
@@ -269,7 +279,7 @@ export function StatusProvider({ children }: { children: ReactNode }) {
     wasHealthy.current = nowHealthy;
     const prev = lastCounters.current;
     lastCounters.current = h.upstreams.map((u) => ({ ok: u.ok, fail: u.fail }));
-    // Первый сэмпл / рестарт моста (счётчики упали) / сменился пул — окно с нуля.
+    // Первый сэмпл / рестарт моста (счётчики упали) / сменился пул - окно с нуля.
     const reset =
       prev === null ||
       prev.length !== h.upstreams.length ||
@@ -307,7 +317,7 @@ export function StatusProvider({ children }: { children: ReactNode }) {
       const total = h.via_upstream + h.via_direct;
       const prev = lastTotal.current;
       lastTotal.current = total;
-      // Первый сэмпл (или рестарт моста → счётчики упали) — дельту не пишем.
+      // Первый сэмпл (или рестарт моста → счётчики упали) - дельту не пишем.
       if (prev !== null && total >= prev) {
         setHistory((old) =>
           [...old, { delta: total - prev, active: h.active }].slice(-HISTORY_LEN),
@@ -317,7 +327,7 @@ export function StatusProvider({ children }: { children: ReactNode }) {
     [updateQuality],
   );
 
-  // Программа восстановила мост или антивирус удаляет его снова — сразу в UI.
+  // Программа восстановила мост или антивирус удаляет его снова - сразу в UI.
   useEffect(() => {
     const un = listen<BridgeFileIssue | null>("bridge-file", (e) => setBridgeFile(e.payload));
     return () => {
@@ -329,7 +339,7 @@ export function StatusProvider({ children }: { children: ReactNode }) {
     const un = listen<BridgeHealth>("bridge-health", (e) => {
       lastEvent.current = Date.now();
       // Без проверки document.hidden: WebKit иногда считает видимое окно
-      // скрытым, и тогда событие терялось, а свой опрос тоже молчал —
+      // скрытым, и тогда событие терялось, а свой опрос тоже молчал -
       // данные в окне застывали на часы. Применить снимок дёшево.
       applyHealth(e.payload);
     });
@@ -339,9 +349,9 @@ export function StatusProvider({ children }: { children: ReactNode }) {
   }, [applyHealth]);
 
   /**
-   * full=true — всё (при открытии окна и после действий пользователя);
-   * full=false — интервальный тик: только здоровье моста и, редко, процесс.
-   * Автозапуск, переменные окружения и версии сами по себе не меняются —
+   * full=true - всё (при открытии окна и после действий пользователя);
+   * full=false - интервальный тик: только здоровье моста и, редко, процесс.
+   * Автозапуск, переменные окружения и версии сами по себе не меняются -
    * раньше на них каждые 5с уходило 3 запуска launchctl.
    */
   const refresh = useCallback(async (full = true) => {
@@ -356,7 +366,7 @@ export function StatusProvider({ children }: { children: ReactNode }) {
           bridgeVersions().then((v) => fresh() && setVersions(v)).catch(() => {}),
         ]
       : [];
-    // Монитор трея присылает /healthz событием каждые 5 с — сами опрашиваем
+    // Монитор трея присылает /healthz событием каждые 5 с - сами опрашиваем
     // мост, только если событий давно не было (монитор не запущен и т.п.).
     const viaEvents = !full && Date.now() - lastEvent.current < 8_000;
     const healthOk = viaEvents
@@ -376,11 +386,16 @@ export function StatusProvider({ children }: { children: ReactNode }) {
         setQuality([]);
         return false;
       });
-    // Мост не ответил — нужен честный статус процесса прямо сейчас.
+    // Мост не ответил - нужен честный статус процесса прямо сейчас.
     if (full || !healthOk || t % PROCESS_SCAN_EVERY_TICKS === 0) {
       slow.push(shimStatus().then((v) => fresh() && setStatus(v)).catch(() => {}));
     }
-    // Мост не отвечает — не удалил ли его антивирус (событие могло прийти,
+    // Автонастройку сайтов может молча сбросить другая программа (VPN,
+    // клиент прокси) - проверяем сами, а не только при заходе на «Сайты».
+    if (full || t % PAC_CHECK_EVERY_TICKS === 0) {
+      slow.push(systemPacStatus().then((v) => fresh() && setPac(v)).catch(() => {}));
+    }
+    // Мост не отвечает - не удалил ли его антивирус (событие могло прийти,
     // пока окна не было).
     if (full || !healthOk) {
       slow.push(bridgeFileIssue().then((v) => fresh() && setBridgeFile(v)).catch(() => {}));
@@ -393,7 +408,7 @@ export function StatusProvider({ children }: { children: ReactNode }) {
     void refreshPoolPing();
     // Скрытое окно не поллит: спрятанный трей-попап живёт вечно, и без этой
     // паузы он параллельно с главным окном дёргал бы мост каждые 5с и пинговал
-    // весь пул прокси каждые 5 минут. При показе — обновляемся сразу.
+    // весь пул прокси каждые 5 минут. При показе - обновляемся сразу.
     const id = window.setInterval(() => {
       if (!document.hidden) void refresh(false);
     }, POLL_INTERVAL_MS);
@@ -434,6 +449,9 @@ export function StatusProvider({ children }: { children: ReactNode }) {
         setEnv,
         bridgeFile,
         setBridgeFile,
+        pac,
+        setPac,
+        sitesBroken: !!pac?.supported && pac.enabled && !pac.active,
       }}
     >
       {children}
@@ -448,7 +466,7 @@ export function useStatus(): StatusContextValue {
 }
 
 /** Единая логика статуса для орба/логотипа/трея: loading/down/warn/ok.
-    warn — какой-то прокси пула не работает или нестабилен: мост жив, но
+    warn - какой-то прокси пула не работает или нестабилен: мост жив, но
     часть трафика (закреплённая за этим прокси) может стоять. */
 export function orbStateOf(status: ShimStatus | null, proxies: ProxyState[] = []): OrbState {
   if (status === null) return "loading";
@@ -458,7 +476,7 @@ export function orbStateOf(status: ShimStatus | null, proxies: ProxyState[] = []
 }
 
 export function formatUptime(sec?: number): string {
-  if (!sec || sec < 0) return "—";
+  if (!sec || sec < 0) return "-";
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);
   const s = sec % 60;

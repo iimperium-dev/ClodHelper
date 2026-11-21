@@ -7,7 +7,7 @@ import { isMac } from "../lib/platform";
 import { useStatus } from "../lib/status";
 import { cn } from "../lib/cn";
 
-/** Путь папки: виден целиком, по кнопке — в буфер обмена. */
+/** Путь папки: виден целиком, по кнопке - в буфер обмена. */
 function PathCopy({ path }: { path: string }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -44,7 +44,7 @@ const OpenSecurity = ({ label }: { label: string }) =>
     </button>
   );
 
-/** Шаги «добавить исключение» — общие для совета и для инструкции. */
+/** Шаги «добавить исключение» - общие для совета и для инструкции. */
 function ExclusionSteps({ dirs, start = 1, open = true }: { dirs: string[]; start?: number; open?: boolean }) {
   return (
     <li className="flex gap-2.5">
@@ -69,9 +69,9 @@ const Num = ({ n }: { n: number }) => (
 );
 
 /*
-  Файл моста удалил антивирус. «Восстановлен» — программа вернула мост
+  Файл моста удалил антивирус. «Восстановлен» - программа вернула мост
   сама; совет добавить исключение, чтобы не повторилось. «Удаляет снова» /
-  «нет копии» — инструкция по шагам с кнопками и «Проверить снова».
+  «нет копии» - инструкция по шагам с кнопками и «Проверить снова».
   Показывается на «Обзоре» и в «Прокси» (там чаще всего и всплывает).
 */
 export function BridgeFileNotice({ className }: { className?: string }) {
@@ -116,7 +116,7 @@ export function BridgeFileNotice({ className }: { className?: string }) {
                 Мост восстановлен
               </div>
               <p className="mt-1 text-[12px] leading-snug text-vb-silver">
-                Его файл удалил антивирус — Clod Helper вернул его из своей копии, всё работает. Чтобы не повторилось,
+                Его файл удалил антивирус - Clod Helper вернул его из своей копии, всё работает. Чтобы не повторилось,
                 добавьте папку моста в исключения антивируса.
               </p>
               <AnimatePresence initial={false}>
@@ -150,9 +150,9 @@ export function BridgeFileNotice({ className }: { className?: string }) {
               </div>
               <p className="mt-1 text-[12px] leading-snug text-vb-silver">
                 {bridgeFile.kind === "no_copy"
-                  ? "Удалён и мост, и его копия внутри Clod Helper — восстановить не из чего."
+                  ? "Удалён и мост, и его копия внутри Clod Helper - восстановить не из чего."
                   : "Clod Helper вернул файл моста, но антивирус сразу удалил его снова."}{" "}
-                Пока мост не работает, Claude без интернета — напрямую с вашего IP ничего не уходит.
+                Пока мост не работает, Claude без интернета - напрямую с вашего IP ничего не уходит.
               </p>
               <ol className="mt-2.5 space-y-2.5 text-[12px] leading-snug text-vb-silver">
                 <li className="flex gap-2.5">
@@ -164,7 +164,7 @@ export function BridgeFileNotice({ className }: { className?: string }) {
                       <>
                         Разрешите файл: «Защита от вирусов и угроз» → «Журнал защиты» → запись с{" "}
                         <span className="font-mono text-vb-fg">clod-bridge.exe</span> → «Действия» → «Восстановить».
-                        Другой антивирус — то же в его карантине.
+                        Другой антивирус - то же в его карантине.
                       </>
                     )}
                     <div>
@@ -177,8 +177,8 @@ export function BridgeFileNotice({ className }: { className?: string }) {
                   <Num n={3} />
                   <div className="min-w-0 flex-1">
                     {bridgeFile.kind === "no_copy"
-                      ? "Вернитесь и нажмите «Проверить снова». Не вышло — переустановите Clod Helper с сайта (исключение добавьте до установки)."
-                      : "Вернитесь и нажмите «Проверить снова» — Clod Helper восстановит и запустит мост."}
+                      ? "Вернитесь и нажмите «Проверить снова». Не вышло - переустановите Clod Helper с сайта (исключение добавьте до установки)."
+                      : "Вернитесь и нажмите «Проверить снова» - Clod Helper восстановит и запустит мост."}
                     <div className="mt-1.5">
                       <Button variant="primary" size="sm" onClick={() => void retry()} disabled={busy}>
                         {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}

@@ -5,10 +5,7 @@ import {
   ChevronDown,
   Copy,
   Loader2,
-  Pencil,
   Plus,
-  RefreshCw,
-  Trash2,
 } from "lucide-react";
 import { Button } from "../components/Button";
 import { CountryFlag } from "../components/CountryFlag";
@@ -22,10 +19,17 @@ import {
   proxyAssignmentsGet,
   proxyLabelsGet,
   proxyLabelSet,
+  proxySpeedtest,
 } from "../lib/api";
 import { ProxyInputField, useProxyInput } from "../components/ProxyInput";
 import { ProxyBackups } from "../components/ProxyBackups";
 import { BridgeFileNotice } from "../components/BridgeFileNotice";
+import {
+  ProxyPoolView,
+  type PoolActions,
+  type PoolRow,
+  type SpeedEntry,
+} from "../components/ProxyPoolViews";
 import { useStatus } from "../lib/status";
 import type { AppProfileStatus, ProxyCheckResult, ServiceGroup } from "../lib/types";
 import { fadeInUp, staggerContainer } from "../lib/motion";
@@ -45,20 +49,46 @@ const SERVICES: { id: ServiceGroup; name: string; sub: string }[] = [
 const MAX_POOL = 5;
 /** Кэш гео-проверок в localStorage: флаг и страна видны всегда, не только
     после ручного пинга (переживает перезапуски приложения).
-    v2: ключи — host:port (логин-пароль в localStorage не пишем). */
+    v2: ключи - host:port (логин-пароль в localStorage не пишем). */
 const GEO_CACHE_KEY = "clod-proxy-geo-v2";
 
-/** host:port из URL пула (без схемы и логина-пароля — эстетика и ключ кэша). */
+/** host:port из URL пула (без схемы и логина-пароля - эстетика и ключ кэша). */
 export function hostPort(url: string): string {
   const rest = url.includes("://") ? url.split("://")[1] : url;
   return rest.includes("@") ? rest.slice(rest.lastIndexOf("@") + 1) : rest;
 }
 
-/** Хост прокси без порта — так его показываем и копируем. */
+/** Хост прокси без порта - так его показываем и копируем. */
 export function hostOnly(url: string): string {
   const hp = hostPort(url);
   const colon = hp.lastIndexOf(":");
   return colon > 0 ? hp.slice(0, colon) : hp;
+}
+
+/** Последний замер скорости прокси: host:port → результат. Хранится, чтобы
+    цифра не пропадала при переходе между экранами и перезапуске. */
+const SPEED_CACHE_KEY = "clod-proxy-speed-v1";
+
+function loadSpeedCache(): Record<string, SpeedEntry> {
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(SPEED_CACHE_KEY) ?? "{}");
+    if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+    // Неудачный замер не помним: сбой был разовым (сеть, перезапуск моста),
+    // а «не замерить» потом висело бы у рабочего прокси неделями.
+    return Object.fromEntries(
+      Object.entries(v as Record<string, SpeedEntry>).filter(([, e]) => e && "mbps" in e),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function saveSpeedCache(cache: Record<string, SpeedEntry>) {
+  try {
+    localStorage.setItem(SPEED_CACHE_KEY, JSON.stringify(cache));
+  } catch {
+    /* ignore */
+  }
 }
 
 export function loadGeoCache(): Record<string, ProxyCheckResult> {
@@ -93,12 +123,12 @@ export function ProxySelect({ value, pool, labels, disabled, onChange }: SelectP
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
   const { proxies } = useStatus();
-  // Флаг и страна — из того же кэша гео, что на экране «Прокси»
+  // Флаг и страна - из того же кэша гео, что на экране «Прокси»
   // (перечитываем при открытии: там могли проверить новый прокси).
   const [geoTick, setGeoTick] = useState(0);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const geo = useMemo(() => loadGeoCache(), [open, geoTick]);
-  // Прокси без страны в кэше (экран «Прокси» ещё не открывали) — узнаём сейчас.
+  // Прокси без страны в кэше (экран «Прокси» ещё не открывали) - узнаём сейчас.
   useEffect(() => {
     if (!open) return;
     let alive = true;
@@ -127,7 +157,7 @@ export function ProxySelect({ value, pool, labels, disabled, onChange }: SelectP
     return () => window.removeEventListener("mousedown", close);
   }, [open]);
 
-  // IP без порта; один IP на разных портах — с портом, иначе неотличимы.
+  // IP без порта; один IP на разных портах - с портом, иначе неотличимы.
   const shown = (url: string) =>
     pool.filter((u) => hostOnly(u) === hostOnly(url)).length > 1 ? hostPort(url) : hostOnly(url);
   const titleOf = (url: string) => labels[url] || shown(url);
@@ -194,7 +224,7 @@ export function ProxySelect({ value, pool, labels, disabled, onChange }: SelectP
                     <div className={cn("truncate text-[13px] font-medium", selected ? "text-vb-fg" : "text-vb-silver")}>
                       {it.auto ? "Авто" : titleOf(it.url!)}
                     </div>
-                    {/* Как на экране «Прокси»: флаг, страна, IP, пинг. У «Авто» —
+                    {/* Как на экране «Прокси»: флаг, страна, IP, пинг. У «Авто» -
                         через какой прокси он идёт сейчас (основной). */}
                     <div className="mt-1 flex min-w-0 items-center gap-1.5 whitespace-nowrap text-[11px] leading-none text-vb-silver-faint">
                       {it.auto && <span className="shrink-0">сейчас</span>}
@@ -222,7 +252,7 @@ export function ProxySelect({ value, pool, labels, disabled, onChange }: SelectP
               );
             })}
             <div className="border-t border-vb-border/60 px-3 py-1.5 text-[10px] leading-snug text-vb-silver-faint">
-              «Авто» — основной, при падении — запасные. Конкретный прокси — строго он, IP не меняется
+              «Авто» - основной, при падении - запасные. Конкретный прокси - строго он, IP не меняется
             </div>
           </motion.div>
         )}
@@ -249,11 +279,33 @@ export function Proxies() {
   // Резервы прокси (URL прокси → резервы) и раскрытые строки пула.
   const [backups, setBackups] = useState<Record<string, string[]>>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  // Закреплённые за прокси приложения — для предупреждения о резервах.
+  // Закреплённые за прокси приложения - для предупреждения о резервах.
   const [apps, setApps] = useState<AppProfileStatus[]>([]);
 
   const [geo, setGeo] = useState<Record<string, ProxyCheckResult>>(loadGeoCache);
   const [geoBusy, setGeoBusy] = useState<Record<string, boolean>>({});
+
+  // Скорость: по кнопке, не автоматически - замер тратит трафик прокси.
+  const [speed, setSpeed] = useState<Record<string, SpeedEntry>>(loadSpeedCache);
+  const [speedBusy, setSpeedBusy] = useState<Record<string, boolean>>({});
+
+  const speedCheck = async (url: string) => {
+    const key = hostPort(url);
+    setSpeedBusy((b) => ({ ...b, [key]: true }));
+    let entry: SpeedEntry;
+    try {
+      const r = await proxySpeedtest(url);
+      entry = { mbps: r.mbps, at: Date.now() };
+    } catch (e) {
+      entry = { error: String(e), at: Date.now() };
+    }
+    setSpeed((old) => {
+      const next = { ...old, [key]: entry };
+      saveSpeedCache(next);
+      return next;
+    });
+    setSpeedBusy((b) => ({ ...b, [key]: false }));
+  };
 
   const [editingTag, setEditingTag] = useState<number | null>(null);
   const [tagInput, setTagInput] = useState("");
@@ -273,24 +325,24 @@ export function Proxies() {
     void load();
   }, [load]);
 
-  // Гео автоматом для записей без кэша — флаг виден всегда, не только
+  // Гео автоматом для записей без кэша - флаг виден всегда, не только
   // после ручной проверки.
   const geoCheck = useCallback(
     async (url: string) => {
       const key = hostPort(url);
       setGeoBusy((b) => ({ ...b, [key]: true }));
       try {
-        // Заодно — настоящая проверка всего пула: состояние (точка, пинг,
+        // Заодно - настоящая проверка всего пула: состояние (точка, пинг,
         // «не работает») обновляется вместе с гео, а не через 5 минут.
         const [r] = await Promise.all([checkProxy(url), refreshPoolPing()]);
-        if (!r) return; // нет ответа — не роняем страницу, просто без флага
-        // Прокси не ответил — страна от этого не поменялась: флаг из кэша
+        if (!r) return; // нет ответа - не роняем страницу, просто без флага
+        // Прокси не ответил - страна от этого не поменялась: флаг из кэша
         // оставляем, а «не работает» покажет состояние прокси.
         if (!r.reachable && !r.country_code) return;
         setGeo((old) => {
           const next = { ...old, [key]: r };
-          // Провал (гео-API недоступен, прокси моргнул) навсегда не кэшируем —
-          // иначе флаг «не появится никогда». В кэш — только удачные ответы,
+          // Провал (гео-API недоступен, прокси моргнул) навсегда не кэшируем -
+          // иначе флаг «не появится никогда». В кэш - только удачные ответы,
           // с прунингом по текущему пулу (записи удалённых прокси не копятся).
           if (r.reachable || r.country_code) {
             const keep = new Set([...(pool ?? []), ...Object.values(backups).flat()].map(hostPort));
@@ -308,7 +360,7 @@ export function Proxies() {
     [pool, backups],
   );
 
-  // Гео нового резерва (проверенного перед добавлением) — сразу в кэш.
+  // Гео нового резерва (проверенного перед добавлением) - сразу в кэш.
   const rememberGeo = (url: string, r: ProxyCheckResult) =>
     setGeo((old) => {
       const next = { ...old, [hostPort(url)]: r };
@@ -334,10 +386,10 @@ export function Proxies() {
       setPool(await proxiesSet(next));
       await refresh();
       await refreshPoolPing();
-      // Бэкенд перемапил индексы назначений по URL — перечитываем их состояние.
+      // Бэкенд перемапил индексы назначений по URL - перечитываем их состояние.
       setAssignments(await proxyAssignmentsGet().catch(() => ({})));
       setLabels(await proxyLabelsGet().catch(() => ({})));
-      // Резервы едут за своим прокси, удалённый уносит свои — перечитываем.
+      // Резервы едут за своим прокси, удалённый уносит свои - перечитываем.
       setBackups((await proxyBackupsGet().catch(() => null)) ?? {});
       return true;
     } catch (e) {
@@ -355,7 +407,7 @@ export function Proxies() {
       setError("Этот прокси уже в пуле");
       return;
     }
-    // Ввод чистим только при успехе — иначе пользователь перенабирает строку.
+    // Ввод чистим только при успехе - иначе пользователь перенабирает строку.
     if (await applyPool([...pool, parsed.url], "add")) {
       addInput.reset();
       setAdding(false);
@@ -383,7 +435,7 @@ export function Proxies() {
   /** Кто работает через прокси №i: сервисы ИИ и закреплённые приложения. */
   const usersOf = (i: number): string[] => {
     const names = SERVICES.filter((s) => s.id !== "telegram" && assignments[s.id] === i).map((s) => s.name);
-    // Claude без назначения в «весь трафик» и Claude Desktop — на основном.
+    // Claude без назначения в «весь трафик» и Claude Desktop - на основном.
     if (i === 0 && assignments.anthropic === undefined) names.push("Claude");
     for (const a of apps) if (!a.hidden && a.proxy === i) names.push(a.name);
     return [...new Set(names)];
@@ -433,6 +485,78 @@ export function Proxies() {
 
   const stateFor = (url: string) => proxies.find((p) => p.url === url);
 
+  // Модель строк пула - общая для всех трёх вариантов вида.
+  const rows: PoolRow[] = (pool ?? []).map((url, i) => {
+    const st = stateFor(url);
+    const key = hostPort(url);
+    const host = hostOnly(url);
+    const g = geo[key];
+    const pinnedHere = SERVICES.filter((s) => assignments[s.id] === i).map((s) => s.name);
+    const myBackups = backups[url] ?? [];
+    const cover = st?.coveredBy !== undefined ? proxies[st.coveredBy] : undefined;
+    const confirm =
+      confirmDel !== i
+        ? undefined
+        : pool!.length === 1
+          ? "Последний прокси - мост остановится, Claude останется без сети"
+          : `Удалить прокси?${pinnedHere.length ? ` ${pinnedHere.join(", ")} перейдут на «Авто».` : ""}${
+              myBackups.length ? ` Резервы (${myBackups.length}) удалятся вместе с ним.` : ""
+            }`;
+    return {
+      url,
+      i,
+      primary: i === 0,
+      tag: labels[url] || undefined,
+      shown: pool!.filter((u) => hostOnly(u) === host).length > 1 ? key : host,
+      host,
+      countryCode: g?.country_code ?? undefined,
+      countryName: g?.country_name ?? undefined,
+      geoBusy: !!geoBusy[key],
+      ms: st?.ms,
+      live: st?.state ?? "unknown",
+      reason: st?.reason,
+      coverHost: cover?.host,
+      speed: speed[key],
+      speedBusy: !!speedBusy[key],
+      backups: myBackups.length,
+      open: expanded.has(url),
+      confirm,
+    };
+  });
+
+  const poolActions: PoolActions = {
+    busy,
+    toggle: toggleExpanded,
+    speed: (url) => void speedCheck(url),
+    recheck: (url) => void geoCheck(url),
+    askDelete,
+    remove: (i) => void handleRemove(i),
+    cancelDelete: () => setConfirmDel(null),
+    makePrimary: (i) => void handleMakePrimary(i),
+    editing: editingTag,
+    tagInput,
+    setTagInput,
+    startEdit: startTagEdit,
+    saveTag: (url) => void saveTag(url),
+    cancelEdit: () => setEditingTag(null),
+    backupsPanel: (row) => (
+      <ProxyBackups
+        parent={row.url}
+        parentIndex={row.i}
+        backups={backups[row.url] ?? []}
+        states={proxies}
+        geo={geo}
+        geoBusy={geoBusy}
+        onRecheck={(u) => void geoCheck(u)}
+        onGeo={rememberGeo}
+        users={usersOf(row.i)}
+        existing={[...(pool ?? []), ...Object.values(backups).flat()]}
+        busy={busy !== null}
+        onSave={(list) => saveBackups(row.url, list)}
+      />
+    ),
+  };
+
 
   return (
     <motion.div
@@ -447,7 +571,7 @@ export function Proxies() {
             Прокси
           </h1>
           <p className="text-[12px] text-vb-silver-faint">
-            Основной работает всегда, запасные — если он упал. Резервы — по клику на прокси
+            Основной - для всего, у чего нет своего прокси.<br />Резервы - по клику на прокси
           </p>
         </div>
         {pool !== null && pool.length < MAX_POOL && (
@@ -469,18 +593,10 @@ export function Proxies() {
             className="overflow-hidden"
           >
             <div className="surface-card mt-4 p-4">
+              <div className="mb-3 text-[13px] font-semibold text-vb-fg">Новый прокси</div>
               <ProxyInputField input={addInput} autoFocus onEnter={() => void handleAdd()} />
 
-              <div className="mt-3 flex items-center gap-2">
-                <Button
-                  variant="primary"
-                  size="sm"
-                  onClick={handleAdd}
-                  disabled={!addInput.parsed || busy !== null}
-                >
-                  {busy === "add" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-                  {busy === "add" ? "Добавляю…" : "Добавить в пул"}
-                </Button>
+              <div className="mt-4 flex items-center justify-end gap-2">
                 <Button
                   variant="ghost"
                   size="sm"
@@ -492,14 +608,23 @@ export function Proxies() {
                 >
                   Отмена
                 </Button>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={handleAdd}
+                  disabled={!addInput.parsed || busy !== null}
+                >
+                  {busy === "add" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+                  {busy === "add" ? "Добавляю…" : "Добавить"}
+                </Button>
               </div>
             </div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Антивирус удалил мост — чаще всего всплывает здесь, при добавлении
-          прокси (мост перезапускается). Блок объясняет и ведёт по шагам —
+      {/* Антивирус удалил мост - чаще всего всплывает здесь, при добавлении
+          прокси (мост перезапускается). Блок объясняет и ведёт по шагам -
           ту же ошибку отдельной красной строкой не дублируем. */}
       <BridgeFileNotice className="mt-4" />
 
@@ -521,295 +646,7 @@ export function Proxies() {
             Прокси ещё не добавлены.
           </div>
         ) : (
-          <div className="surface-card divide-y divide-vb-border/70">
-            {pool.map((url, i) => {
-              const st = stateFor(url);
-              const ms = st?.ms;
-              const live = st?.state ?? "unknown";
-              const dot =
-                live === "down"
-                  ? st?.coveredBy !== undefined
-                    ? "bg-vb-warn" // упал, но подменён живым резервом
-                    : "bg-vb-loss"
-                  : live === "unstable" || live === "slow"
-                    ? "bg-vb-warn"
-                    : live === "ok"
-                      ? "bg-vb-emerald"
-                      : "bg-vb-silver-faint";
-              const gkey = hostPort(url);
-              const host = hostOnly(url);
-              const shown = pool.filter((u) => hostOnly(u) === host).length > 1 ? gkey : host;
-              const g = geo[gkey];
-              const gBusy = geoBusy[gkey];
-              const tag = labels[url];
-              // Назначенные на этот прокси сервисы: предупреждаем при удалении —
-              // их закрепление снимется (уйдут в «Авто»).
-              const pinnedHere = SERVICES.filter((s) => assignments[s.id] === i).map(
-                (s) => s.name,
-              );
-              const myBackups = backups[url] ?? [];
-              const open = expanded.has(url);
-              const cover = st?.coveredBy !== undefined ? proxies[st.coveredBy] : undefined;
-              return (
-                <div key={url} className={cn("transition-colors duration-200", open && "bg-vb-surface-2/25")}>
-                <div
-                  role="button"
-                  tabIndex={0}
-                  aria-expanded={open}
-                  title={open ? undefined : "Резервные прокси"}
-                  // Клик по строке (не по кнопкам и полям) — раскрыть резервы.
-                  onClick={(e) => {
-                    if ((e.target as HTMLElement).closest("button, input, a")) return;
-                    toggleExpanded(url);
-                  }}
-                  onKeyDown={(e) => {
-                    if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
-                      e.preventDefault();
-                      toggleExpanded(url);
-                    }
-                  }}
-                  className="group flex cursor-pointer items-center gap-3 px-4 py-3 outline-none transition-colors duration-150 hover:bg-vb-surface-2/40 focus-visible:bg-vb-surface-2/40"
-                >
-                  <span className={cn("h-2 w-2 shrink-0 rounded-full", dot)} />
-                  <div className="min-w-0 flex-1">
-                    {editingTag === i ? (
-                      <input
-                        type="text"
-                        value={tagInput}
-                        onChange={(e) => setTagInput(e.target.value)}
-                        onBlur={() => void saveTag(url)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") void saveTag(url);
-                          if (e.key === "Escape") setEditingTag(null);
-                        }}
-                        placeholder="Имя прокси (например, Немецкий)"
-                        className="w-full max-w-[220px] rounded-md border border-vb-emerald/50 bg-vb-surface-2 px-2 py-0.5 text-[13px] text-vb-fg outline-none"
-                        autoFocus
-                      />
-                    ) : (
-                      <div className="flex min-w-0 items-center gap-1.5">
-                        {/* Имя: карандаш — только при наведении на него */}
-                        {tag ? (
-                          <button
-                            type="button"
-                            onClick={() => startTagEdit(i, url)}
-                            title="Переименовать"
-                            className="group/name flex min-w-0 items-center rounded-md text-left"
-                          >
-                            <span className="truncate text-[13px] font-semibold text-vb-fg">{tag}</span>
-                            {/* В покое места не занимает — раскрывается при наведении */}
-                            <Pencil className="ml-0 h-3 w-0 shrink-0 text-vb-silver-faint opacity-0 transition-all group-hover/name:ml-1.5 group-hover/name:w-3 group-hover/name:opacity-100 group-focus-visible/name:ml-1.5 group-focus-visible/name:w-3 group-focus-visible/name:opacity-100" />
-                          </button>
-                        ) : (
-                          <>
-                            <CopyIp text={shown} copy={host} className="text-[13px] text-vb-fg" />
-                            <button
-                              type="button"
-                              onClick={() => startTagEdit(i, url)}
-                              title="Дать имя"
-                              aria-label="Дать имя"
-                              className="shrink-0 rounded-md p-0.5 text-vb-silver-faint opacity-0 transition-opacity hover:text-vb-silver focus-visible:opacity-100 group-hover:opacity-100"
-                            >
-                              <Pencil className="h-3 w-3" />
-                            </button>
-                          </>
-                        )}
-                        {/* «основной» — у основного; у остальных на его месте при
-                            наведении — «сделать основным» тем же бейджем */}
-                        {i === 0 ? (
-                          <span className="shrink-0 rounded-md border border-vb-emerald/30 bg-vb-emerald/[0.07] px-1.5 py-[3px] text-[10px] font-medium leading-none text-vb-emerald">
-                            основной
-                          </span>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => handleMakePrimary(i)}
-                            disabled={busy !== null}
-                            className="shrink-0 rounded-md border border-dashed border-vb-border px-1.5 py-[3px] text-[10px] font-medium leading-none text-vb-silver-dim opacity-0 transition-[opacity,color,border-color] hover:border-vb-emerald/40 hover:text-vb-emerald focus-visible:opacity-100 group-hover:opacity-100 disabled:pointer-events-none"
-                          >
-                            {busy === `primary:${i}` ? "…" : "сделать основным"}
-                          </button>
-                        )}
-                      </div>
-                    )}
-                    {/* Не работает / сбоит — причина прямо в строке, не молча */}
-                    {(live === "down" || live === "unstable") && st?.reason && (
-                      <div
-                        className={cn(
-                          "mt-1 text-[11px] leading-snug",
-                          live === "down" && !cover ? "text-vb-loss" : "text-vb-warn",
-                        )}
-                      >
-                        {live === "down" ? "Не работает: " : "Сбоит: "}
-                        {st.reason.charAt(0).toLowerCase() + st.reason.slice(1)}
-                        {cover && ` — подменяет резерв ${cover.host}`}
-                      </div>
-                    )}
-                    {/* Флаг и страна (кэш гео) · IP — копируется по клику · пинг · резервы */}
-                    {(tag || g?.country_code || gBusy || typeof ms === "number" || myBackups.length > 0) && (
-                      <div className="mt-1 flex min-w-0 items-center gap-1.5 whitespace-nowrap text-[11px] leading-none text-vb-silver-faint">
-                        {gBusy && !g ? (
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                        ) : g?.country_code ? (
-                          <span className="inline-flex shrink-0 items-center gap-1.5">
-                            <CountryFlag code={g.country_code} />
-                            {g.country_name ?? g.country_code}
-                          </span>
-                        ) : null}
-                        {tag && (g?.country_code || gBusy) && <span aria-hidden="true">·</span>}
-                        {tag && <CopyIp text={shown} copy={host} />}
-                        {/* Пинг — рядом с IP; у неработающего его нет: врать нельзя */}
-                        {live !== "down" && typeof ms === "number" && (
-                          <>
-                            {(tag || g?.country_code) && <span aria-hidden="true">·</span>}
-                            <span
-                              className={cn(
-                                "tnum font-mono",
-                                live === "slow" || live === "unstable" ? "text-vb-warn" : "text-vb-silver-dim",
-                              )}
-                            >
-                              {ms} мс
-                            </span>
-                          </>
-                        )}
-                        {myBackups.length > 0 && (
-                          <span
-                            className={cn(
-                              "ml-1 shrink-0 rounded-md border px-1.5 py-[3px] text-[10px] font-medium leading-none",
-                              cover
-                                ? "border-vb-warn/35 bg-vb-warn/[0.08] text-vb-warn"
-                                : "border-vb-border bg-vb-surface-2/60 text-vb-silver-dim",
-                            )}
-                          >
-                            {cover ? "работает резерв" : `+${myBackups.length} ${myBackups.length === 1 ? "резерв" : myBackups.length < 5 ? "резерва" : "резервов"}`}
-                          </span>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="flex shrink-0 items-center gap-1">
-                    {confirmDel === i && pool.length === 1 ? (
-                      /* Последний прокси: мост остановится, через него — без сети */
-                      <div className="flex items-center gap-1.5 rounded-lg border border-vb-loss/40 bg-vb-loss/[0.06] px-2 py-1">
-                        <span className="text-[12px] font-medium text-vb-loss">
-                          Последний — мост остановится, Claude будет без сети
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => void handleRemove(i)}
-                          disabled={busy !== null}
-                          className="rounded-md bg-vb-loss px-2 py-0.5 text-[11px] font-semibold text-white transition-colors hover:bg-vb-loss/85 active:scale-[0.96] disabled:opacity-40"
-                        >
-                          Удалить
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setConfirmDel(null)}
-                          className="rounded-md px-1.5 py-0.5 text-[11px] font-medium text-vb-silver-dim transition-colors hover:bg-vb-surface-2 hover:text-vb-silver"
-                        >
-                          Отмена
-                        </button>
-                      </div>
-                    ) : confirmDel === i ? (
-                      /* Подтверждение удаления — обязательное */
-                      <div className="flex items-center gap-1.5 rounded-lg border border-vb-loss/40 bg-vb-loss/[0.06] px-2 py-1">
-                        <span className="text-[12px] font-medium text-vb-loss">
-                          {pinnedHere.length
-                            ? `Удалить? ${pinnedHere.join(", ")} → Авто`
-                            : "Удалить?"}
-                          {myBackups.length > 0 && ` Резервы (${myBackups.length}) — тоже`}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => void handleRemove(i)}
-                          disabled={busy !== null}
-                          className="rounded-md bg-vb-loss px-2 py-0.5 text-[11px] font-semibold text-white transition-colors hover:bg-vb-loss/85 active:scale-[0.96] disabled:opacity-40"
-                        >
-                          Да
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setConfirmDel(null)}
-                          className="rounded-md px-1.5 py-0.5 text-[11px] font-medium text-vb-silver-dim transition-colors hover:bg-vb-surface-2 hover:text-vb-silver"
-                        >
-                          Отмена
-                        </button>
-                      </div>
-                    ) : (
-                      <>
-                        {/* Действия — при наведении на строку, в покое строка чистая */}
-                        <div className="flex items-center opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
-                          <button
-                            type="button"
-                            onClick={() => void geoCheck(url)}
-                            disabled={busy !== null || gBusy}
-                            className="rounded-lg p-1.5 text-vb-silver-faint transition-colors hover:bg-vb-surface-2 hover:text-vb-silver active:scale-[0.97] disabled:opacity-35"
-                            title="Перепроверить гео и доступность"
-                          >
-                            {gBusy ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <RefreshCw className="h-3.5 w-3.5" />
-                            )}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => askDelete(i)}
-                            disabled={busy !== null}
-                            className="rounded-lg p-1.5 text-vb-silver-faint transition-colors hover:bg-vb-loss/10 hover:text-vb-loss active:scale-[0.97] disabled:opacity-35"
-                            title="Убрать из пула"
-                          >
-                            {busy === `del:${i}` ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <Trash2 className="h-3.5 w-3.5" />
-                            )}
-                          </button>
-                        </div>
-                      </>
-                    )}
-                    {/* Раскрыть резервы */}
-                    <ChevronDown
-                      aria-hidden
-                      className={cn(
-                        "ml-0.5 h-3.5 w-3.5 shrink-0 text-vb-silver-faint transition-transform duration-200",
-                        open && "rotate-180",
-                      )}
-                    />
-                  </div>
-                </div>
-                {/* Резервы — разъезжаются вниз под строкой */}
-                <AnimatePresence initial={false}>
-                  {open && (
-                    <motion.div
-                      initial={{ height: 0, opacity: 0 }}
-                      animate={{ height: "auto", opacity: 1 }}
-                      exit={{ height: 0, opacity: 0 }}
-                      transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
-                      className="overflow-hidden"
-                    >
-                      <ProxyBackups
-                        parent={url}
-                        parentIndex={i}
-                        backups={myBackups}
-                        states={proxies}
-                        geo={geo}
-                        geoBusy={geoBusy}
-                        onRecheck={(u) => void geoCheck(u)}
-                        onGeo={rememberGeo}
-                        users={usersOf(i)}
-                        existing={[...pool, ...Object.values(backups).flat()]}
-                        busy={busy !== null}
-                        onSave={(list) => saveBackups(url, list)}
-                      />
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-                </div>
-              );
-            })}
-          </div>
+          <ProxyPoolView rows={rows} a={poolActions} />
         )}
       </motion.section>
 
@@ -817,7 +654,7 @@ export function Proxies() {
   );
 }
 
-/** IP прокси: при наведении — значок копирования, по клику — в буфер обмена. */
+/** IP прокси: при наведении - значок копирования, по клику - в буфер обмена. */
 export function CopyIp({ text, copy, className }: { text: string; copy: string; className?: string }) {
   const [copied, setCopied] = useState(false);
   const onCopy = async () => {
@@ -826,7 +663,7 @@ export function CopyIp({ text, copy, className }: { text: string; copy: string; 
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1200);
     } catch {
-      /* буфер обмена недоступен — молча */
+      /* буфер обмена недоступен - молча */
     }
   };
   return (
@@ -845,7 +682,7 @@ export function CopyIp({ text, copy, className }: { text: string; copy: string; 
       )}
     >
       <span className="truncate">{text}</span>
-      {/* Значок в покое места не занимает — иначе после IP висел пустой
+      {/* Значок в покое места не занимает - иначе после IP висел пустой
           отступ («72.56.129.22   · 58 мс»); раскрывается при наведении. */}
       {copied ? (
         <Check className="ml-1 h-3 w-3 shrink-0 text-vb-emerald" />

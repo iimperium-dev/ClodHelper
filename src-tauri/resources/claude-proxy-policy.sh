@@ -5,19 +5,19 @@
 #   /Library/Managed Preferences/com.anthropic.claudefordesktop.plist
 # (туда же кладёт значения MDM-профиль). Это маршрут, а не сетевая изоляция.
 #
-# Запись владения (что было до нас) — в защищённой root-папке:
+# Запись владения (что было до нас) - в защищённой root-папке:
 #   /Library/Application Support/ClodHelper/claude-proxy-policy.state
-# Допустимое исходное значение — только «ключа нет» или пустая строка: чужой
+# Допустимое исходное значение - только «ключа нет» или пустая строка: чужой
 # фиксированный прокси или PAC никогда не перезаписываются.
 #
 # Использование: sh claude-proxy-policy.sh Status|Enable|Disable|Restore
-# Enable/Disable/Restore требуют root. Результат — одна строка JSON в stdout.
+# Enable/Disable/Restore требуют root. Результат - одна строка JSON в stdout.
 #
 # Автовосстановление: macOS на машинах без MDM иногда стирает Managed
 # Preferences (после перезагрузки/обновления). Enable ставит системную службу
 # (LaunchDaemon), которая при загрузке и при любом изменении папки управляемых
 # настроек запускает этот же скрипт с Restore: если запись владения Helper есть,
-# а значение вернулось к исходному (ключа нет / пусто) — ставит наш прокси
+# а значение вернулось к исходному (ключа нет / пусто) - ставит наш прокси
 # обратно. Чужой прокси, PAC или изменённое вне Helper значение не трогает.
 # Копия скрипта для службы лежит в root-папке OWNER_DIR (пользовательский
 # процесс подменить её не может); Disable удаляет и службу, и копию.
@@ -89,7 +89,7 @@ status_json() {
 
 conflict_now() { status_json | grep -q '"conflict":"'; }
 
-# cfprefsd кэширует управляемые настройки — сбрасываем кэш после записи.
+# cfprefsd кэширует управляемые настройки - сбрасываем кэш после записи.
 flush_prefs() { /usr/bin/killall cfprefsd >/dev/null 2>&1 || true; }
 
 write_ours() {
@@ -105,7 +105,7 @@ write_ours() {
 }
 
 # Служба автовосстановления. Копию скрипта в OWNER_DIR кладёт вызывающий
-# (claude_policy.rs, в той же root-сессии) — без неё службу не ставим.
+# (claude_policy.rs, в той же root-сессии) - без неё службу не ставим.
 install_daemon() {
     [ -f "$SELF" ] || return 1
     /usr/sbin/chown root:wheel "$SELF" && /bin/chmod 755 "$SELF" || return 1
@@ -160,7 +160,7 @@ case "$ACTION" in
         case "$original" in absent|empty) ;; *) exit 0 ;; esac
         has_key egressProxyPacUrl && exit 0
         # Возвращаем ТОЛЬКО откат к исходному (macOS стёр настройку). Чужое
-        # значение («foreign») — чьё-то решение, его не трогаем.
+        # значение («foreign») - чьё-то решение, его не трогаем.
         [ "$(fixed_state)" = "$original" ] || exit 0
         write_ours
         exit 0
@@ -181,10 +181,10 @@ if [ "$ACTION" = Enable ]; then
     current=$(fixed_state)
     if [ "$(owner_original)" = none ]; then
         # Наше значение без записи владения (запись удалили вручную): исходным
-        # считаем «ключа не было» — иначе резервная копия была бы невалидной.
+        # считаем «ключа не было» - иначе резервная копия была бы невалидной.
         original=$current
         [ "$original" = ours ] && original=absent
-        # Сначала резервная копия, потом политика — сбой записи восстановим.
+        # Сначала резервная копия, потом политика - сбой записи восстановим.
         /bin/mkdir -p "$OWNER_DIR" && /bin/chmod 755 "$OWNER_DIR" || fail "Не удалось создать папку резервной копии политики Claude."
         printf 'ClodHelper 1 %s' "$original" > "$OWNER" || fail "Не удалось сохранить резервную копию политики Claude. Политика прокси не изменена."
         /bin/chmod 644 "$OWNER"
@@ -198,7 +198,7 @@ if [ "$ACTION" = Enable ]; then
     if install_daemon; then
         NOTICE="Готово. Перезапустите Claude Desktop (Cmd+Q и открыть снова). Если macOS сотрёт настройку, Clod Helper вернёт её сам."
     else
-        NOTICE="Готово. Перезапустите Claude Desktop (Cmd+Q и открыть снова). Автовосстановление не установилось — если настройка пропадёт, нажмите «Подключить» ещё раз."
+        NOTICE="Готово. Перезапустите Claude Desktop (Cmd+Q и открыть снова). Автовосстановление не установилось - если настройка пропадёт, нажмите «Подключить» ещё раз."
     fi
     status_json
     exit 0
@@ -216,7 +216,7 @@ if [ "$current" = ours ]; then
         # Add без значения создаёт пустую строку.
         "$PB" -c "Add :egressProxyUrl string" "$POLICY" >/dev/null 2>&1
     else
-        # Пустой файл управляемых настроек создавали мы — убираем его.
+        # Пустой файл управляемых настроек создавали мы - убираем его.
         if [ "$("$PB" -c "Print" "$POLICY" 2>/dev/null | tr -d ' \n')" = "Dict{}" ]; then
             /bin/rm -f "$POLICY"
         fi

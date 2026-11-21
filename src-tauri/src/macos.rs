@@ -3,11 +3,11 @@
 //!
 //! Аналоги Windows-механик:
 //! - Планировщик задач → LaunchAgent в `~/Library/LaunchAgents` (KeepAlive:
-//!   launchd сам перезапускает упавший мост — супервизор не нужен);
+//!   launchd сам перезапускает упавший мост - супервизор не нужен);
 //! - `.lnk` на рабочем столе → `<Имя> (proxy).app` со sh-скриптом внутри;
 //! - Mark of the Web → атрибут `com.apple.quarantine`.
 
-// На Windows модуль компилируется только в тестах — остальное там не нужно.
+// На Windows модуль компилируется только в тестах - остальное там не нужно.
 #![cfg_attr(target_os = "windows", allow(dead_code))]
 
 use std::path::{Path, PathBuf};
@@ -59,7 +59,7 @@ pub const BUNDLE_ID: &str = "ru.iimperium.clodhelper";
 pub struct Agent<'a> {
     pub label: &'a str,
     pub program_arguments: &'a [String],
-    /// Перезапускать при завершении (мост). false — одноразовый запуск при логине.
+    /// Перезапускать при завершении (мост). false - одноразовый запуск при логине.
     pub keep_alive: bool,
     pub stderr_log: Option<&'a Path>,
 }
@@ -73,14 +73,14 @@ pub fn write_agent_plist(path: &Path, agent: &Agent) -> Result<(), String> {
         .map(|a| format!("\t\t<string>{}</string>\n", xml_escape(a)))
         .collect();
     let keep_alive = if agent.keep_alive {
-        // ThrottleInterval 5 — тот же темп перезапуска, что у супервизора моста.
+        // ThrottleInterval 5 - тот же темп перезапуска, что у супервизора моста.
         "\t<key>KeepAlive</key>\n\t<true/>\n\t<key>ThrottleInterval</key>\n\t<integer>5</integer>\n"
     } else {
         ""
     };
     // AssociatedBundleIdentifiers: «Объекты входа» (macOS 13+) показывают
     // агент как часть Clod Helper, а не безымянный процесс. Мосту ещё и лимит
-    // дескрипторов: дефолтные 256 у launchd — это ~120 туннелей.
+    // дескрипторов: дефолтные 256 у launchd - это ~120 туннелей.
     let extra = if agent.keep_alive {
         "\t<key>SoftResourceLimits</key>\n\t<dict>\n\t\t<key>NumberOfFiles</key>\n\t\t<integer>4096</integer>\n\t</dict>\n"
     } else {
@@ -133,10 +133,10 @@ pub fn agent_state(label: &str) -> Option<String> {
     Some(if running { "Running" } else { "Ready" }.into())
 }
 
-/// Загрузить агент (с RunAtLoad он сразу стартует). Уже загруженный — не ошибка.
+/// Загрузить агент (с RunAtLoad он сразу стартует). Уже загруженный - не ошибка.
 ///
 /// Ретраи: сразу после bootout launchd ещё досносит службу, и bootstrap
-/// отвечает «5: Input/output error» — ровно сценарий «Перезапустить».
+/// отвечает «5: Input/output error» - ровно сценарий «Перезапустить».
 pub fn bootstrap(label: &str, plist: &Path) -> Result<(), String> {
     let mut last = String::new();
     for _ in 0..10 {
@@ -191,7 +191,7 @@ pub fn strip_quarantine(path: &Path) {
 }
 
 /// GUI-приложение, запущенное из Finder/Dock, получает урезанный PATH
-/// (`/usr/bin:/bin:/usr/sbin:/sbin`) — node/npm/claude из Homebrew или nvm не
+/// (`/usr/bin:/bin:/usr/sbin:/sbin`) - node/npm/claude из Homebrew или nvm не
 /// находятся. Берём PATH из login-шелла пользователя и добавляем типовые папки.
 pub fn fix_path_env() {
     let mut parts: Vec<String> = Vec::new();
@@ -215,7 +215,7 @@ pub fn fix_path_env() {
 }
 
 /// PATH из интерактивного login-шелла (`-ilc`: nvm/volta обычно живут в
-/// ~/.zshrc, не в ~/.zprofile). Жёсткий таймаут 3 с — тяжёлый или зависший
+/// ~/.zshrc, не в ~/.zprofile). Жёсткий таймаут 3 с - тяжёлый или зависший
 /// конфиг шелла не должен блокировать старт приложения. Маркеры отделяют
 /// PATH от того, что шелл печатает при старте (приветствия, oh-my-zsh).
 fn login_shell_path() -> Option<String> {
@@ -333,7 +333,7 @@ fn bundle_info(app: &Path, key: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-/// Создать «ярлык» — `.app`-обёртку с sh-скриптом `script_body` внутри.
+/// Создать «ярлык» - `.app`-обёртку с sh-скриптом `script_body` внутри.
 /// Иконку берём у целевого приложения (`icon_from`), если оно есть.
 /// Обёртка создаётся локально, поэтому карантина у неё нет и Gatekeeper её
 /// не трогает; подпись sh-скрипту не нужна.
@@ -388,7 +388,7 @@ pub fn create_app_wrapper(
     );
     std::fs::write(contents.join("Info.plist"), info)
         .map_err(|e| format!("write Info.plist: {e}"))?;
-    // Finder кэширует иконки бандлов — «трогаем» бандл, чтобы перечитал.
+    // Finder кэширует иконки бандлов - «трогаем» бандл, чтобы перечитал.
     let _ = Command::new("/usr/bin/touch").arg(dest).output();
     Ok(())
 }
@@ -411,7 +411,7 @@ mod tests {
         let once = replace_managed_block(user, B, E, Some("export A=1\n"));
         assert_eq!(once, format!("{user}\n{B}\nexport A=1\n{E}\n"));
         assert_eq!(replace_managed_block(&once, B, E, Some("export A=1\n")), once);
-        // Замена значения — один блок, не два.
+        // Замена значения - один блок, не два.
         let changed = replace_managed_block(&once, B, E, Some("export A=2"));
         assert_eq!(changed.matches(B).count(), 1);
         assert!(changed.contains("export A=2\n") && !changed.contains("A=1"));
@@ -475,7 +475,7 @@ mod tests {
         assert!(text.contains(&format!("<string>{BUNDLE_ID}</string>")));
         assert!(text.contains("<key>NumberOfFiles</key>\n\t\t<integer>4096</integer>"));
         assert!(!path.with_extension("plist.tmp").exists());
-        // Валидный plist: plutil — тот же парсер, что у launchd.
+        // Валидный plist: plutil - тот же парсер, что у launchd.
         #[cfg(target_os = "macos")]
         assert!(std::process::Command::new("/usr/bin/plutil")
             .args(["-lint", "-s"])

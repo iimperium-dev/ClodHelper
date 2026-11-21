@@ -14,7 +14,7 @@
     После установки команда `claude` доступна в любом терминале (PowerShell / cmd / VS Code).
 
 .PARAMETER ProxyUrl
-    URL прокси в формате http://login:pass@ip:port. Если не задан — спросит интерактивно.
+    URL прокси в формате http://login:pass@ip:port. Если не задан - спросит интерактивно.
 
 .PARAMETER SkipNodeInstall
     Не пытаться ставить Node.js (если уверен что он есть).
@@ -25,7 +25,7 @@
 
 .EXAMPLE
     .\claude-setup.ps1
-    Интерактивный режим — спросит прокси.
+    Интерактивный режим - спросит прокси.
 
 .EXAMPLE
     .\claude-setup.ps1 -ProxyUrl "http://login:pass@1.2.3.4:8000"
@@ -97,7 +97,7 @@ function Read-WithDefault {
 
 function Test-ProxyUrl {
     param([string]$Url)
-    # http://login:pass@ip:port — простой регексп.
+    # http://login:pass@ip:port - простой регексп.
     return $Url -match '^https?://[^:@]+:[^@]+@[\d\.\w\-]+:\d+/?$'
 }
 
@@ -135,7 +135,7 @@ if ($Uninstall) {
         & npm uninstall -g @anthropic-ai/claude-code 2>&1 | Out-Null
         Write-Ok "удалён"
     } catch {
-        Write-Warn "не удалось — возможно уже удалён"
+        Write-Warn "не удалось - возможно уже удалён"
     }
 
     Write-Step 2 3 "Сбрасываю HTTPS_PROXY / HTTP_PROXY..."
@@ -154,7 +154,7 @@ if ($Uninstall) {
 
     Write-Host ""
     Write-Host "Готово. Claude Code удалён." -ForegroundColor Green
-    Write-Host "Node.js не трогали — если хочешь удалить, через 'Установка и удаление программ'." -ForegroundColor DarkGray
+    Write-Host "Node.js не трогали - если хочешь удалить, через 'Установка и удаление программ'." -ForegroundColor DarkGray
     exit 0
 }
 
@@ -165,7 +165,7 @@ Write-Host "  Этот скрипт настроит Claude Code с прокси
 Write-Host "  Займёт 5-10 минут. Безопасно прервать Ctrl+C на любом шаге."
 Write-Host ""
 
-# Шаг 0 — получить прокси
+# Шаг 0 - получить прокси
 if (-not $ProxyUrl) {
     Write-Host "  Введи URL купленного HTTP-прокси:" -ForegroundColor Yellow
     Write-Host "    Формат: http://login:pass@ip:port" -ForegroundColor DarkGray
@@ -210,7 +210,7 @@ if ($nodeMajor -ge 18) {
         Write-Err "Node.js не найден, а -SkipNodeInstall задан."
         exit 1
     }
-    Write-Warn "не найден — открываю страницу скачивания..."
+    Write-Warn "не найден - открываю страницу скачивания..."
     Write-Host "        Скачай Windows Installer (.msi) с https://nodejs.org" -ForegroundColor Yellow
     Write-Host "        После установки перезапусти этот скрипт." -ForegroundColor Yellow
     Start-Process "https://nodejs.org/en/download"
@@ -235,7 +235,7 @@ $env:HTTP_PROXY = $ProxyUrl
 Write-Host "        Скачиваю с npm-registry (~30-90 секунд)..." -ForegroundColor DarkGray
 
 # Запускаем npm в фоне с захватом stdout/stderr в файлы. Не используем 2>&1
-# в pipe — npm с --loglevel=http пишет служебные строки в stderr, и под
+# в pipe - npm с --loglevel=http пишет служебные строки в stderr, и под
 # $ErrorActionPreference='Continue' (наша обёртка) ConvertFrom-Json трактует
 # их как exceptions, что роняет catch несмотря на успешный exit-code.
 $npmOut = [System.IO.Path]::GetTempFileName()
@@ -266,7 +266,7 @@ try {
         } elseif ($line -match '^npm (err|ERR)') {
             Write-Host "        $line" -ForegroundColor Red
         }
-        # Остальное пропускаем — http GET 304, fetch start, warn, etc.
+        # Остальное пропускаем - http GET 304, fetch start, warn, etc.
     }
 
     if ($exitCode -ne 0) {
@@ -313,11 +313,11 @@ try {
 Write-Step 4 5 "Проверяю что Anthropic API доступен через прокси..."
 
 try {
-    # /v1/messages без auth даст 401 — это означает что прокси работает,
-    # и API нас видит. ERR_TIMED_OUT / 502 — значит прокси мёртв или плохой.
+    # /v1/messages без auth даст 401 - это означает что прокси работает,
+    # и API нас видит. ERR_TIMED_OUT / 502 - значит прокси мёртв или плохой.
     # -Proxy ОБЯЗАТЕЛЕН: Invoke-WebRequest на PS 5.1 игнорирует env
-    # HTTP(S)_PROXY — без него запрос шёл НАПРЯМУЮ (ложный успех по гео-403,
-    # а при зарезанном DPI прямом коннекте — ложный провал установки).
+    # HTTP(S)_PROXY - без него запрос шёл НАПРЯМУЮ (ложный успех по гео-403,
+    # а при зарезанном DPI прямом коннекте - ложный провал установки).
     $resp = Invoke-WebRequest -Uri "https://api.anthropic.com/v1/messages" `
         -Method POST `
         -UseBasicParsing `
@@ -328,20 +328,20 @@ try {
 } catch [System.Net.WebException] {
     $code = [int]$_.Exception.Response.StatusCode
     if ($code -eq 401 -or $code -eq 403 -or $code -eq 400) {
-        Write-Ok "прокси работает (Anthropic вернул $code — без auth это норма)"
+        Write-Ok "прокси работает (Anthropic вернул $code - без auth это норма)"
     } elseif ($code -eq 0) {
         Write-Err "не удалось достучаться до Anthropic API"
-        Write-Host "        Проверь: прокси из России? Тогда не подойдёт — нужен зарубежный." -ForegroundColor Yellow
+        Write-Host "        Проверь: прокси из России? Тогда не подойдёт - нужен зарубежный." -ForegroundColor Yellow
         Write-Host "        Ошибка: $($_.Exception.Message)" -ForegroundColor DarkGray
         exit 1
     } else {
-        Write-Warn "API ответил $code — может быть прокси работает, но не гарантировано"
+        Write-Warn "API ответил $code - может быть прокси работает, но не гарантировано"
     }
 } catch {
     # Fallback для PowerShell 7+ где другой тип exception
     $msg = $_.Exception.Message
     if ($msg -match '401|403|400') {
-        Write-Ok "прокси работает (без auth Anthropic возвращает 4xx — норма)"
+        Write-Ok "прокси работает (без auth Anthropic возвращает 4xx - норма)"
     } else {
         Write-Err "не удалось достучаться: $msg"
         Write-Host "        Проверь что прокси нероссийский." -ForegroundColor Yellow
@@ -377,7 +377,7 @@ try {
     Write-Ok "ярлык создан"
 } catch {
     Write-Warn "не удалось создать ярлык: $_"
-    Write-Host "        Это не критично — Claude Code работает через команду 'claude' в терминале." -ForegroundColor DarkGray
+    Write-Host "        Это не критично - Claude Code работает через команду 'claude' в терминале." -ForegroundColor DarkGray
 }
 
 # ─── Бонус: скрипт переключения прокси ───────────────────────────
@@ -413,10 +413,10 @@ Write-Host "     'Claude Code' на рабочем столе."
 Write-Host ""
 Write-Host "  3. " -NoNewline; Write-Host "Запусти команду: claude" -ForegroundColor Yellow
 Write-Host "     При первом запуске спросит как залогиниться:"
-Write-Host "       • Claude.ai account — если есть подписка Pro/Max"
-Write-Host "       • Anthropic API key — если есть ключ с console.anthropic.com"
+Write-Host "       • Claude.ai account - если есть подписка Pro/Max"
+Write-Host "       • Anthropic API key - если есть ключ с console.anthropic.com"
 Write-Host ""
 Write-Host "  Резервный план:" -ForegroundColor DarkGray
-Write-Host "  Если основной прокси упадёт — поменяй на резервный командой:" -ForegroundColor DarkGray
+Write-Host "  Если основной прокси упадёт - поменяй на резервный командой:" -ForegroundColor DarkGray
 Write-Host "    powershell -File `"$switcherPath`" `"http://новый:прокси@ip:port`"" -ForegroundColor DarkGray
 Write-Host ""

@@ -2,13 +2,13 @@
     [ValidateSet('Status', 'Enable', 'Disable', 'Apply')][string]$Action = 'Status',
     [string]$Domain = '',
     [string]$Server = '',
-    # Apply: несколько браузеров одним окном UAC — домены через запятую.
+    # Apply: несколько браузеров одним окном UAC - домены через запятую.
     [string]$EnableDomains = '',
     [string]$DisableDomains = '',
     [string]$ResultPath = '',
     [switch]$LibraryOnly
 )
-# «Всегда через мост» для Chromium-браузеров (Windows) — то же, что
+# «Всегда через мост» для Chromium-браузеров (Windows) - то же, что
 # browser-proxy-policy.sh на macOS. Политика HKLM\SOFTWARE\Policies\<браузер>
 # главнее параметров запуска и расширений (FoxyProxy, SwitchyOmega): браузер
 # идёт через мост, даже открытый из меню «Пуск», а WebRTC не раскрывает IP.
@@ -16,15 +16,15 @@
 #   WebRtcIPHandling = disable_non_proxied_udp
 #
 # Прежние значения сохраняются в записи владения (HKLM\SOFTWARE\ClodHelper\
-# BrowserProxyPolicy, имя значения — домен браузера) ДО записи политики и
+# BrowserProxyPolicy, имя значения - домен браузера) ДО записи политики и
 # возвращаются при снятии. Чужая политика прокси (ProxySettings или прежние
 # ProxyMode/ProxyServer/ProxyPacUrl…) и чужой WebRtcIPHandling не
-# перезаписываются — это конфликт.
+# перезаписываются - это конфликт.
 #
 # Использование: browser-proxy-policy.ps1 -Action Status|Enable|Disable -Domain <домен> [-Server 127.0.0.1:порт] [-ResultPath файл]
-#   домен — com.google.Chrome | com.brave.Browser | com.microsoft.Edge | org.chromium.Chromium
+#   домен - com.google.Chrome | com.brave.Browser | com.microsoft.Edge | org.chromium.Chromium
 # Enable/Disable требуют прав администратора; Status читается без них.
-# Результат — одна строка JSON (в stdout или в файл -ResultPath).
+# Результат - одна строка JSON (в stdout или в файл -ResultPath).
 
 $ErrorActionPreference = 'Stop'
 $script:BrowserPolicyKeys = @{
@@ -36,11 +36,11 @@ $script:BrowserPolicyKeys = @{
 $script:BrowserOwnerKey = 'SOFTWARE\ClodHelper\BrowserProxyPolicy'
 $script:BrowserWebRtc = 'disable_non_proxied_udp'
 # Отдельные политики прокси прежних версий: ProxySettings их перекрывает,
-# поэтому любая из них — признак чужой настройки.
+# поэтому любая из них - признак чужой настройки.
 $script:BrowserLegacyProxy = @('ProxyMode', 'ProxyServerMode', 'ProxyServer', 'ProxyPacUrl', 'ProxyBypassList')
-$script:BrowserForeign = 'У браузера уже есть чужая политика прокси — Clod Helper её не меняет.'
+$script:BrowserForeign = 'У браузера уже есть чужая политика прокси - Clod Helper её не меняет.'
 
-# 64-битное представление реестра — даже из 32-битной оболочки.
+# 64-битное представление реестра - даже из 32-битной оболочки.
 function Read-BrowserRegistryValue([string]$Key, [string]$Name) {
     $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey('LocalMachine', 'Registry64')
     $handle = $null
@@ -102,9 +102,9 @@ function Remove-BrowserPolicyKeyIfEmpty([string]$Key) {
     }
 }
 
-# Server — вход моста «127.0.0.1:порт» (весь трафик через мост) или
+# Server - вход моста «127.0.0.1:порт» (весь трафик через мост) или
 # «pac:http://127.0.0.1:порт/proxy.pac» («Сайты» только в этом браузере:
-# через мост — сайты из списка, остальное напрямую по PAC моста).
+# через мост - сайты из списка, остальное напрямую по PAC моста).
 function Test-BrowserPac([string]$Server) {
     return ($Server -match '^pac:http://127\.0\.0\.1:\d{1,5}/proxy\.pac$')
 }
@@ -125,7 +125,7 @@ function Test-BrowserServer([string]$Server) {
 }
 
 # WebRtcIPHandling, который должен стоять при нашей политике. Весь трафик через
-# мост — запрет UDP мимо прокси (иначе WebRTC раскрывает IP). PAC — почти всё
+# мост - запрет UDP мимо прокси (иначе WebRTC раскрывает IP). PAC - почти всё
 # идёт напрямую, и запрет сломал бы звонки на обычных сайтах: оставляем
 # исходное значение (как при системной автонастройке «во всех браузерах»).
 function Test-BrowserWebRtcOurs($Value, $State) {
@@ -144,7 +144,7 @@ function Test-BrowserString($Value, [string]$Data) {
 }
 
 # Исходные значения, которые Enable вправе заменить (и потом вернуть):
-# ProxySettings — нет или пустая строка; WebRtcIPHandling — нет или уже наш.
+# ProxySettings - нет или пустая строка; WebRtcIPHandling - нет или уже наш.
 function Test-BrowserOriginal($Value, [string]$Name) {
     if ($null -eq $Value -or $Value.exists -isnot [bool]) { return $false }
     if (-not $Value.exists) { return $true }
@@ -196,7 +196,7 @@ function Get-BrowserPolicyStatus([string]$Domain) {
         configured = [bool]($ours -and $legacy.Count -eq 0)
         managed = [bool]($null -ne $state)
         conflict = $conflict
-        # Политики HKLM Windows не стирает — служба восстановления не нужна.
+        # Политики HKLM Windows не стирает - служба восстановления не нужна.
         auto_restore = $false
         server = $(if ($null -ne $state) { [string]$state.server } else { '' })
         notice = $null
@@ -212,25 +212,25 @@ function Enable-BrowserPolicy([string]$Domain, [string]$Server) {
     $webrtc = Read-BrowserRegistryValue $key 'WebRtcIPHandling'
     $state = Get-BrowserOwnedState $Domain
     if ($null -eq $state -or $state.server -cne $Server) {
-        # Новый вход моста у той же записи — исходные значения прежние.
+        # Новый вход моста у той же записи - исходные значения прежние.
         $original = $(if ($null -ne $state) { $state.original } else {
             [pscustomobject]@{ ProxySettings = $proxy; WebRtcIPHandling = $webrtc } })
         $state = [pscustomobject]@{ owner = 'ClodHelper'; version = 1; server = $Server; original = $original }
         $backup = [pscustomobject]@{ exists = $true; kind = 'String'; data = ($state | ConvertTo-Json -Depth 8 -Compress) }
-        # Сначала запись владения, потом политика — сбой записи восстановим.
+        # Сначала запись владения, потом политика - сбой записи восстановим.
         Write-BrowserRegistryValue $script:BrowserOwnerKey $Domain $backup
         if (-not (Test-BrowserValueEqual (Read-BrowserRegistryValue $script:BrowserOwnerKey $Domain) $backup)) {
             throw 'Не удалось сохранить запись владения. Политика браузера не изменена.'
         }
     }
-    # Кто-то изменил политику между проверкой и записью — не перетираем.
+    # Кто-то изменил политику между проверкой и записью - не перетираем.
     if (-not (Test-BrowserValueEqual (Read-BrowserRegistryValue $key 'ProxySettings') $proxy) -or
         -not (Test-BrowserValueEqual (Read-BrowserRegistryValue $key 'WebRtcIPHandling') $webrtc)) {
         throw 'Политика браузера изменилась во время настройки. Проверьте её перед повторной попыткой.'
     }
     Write-BrowserRegistryValue $key 'ProxySettings' ([pscustomobject]@{ exists = $true; kind = 'String'; data = (Get-BrowserProxySettings $Server) })
     if (Test-BrowserPac $Server) {
-        # PAC: WebRTC — как было до Clod Helper (переход с «весь трафик» тоже).
+        # PAC: WebRTC - как было до Clod Helper (переход с «весь трафик» тоже).
         if ($state.original.WebRtcIPHandling.exists) { Write-BrowserRegistryValue $key 'WebRtcIPHandling' $state.original.WebRtcIPHandling }
         else { Remove-BrowserRegistryValue $key 'WebRtcIPHandling' }
     } else {
@@ -239,8 +239,8 @@ function Enable-BrowserPolicy([string]$Domain, [string]$Server) {
     $status = Get-BrowserPolicyStatus $Domain
     if (-not $status.configured) { throw 'Не удалось подтвердить политику браузера. Запись владения сохранена.' }
     $status.notice = $(if (Test-BrowserPac $Server) {
-        'Готово. Перезапустите браузер — сайты из списка пойдут через прокси.'
-    } else { 'Готово. Перезапустите браузер — дальше он всегда идёт через мост.' })
+        'Готово. Перезапустите браузер - сайты из списка пойдут через прокси.'
+    } else { 'Готово. Перезапустите браузер - дальше он всегда идёт через мост.' })
     return $status
 }
 

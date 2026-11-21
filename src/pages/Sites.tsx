@@ -32,7 +32,7 @@ import {
   googleAdsSet,
 } from "../lib/api";
 import { useStatus } from "../lib/status";
-import type { BrowserProxyExtensions, BypassApp, SitesScope, SeenHost, SiteEntry, SitesStatus, SystemPacStatus } from "../lib/types";
+import type { BrowserProxyExtensions, BypassApp, SitesScope, SeenHost, SiteEntry, SitesStatus } from "../lib/types";
 import { fadeInUp, staggerContainer } from "../lib/motion";
 import { isMac } from "../lib/platform";
 import { cn } from "../lib/cn";
@@ -43,7 +43,7 @@ const BROWSERS = isMac ? "Chrome, Safari, Edge, Firefox и другие" : "Chro
 /** Вход сайтов моста (mirror tasks::SITES_PORT). */
 const SITES_SERVER = "127.0.0.1:8887";
 
-/** Готовые сайты: все домены, к которым они обращаются, — иначе часть
+/** Готовые сайты: все домены, к которым они обращаются, - иначе часть
     страницы (видео, картинки, вход) шла бы с настоящего IP. */
 const PRESETS: { name: string; domains: string[] }[] = [
   {
@@ -62,7 +62,7 @@ const PRESETS: { name: string; domains: string[] }[] = [
 /** Двухуровневые зоны, под которыми регистрируют домены (bbc.co.uk). */
 const SECOND_LEVEL = new Set(["co.uk", "org.uk", "com.au", "com.br", "co.jp", "com.ru", "co.in", "com.tr", "com.cn", "co.kr", "com.ua", "com.mx"]);
 
-/** Общие площадки: под ними живут тысячи чужих сервисов — добавлять всю
+/** Общие площадки: под ними живут тысячи чужих сервисов - добавлять всю
     зону нельзя (googleapis.com увёл бы в прокси весь Google), только адрес. */
 const SHARED = new Set([
   "googleapis.com", "gstatic.com", "googleusercontent.com", "cloudfront.net", "amazonaws.com",
@@ -80,7 +80,7 @@ function baseDomain(host: string): string {
   return SECOND_LEVEL.has(tail2) ? parts.slice(-3).join(".") : tail2;
 }
 
-/** Хост попадает под домен (сам домен или поддомен) — как матч в мосте. */
+/** Хост попадает под домен (сам домен или поддомен) - как матч в мосте. */
 function covers(domain: string, host: string): boolean {
   return host === domain || host.endsWith(`.${domain}`);
 }
@@ -101,13 +101,15 @@ function newId(): string {
 }
 
 /*
-  Сайты: через прокси идут только они (и AI-сервисы), остальное — напрямую.
+  Сайты: через прокси идут только они (и AI-сервисы), остальное - напрямую.
   Работает для Chromium-браузеров в режиме «Только сайты» (вход сайтов
   моста). Список применяется мостом на лету, без перезапуска. «Подсмотреть»
-  показывает, к каким ещё адресам обращается сайт, — их можно добавить.
+  показывает, к каким ещё адресам обращается сайт, - их можно добавить.
 */
 export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
-  const { refresh } = useStatus();
+  // Состояние автонастройки - общее: его сам следит StatusProvider, и сброс
+  // другой программой виден сразу, а не после перехода между экранами.
+  const { refresh, pac, setPac } = useStatus();
   const [sites, setSites] = useState<SiteEntry[] | null>(null);
   const [status, setStatus] = useState<SitesStatus | null>(null);
   const [pool, setPool] = useState<string[]>([]);
@@ -119,10 +121,9 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
   const [addInput, setAddInput] = useState("");
   const [open, setOpen] = useState<string | null>(null);
   const [peek, setPeek] = useState<string | null>(null);
-  const [pac, setPac] = useState<SystemPacStatus | null>(null);
   const [advanced, setAdvanced] = useState(false);
-  // Где работают сайты: false — во всех браузерах (системная автонастройка),
-  // true — только в выбранных (PAC их политикой). scopeView — что показано
+  // Где работают сайты: false - во всех браузерах (системная автонастройка),
+  // true - только в выбранных (PAC их политикой). scopeView - что показано
   // (выбор «только в выбранных» вступает в силу по «Применить»).
   const [scope, setScope] = useState<SitesScope | null>(null);
   const [scopeView, setScopeView] = useState(false);
@@ -139,7 +140,7 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
   const chooseScope = async (sel: boolean) => {
     if (sel === scopeView) return;
     if (sel || !scope?.selected) {
-      setScopeView(sel); // «Только в выбранных» — по «Применить»
+      setScopeView(sel); // «Только в выбранных» - по «Применить»
       return;
     }
     // Обратно «во всех»: снять политики с браузеров и включить автонастройку.
@@ -148,7 +149,7 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
     try {
       applyScopeState(await sitesScopeSet(false, []));
       setPac(await systemPacStatus().catch(() => null));
-      setNote("Сайты снова во всех браузерах — перезапустите браузеры, где они были выбраны");
+      setNote("Сайты снова во всех браузерах - перезапустите браузеры, где они были выбраны");
     } catch (e) {
       setError(String(e));
     } finally {
@@ -162,7 +163,7 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
     try {
       applyScopeState(await sitesScopeSet(true, [...draft]));
       setPac(await systemPacStatus().catch(() => null));
-      setNote("Готово — перезапустите выбранные браузеры. Остальные работают без Clod Helper");
+      setNote("Готово - перезапустите выбранные браузеры. Остальные работают без Clod Helper");
     } catch (e) {
       setError(String(e));
     } finally {
@@ -183,7 +184,7 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
     try {
       localStorage.setItem(DISMISSED_KEY, JSON.stringify([...next]));
     } catch {
-      /* приватный режим — просто не запоминаем */
+      /* приватный режим - просто не запоминаем */
     }
   };
 
@@ -200,7 +201,7 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
     if (sc) applyScopeState(sc);
   }, []);
 
-  // Человек ушёл отключать расширение в браузер и вернулся — перепроверить.
+  // Человек ушёл отключать расширение в браузер и вернулся - перепроверить.
   useEffect(() => {
     const onFocus = () => void sitesProxyExtensions().then(setExtensions).catch(() => {});
     window.addEventListener("focus", onFocus);
@@ -214,7 +215,7 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
     setNote(null);
     try {
       setPac(await systemPacSet(enable));
-      setNote(enable ? "Готово — браузеры подхватят за пару секунд" : "Выключено — системные настройки прокси возвращены");
+      setNote(enable ? "Готово - браузеры подхватят за пару секунд" : "Выключено - системные настройки прокси возвращены");
     } catch (e) {
       setError(String(e));
     } finally {
@@ -232,7 +233,7 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
   }, [loadStatus]);
 
   // Изменение видно сразу (тумблер щёлкает без ожидания ответа), при ошибке
-  // — откат. Пока идёт сохранение, повторные клики игнорируются, а не гасят
+  // - откат. Пока идёт сохранение, повторные клики игнорируются, а не гасят
   // все контролы: массовое «бледнение» на долю секунды и дёргало страницу.
   const busyRef = useRef(false);
   const save = async (next: SiteEntry[], key: string, done?: string) => {
@@ -256,7 +257,7 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
     }
   };
 
-  // Подсказка — всплывающая плашка: сама уходит и не двигает страницу.
+  // Подсказка - всплывающая плашка: сама уходит и не двигает страницу.
   useEffect(() => {
     if (!note && !error) return;
     const t = window.setTimeout(() => {
@@ -269,17 +270,17 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
   const addSite = async (name: string, domains: string[]) => {
     if (!sites) return;
     const site: SiteEntry = { id: newId(), name, domains, proxy: null, enabled: true };
-    if (await save([...sites, site], "add", `«${name}» — через прокси`)) {
+    if (await save([...sites, site], "add", `«${name}» - через прокси`)) {
       setAdding(false);
       setAddInput("");
       setOpen(site.id);
-      // Сайт без подключённого браузера не работает — а человек, добавивший
+      // Сайт без подключённого браузера не работает - а человек, добавивший
       // сайт, ждёт, что он заработает (в 0.8.0 «ничего не происходило»).
       // Включаем «Во всех браузерах» сами, если ничто не мешает: чужой
-      // прокси в Windows молча не заменяем — для него есть предупреждение.
+      // прокси в Windows молча не заменяем - для него есть предупреждение.
       if (pac?.supported && !pac.enabled && !pac.foreign && status?.supported && sitesBrowsers.length === 0 && !scope?.selected) {
         await togglePac(true);
-        setNote(`«${name}» — через прокси. Включил «Во всех браузерах»: сайты работают в Chrome, Edge и других`);
+        setNote(`«${name}» - через прокси. Включил «Во всех браузерах»: сайты работают в Chrome, Edge и других`);
       }
     }
   };
@@ -308,7 +309,7 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
   };
 
   /** Перевести браузер на вход сайтов. Политику «Всегда через мост», если
-      она стоит, переписываем на новый вход — иначе браузер остался бы на
+      она стоит, переписываем на новый вход - иначе браузер остался бы на
       старом (весь трафик). Это одно окно прав администратора. */
   const toSitesMode = async (id: string) => {
     setBusy(`browser:${id}`);
@@ -321,7 +322,7 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
         await browserPolicySet(id, true);
       }
       await loadStatus();
-      setNote("Готово — перезапустите браузер через мост («Приложения» → «Перезапустить»)");
+      setNote("Готово - перезапустите браузер через мост («Приложения» → «Перезапустить»)");
     } catch (e) {
       setError(String(e));
     } finally {
@@ -348,6 +349,8 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
   // Сайты работают, если стоит системный PAC или браузер закреплён в режиме
   // «Только сайты». Браузер «весь трафик» в счёт не идёт: он ходит через
   // мост, только когда открыт через Clod Helper.
+  // Включённую «Во всех браузерах» сбросила другая программа (VPN, клиент прокси).
+  const pacReset = !!pac?.supported && pac.enabled && !pac.active && !!sites?.some((x) => x.enabled);
   const notWired =
     !!status?.supported &&
     !!sites?.some((s) => s.enabled) &&
@@ -367,7 +370,7 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-[20px] font-semibold leading-tight tracking-[-0.02em] text-vb-fg">Сайты</h1>
-            {/* Предупреждения (расширения-перехватчики) — свёрнуты в кружок с числом */}
+            {/* Предупреждения (расширения-перехватчики) - свёрнуты в кружок с числом */}
             <AnimatePresence>
               {issues.length > 0 && (
                 <motion.button
@@ -387,7 +390,7 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
             </AnimatePresence>
           </div>
           <p className="text-[12px] text-vb-silver-faint">
-            Через прокси — только они и AI-сервисы, остальное напрямую
+            Через прокси - только они и AI-сервисы, остальное напрямую
           </p>
         </div>
         <Button variant="secondary" size="sm" onClick={() => setAdding((v) => !v)} disabled={sites === null}>
@@ -409,7 +412,7 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
           className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-vb-warn/35 bg-vb-warn/[0.05] px-4 py-3"
         >
           <p className="text-[12px] leading-snug text-vb-warn">
-            Вход сайтов в мосте не запущен. Обновите мост — это пара секунд
+            Вход сайтов в мосте не запущен. Обновите мост - это пара секунд
           </p>
           <Button variant="secondary" size="sm" onClick={handleBridgeUpdate} disabled={busy !== null}>
             {busy === "bridge" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCw className="h-3.5 w-3.5" />}
@@ -418,16 +421,25 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
         </motion.div>
       )}
 
-      {/* ── Сайты есть, но ни один браузер не подключён — они не работают ── */}
-      {notWired && (
+      {/* ── Сайты не работают (ни один браузер не подключён) или другая программа
+          сбросила «Во всех браузерах» - видно сразу, без раскрытия настроек.
+          Появляется само: за автонастройкой следит StatusProvider. ── */}
+      <AnimatePresence initial={false}>
+      {(notWired || pacReset) && (
         <motion.div
-          variants={fadeInUp}
+          key="pac-warn"
+          initial={{ opacity: 0, y: -6 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -6 }}
+          transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
           className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-vb-warn/35 bg-vb-warn/[0.05] px-4 py-3"
         >
           <p className="text-[12px] leading-snug text-vb-warn">
-            {pac?.enabled
-              ? `Сайты не работают: настройку сбросила другая программа${pac.foreign ? ` (${pac.foreign})` : ""}`
-              : "Сайты пока не работают — ни один браузер не подключён"}
+            {pacReset && !notWired
+              ? `Другая программа сбросила «Во всех браузерах»${pac?.foreign ? ` (${pac.foreign})` : ""} - сайты работают только в подключённых браузерах`
+              : pac?.enabled
+                ? `Сайты не работают: настройку сбросила другая программа${pac.foreign ? ` (${pac.foreign})` : ""}`
+                : "Сайты пока не работают - ни один браузер не подключён"}
           </p>
           {pac?.supported ? (
             <Button variant="secondary" size="sm" onClick={() => void togglePac(true)} disabled={busy !== null}>
@@ -441,6 +453,7 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
           )}
         </motion.div>
       )}
+      </AnimatePresence>
 
       {/* ── Расширения-перехватчики: по клику на кружок у заголовка ── */}
       <AnimatePresence initial={false}>
@@ -477,7 +490,7 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
                     setError(null);
                     try {
                       await sitesOpenExtension(b.path, e.id);
-                      setNote(`Открыл «${e.name}» в ${b.name} — отключите его и вернитесь сюда`);
+                      setNote(`Открыл «${e.name}» в ${b.name} - отключите его и вернитесь сюда`);
                     } catch (err) {
                       setError(String(err));
                     }
@@ -532,7 +545,7 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
               </form>
               {presetsLeft.length > 0 && (
                 <>
-                  <div className="mb-1.5 mt-3 text-[11px] text-vb-silver-faint">Готовые — со всеми адресами сайта</div>
+                  <div className="mb-1.5 mt-3 text-[11px] text-vb-silver-faint">Готовые - со всеми адресами сайта</div>
                   <div className="flex flex-wrap gap-1.5">
                     {presetsLeft.map((p) => (
                       <button
@@ -585,7 +598,7 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
           <div className="surface-card p-5 text-center">
             <div className="text-[13px] text-vb-silver">Сайтов пока нет</div>
             <div className="mt-1 text-[12px] text-vb-silver-faint">
-              Добавьте сайт, который должен открываться через прокси, — например, YouTube
+              Добавьте сайт, который должен открываться через прокси, - например, YouTube
             </div>
             {!adding && (
               <Button variant="secondary" size="sm" className="mt-3" onClick={() => setAdding(true)}>
@@ -677,12 +690,12 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
                   )}
                 >
                   {!status?.supported
-                    ? "Сначала обновите мост — кнопка выше"
+                    ? "Сначала обновите мост - кнопка выше"
                     : pac.enabled && pac.active
-                      ? `${BROWSERS}: сайты из списка — через прокси`
+                      ? `${BROWSERS}: сайты из списка - через прокси`
                       : pac.enabled
                         ? `Настройку сбросила другая программа${pac.foreign ? ` (${pac.foreign})` : ""}`
-                        : `${BROWSERS} — без настройки каждого браузера`}
+                        : `${BROWSERS} - без настройки каждого браузера`}
                 </div>
               </div>
               {pac.enabled && !pac.active ? (
@@ -701,13 +714,13 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
             </div>
             {!pac.enabled && pac.foreign && (
               <p className="px-4 py-2.5 text-[11px] leading-snug text-vb-warn">
-                В {isMac ? "macOS" : "Windows"} уже задан {pac.foreign}. Включение заменит его, выключение — вернёт как было
+                В {isMac ? "macOS" : "Windows"} уже задан {pac.foreign}. Включение заменит его, выключение - вернёт как было
               </p>
             )}
           </div>
           <p className="mt-2 px-1 text-[11px] leading-snug text-vb-silver-faint">
-            Каждый браузер перед каждым запросом спрашивает, идти ли через прокси, — это несколько
-            миллисекунд на запрос. Не нужно в каждом браузере — выберите «Только в выбранных»
+            Каждый браузер перед каждым запросом спрашивает, идти ли через прокси, - это несколько
+            миллисекунд на запрос. Не нужно в каждом браузере - выберите «Только в выбранных»
           </p>
           <BypassCard />
             </>
@@ -754,9 +767,9 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
                           <span className="block text-[13px] font-medium text-vb-fg">{b.name}</span>
                           <span className={cn("block truncate text-[11px]", b.state === "conflict" ? "text-vb-warn" : "text-vb-silver-faint")}>
                             {b.state === "pac"
-                              ? "Сайты из списка — через прокси"
+                              ? "Сайты из списка - через прокси"
                               : b.state === "bridge"
-                                ? "Весь трафик через мост — настроено в «Приложениях»"
+                                ? "Весь трафик через мост - настроено в «Приложениях»"
                                 : b.state === "conflict"
                                   ? b.conflict ?? "Чужая политика прокси"
                                   : "Без Clod Helper"}
@@ -788,7 +801,7 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
         </motion.section>
       )}
 
-      {/* ── Браузер (macOS: системной автонастройки пока нет — закрепление политикой) ── */}
+      {/* ── Браузер (macOS: системной автонастройки пока нет - закрепление политикой) ── */}
       {pac && !pac.supported && (
       <motion.section variants={fadeInUp} className="mt-6">
         <div className="mb-2 px-1">
@@ -805,7 +818,7 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
           ) : status.browsers.length === 0 ? (
             <div className="flex items-center justify-between gap-3 px-4 py-3">
               <span className="text-[12px] leading-snug text-vb-silver-faint">
-                Добавьте браузер в «Приложения» — через него и пойдут сайты
+                Добавьте браузер в «Приложения» - через него и пойдут сайты
               </span>
               <Button variant="secondary" size="sm" onClick={onOpenApps}>
                 Приложения
@@ -823,10 +836,10 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
                     )}
                   >
                     {b.mode === "sites"
-                      ? "Только сайты: AI и ваши сайты — через прокси"
+                      ? "Только сайты: AI и ваши сайты - через прокси"
                       : b.mode === "all"
-                        ? "Весь трафик через прокси — список сайтов не нужен"
-                        : "Только AI-сайты — обновите мост"}
+                        ? "Весь трафик через прокси - список сайтов не нужен"
+                        : "Только AI-сайты - обновите мост"}
                   </div>
                 </div>
                 {b.mode === "all" && status.supported && (
@@ -846,7 +859,7 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
           )}
         </div>
         <p className="mt-2 px-1 text-[11px] leading-snug text-vb-silver-faint">
-          Открывайте браузер через «Приложения» или включите в его настройках «Всегда через мост» — тогда
+          Открывайте браузер через «Приложения» или включите в его настройках «Всегда через мост» - тогда
           сайты пойдут через прокси, даже если браузер открыт из Dock
         </p>
       </motion.section>
@@ -876,14 +889,14 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
 
 /*
   «Не трогать эти браузеры»: программы, трафик которых Clod Helper не
-  трогает вовсе — мост узнаёт их по соединению и отпускает напрямую, с
-  настоящего IP. Правило — на папку программы: у антидетект-браузера
+  трогает вовсе - мост узнаёт их по соединению и отпускает напрямую, с
+  настоящего IP. Правило - на папку программы: у антидетект-браузера
   (1browser и т.п.) сразу на все профили, сколько их ни открой.
 */
 /*
   Реклама и счётчики Google (doubleclick, googlesyndication…) в браузерах с
   «Сайтами»: мост ведёт эти домены к себе и не выпускает. Рекламу внутри
-  роликов YouTube это не убирает — она идёт с тех же серверов, что и видео.
+  роликов YouTube это не убирает - она идёт с тех же серверов, что и видео.
 */
 function AdBlockCard() {
   const [on, setOn] = useState<boolean | null>(null);
@@ -915,7 +928,7 @@ function AdBlockCard() {
           <div className="text-[14px] font-semibold text-vb-fg">Блокировать рекламу Google</div>
           <div className="mt-px text-[11px] leading-snug text-vb-silver-faint">
             Рекламные сети и счётчики Google (DoubleClick, AdSense, Analytics) не загружаются. Рекламу внутри роликов
-            YouTube это не убирает — для неё нужен блокировщик в браузере
+            YouTube это не убирает - для неё нужен блокировщик в браузере
           </div>
         </div>
         <Toggle checked={on} disabled={saving} onChange={() => void toggle()} label="Блокировать рекламу Google" />
@@ -976,7 +989,7 @@ function BypassCard() {
         <div className="min-w-0">
           <div className="text-[14px] font-semibold text-vb-fg">Не трогать эти браузеры</div>
           <div className="mt-px text-[11px] leading-snug text-vb-silver-faint">
-            Их трафик идёт напрямую с вашего IP, как без Clod Helper. У антидетект-браузеров — сразу все профили
+            Их трафик идёт напрямую с вашего IP, как без Clod Helper. У антидетект-браузеров - сразу все профили
           </div>
         </div>
         <Button variant="secondary" size="sm" onClick={() => void openPicker()}>
@@ -1062,7 +1075,7 @@ function BypassCard() {
   );
 }
 
-/* ── Строка сайта: тумблер, прокси; по клику — адреса и действия ── */
+/* ── Строка сайта: тумблер, прокси; по клику - адреса и действия ── */
 function SiteRow({
   site,
   pool,
@@ -1113,7 +1126,7 @@ function SiteRow({
       <div className="flex items-center gap-3 px-4 py-3">
         <Toggle
           checked={site.enabled}
-          onChange={() => onUpdate({ enabled: !site.enabled }, site.enabled ? "Выключено — сайт идёт напрямую" : "Включено")}
+          onChange={() => onUpdate({ enabled: !site.enabled }, site.enabled ? "Выключено - сайт идёт напрямую" : "Включено")}
           label={`${site.name} через прокси`}
         />
         <div className="group/name min-w-0 flex-1">
@@ -1161,7 +1174,7 @@ function SiteRow({
             {site.domains.length > 1 && ` +${site.domains.length - 1}`}
           </button>
         </div>
-        {/* Место под индикатор занято всегда — появление не сдвигает строку */}
+        {/* Место под индикатор занято всегда - появление не сдвигает строку */}
         <Loader2 className={cn("h-4 w-4 shrink-0 animate-spin text-vb-silver-dim", !rowBusy && "invisible")} />
         <ProxySelect
           value={site.proxy ?? -1}
@@ -1227,7 +1240,7 @@ function SiteRow({
               {domainError && <p className="mt-1.5 text-[11px] text-vb-loss">{domainError}</p>}
               <p className="mt-1.5 text-[11px] text-vb-silver-faint">Поддомены входят сами: youtube.com покрывает m.youtube.com</p>
               <p className="mt-1 text-[11px] text-vb-silver-faint">
-                Сайт пишет «blocked» или не открывается? Выберите справа другой прокси — сайты иногда блокируют отдельные IP
+                Сайт пишет «blocked» или не открывается? Выберите справа другой прокси - сайты иногда блокируют отдельные IP
               </p>
               <div className="mt-3 flex items-center justify-between gap-2">
                 <Button variant="secondary" size="sm" onClick={onPeek} disabled={!site.enabled}>
@@ -1279,7 +1292,7 @@ interface HostGroup {
   related: boolean;
 }
 
-/** Реклама, аналитика и службы ОС: сайту для работы не нужны — всегда в «Прочее». */
+/** Реклама, аналитика и службы ОС: сайту для работы не нужны - всегда в «Прочее». */
 const NOISE = [
   "doubleclick.net", "google-analytics.com", "googletagmanager.com", "googlesyndication.com",
   "googleadservices.com", "adservice.google.com", "mc.yandex.ru", "analytics.tiktok.com", "hotjar.com",
@@ -1287,13 +1300,13 @@ const NOISE = [
   "bing.com", "windows.com", "office.net", "skype.com", "gvt1.com", "mozilla.net", "mozilla.com",
 ];
 
-/** Опознавательное слово сайта: «beatstars.com» → «beatstars» (короче 4 букв — не годится). */
+/** Опознавательное слово сайта: «beatstars.com» → «beatstars» (короче 4 букв - не годится). */
 function siteToken(site: SiteEntry): string | null {
   const t = baseDomain(site.domains[0] ?? "").split(".")[0] ?? "";
   return t.length >= 4 ? t : null;
 }
 
-/** Хосты, появившиеся раньше страницы сайта больше чем на это, — фон (другие вкладки). */
+/** Хосты, появившиеся раньше страницы сайта больше чем на это, - фон (другие вкладки). */
 const BEFORE_PAGE_MS = 1500;
 
 function PeekDialog({
@@ -1308,9 +1321,9 @@ function PeekDialog({
   site: SiteEntry;
   sites: SiteEntry[];
   browserReady: boolean;
-  /** Сайты идут через системный PAC: на время записи весь трафик — через мост. */
+  /** Сайты идут через системный PAC: на время записи весь трафик - через мост. */
   pacMode: boolean;
-  /** «Только в выбранных»: PAC браузера постоянный — видны только адреса из списка. */
+  /** «Только в выбранных»: PAC браузера постоянный - видны только адреса из списка. */
   limited?: boolean;
   onAdd: (domains: string[]) => Promise<boolean>;
   onClose: () => void;
@@ -1338,11 +1351,11 @@ function PeekDialog({
     setHosts([]);
     setPicked(new Set());
     try {
-      // С системным PAC адреса не из списка идут мимо моста — на время
-      // записи PAC ведёт через мост всё (решает мост: чужое — напрямую).
+      // С системным PAC адреса не из списка идут мимо моста - на время
+      // записи PAC ведёт через мост всё (решает мост: чужое - напрямую).
       if (pacMode) await sitesPeek(true);
-      // С чистого листа (reset): first_ms — когда адрес появился после
-      // старта записи. since в будущем — пустой список, но с часами моста.
+      // С чистого листа (reset): first_ms - когда адрес появился после
+      // старта записи. since в будущем - пустой список, но с часами моста.
       const r = await sitesHosts(Number.MAX_SAFE_INTEGER, true);
       setShowOther(false);
       setExpired(false);
@@ -1352,7 +1365,7 @@ function PeekDialog({
     }
   };
 
-  // Закрыли окно — запись кончилась, PAC обратно в обычный режим.
+  // Закрыли окно - запись кончилась, PAC обратно в обычный режим.
   useEffect(() => {
     if (mark === null || !pacMode) return;
     return () => void sitesPeek(false).catch(() => {});
@@ -1398,8 +1411,8 @@ function PeekDialog({
 
   /*
     Через мост во время записи идёт трафик ВСЕХ вкладок и программ. Нужные
-    сайту — те, что с его именем в адресе или появились вместе с его
-    страницей (не раньше её загрузки). Остальное — фон: в «Прочее».
+    сайту - те, что с его именем в адресе или появились вместе с его
+    страницей (не раньше её загрузки). Остальное - фон: в «Прочее».
   */
   const groups = useMemo<HostGroup[]>(() => {
     const token = siteToken(site);
@@ -1470,8 +1483,8 @@ function PeekDialog({
               {mark === null
                 ? "Начните запись, откройте сайт в браузере и полистайте его. Запись идёт до 3 минут"
                 : expired
-                  ? "Запись закончилась (3 минуты) — нажмите «Заново», чтобы записать ещё"
-                  : "Записываю — обновите страницу сайта и полистайте, адреса появятся здесь"}
+                  ? "Запись закончилась (3 минуты) - нажмите «Заново», чтобы записать ещё"
+                  : "Записываю - обновите страницу сайта и полистайте, адреса появятся здесь"}
             </div>
           </div>
           <button
@@ -1487,7 +1500,7 @@ function PeekDialog({
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4">
           {!browserReady && (
             <p className="mb-3 rounded-lg border border-vb-warn/35 bg-vb-warn/[0.05] px-3 py-2 text-[12px] leading-snug text-vb-warn">
-              Сайты не включены ни в одном браузере — запись будет пустой. Включите «Во всех браузерах» на
+              Сайты не включены ни в одном браузере - запись будет пустой. Включите «Во всех браузерах» на
               странице «Сайты»
             </p>
           )}
@@ -1517,7 +1530,7 @@ function PeekDialog({
             <>
               {pageAt === null && (
                 <p className="mb-3 rounded-lg bg-vb-surface-2/50 px-3 py-2 text-[12px] leading-snug text-vb-silver-dim">
-                  Обновите страницу {site.domains[0]} в браузере — по ней видно, какие адреса нужны сайту
+                  Обновите страницу {site.domains[0]} в браузере - по ней видно, какие адреса нужны сайту
                 </p>
               )}
               {related.length + own.length > 0 && (
@@ -1527,7 +1540,7 @@ function PeekDialog({
               )}
               {pageAt !== null && related.length === 0 && (
                 <p className="mt-2 px-1 text-[12px] text-vb-silver-faint">
-                  Других адресов, нужных сайту, пока нет — полистайте его, откройте видео или вход
+                  Других адресов, нужных сайту, пока нет - полистайте его, откройте видео или вход
                 </p>
               )}
               {other.length > 0 && (
@@ -1538,7 +1551,7 @@ function PeekDialog({
                     className="flex items-center gap-1.5 px-1 text-[12px] text-vb-silver-faint transition-colors hover:text-vb-silver"
                   >
                     <ChevronDown className={cn("h-3.5 w-3.5 transition-transform duration-200", showOther && "rotate-180")} />
-                    Прочее: {other.length} — другие вкладки, программы, реклама
+                    Прочее: {other.length} - другие вкладки, программы, реклама
                   </button>
                   {showOther && (
                     <div className="mt-2 divide-y divide-vb-border/60 overflow-hidden rounded-xl bg-vb-surface-2/50">

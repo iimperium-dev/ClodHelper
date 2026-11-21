@@ -29,6 +29,7 @@ import type {
   ProxyCheckResult,
   ProxyConfig,
   ProxyPing,
+  ProxySpeed,
   PythonInfo,
   ShimStatus,
   ShimTestResult,
@@ -82,7 +83,7 @@ export async function runInstall(params: {
   return invoke<void>("run_install", params);
 }
 
-/** Установка нового мастера одним вызовом (прогресс — событие "wizard:step"). */
+/** Установка нового мастера одним вызовом (прогресс - событие "wizard:step"). */
 export async function wizardInstall(proxyUrl: string): Promise<WizardInstallResult> {
   return invoke<WizardInstallResult>("wizard_install", { proxyUrl });
 }
@@ -134,7 +135,7 @@ export function appsIcons(paths: string[]): Promise<Record<string, string>> {
   return invoke<Record<string, string>>("apps_icons", { paths });
 }
 
-/** Настройки приложения: свой прокси (null — «Авто») и «весь трафик». */
+/** Настройки приложения: свой прокси (null - «Авто») и «весь трафик». */
 export function appsSettingsSet(
   id: string,
   proxy: number | null,
@@ -157,7 +158,7 @@ export function appsSearch(query: string): Promise<FoundApp[]> {
   return invoke<FoundApp[]>("apps_search", { query });
 }
 
-/** Через мост ли идёт каждое приложение — по живым соединениям (macOS). */
+/** Через мост ли идёт каждое приложение - по живым соединениям (macOS). */
 export function appsTraffic(): Promise<AppTraffic[]> {
   return invoke<AppTraffic[]>("apps_traffic");
 }
@@ -267,12 +268,12 @@ export async function bridgeHealth(): Promise<BridgeHealth> {
   return invoke<BridgeHealth>("bridge_health");
 }
 
-/** Установленный exe моста — легаси-python (без /healthz)? Кэшируется по mtime. */
+/** Установленный exe моста - легаси-python (без /healthz)? Кэшируется по mtime. */
 export async function bridgeExeLegacy(): Promise<boolean> {
   return invoke<boolean>("bridge_exe_legacy");
 }
 
-/** Автозапуск приложения при входе (Windows — реестр, macOS — SMAppService). */
+/** Автозапуск приложения при входе (Windows - реестр, macOS - SMAppService). */
 export async function autostartGet(): Promise<AutostartState> {
   return invoke<AutostartState>("autostart_get");
 }
@@ -297,7 +298,7 @@ export async function bridgeUpdate(): Promise<string> {
 
 // ─── Прокси-пул ──────────────────────────────────────────────────
 
-/** Пул прокси (1..5 URL, [0] — основной). */
+/** Пул прокси (1..5 URL, [0] - основной). */
 export async function proxiesGet(): Promise<string[]> {
   return invoke<string[]>("proxies_get");
 }
@@ -328,7 +329,7 @@ export function sitesSet(sites: SiteEntry[]): Promise<SiteEntry[]> {
   return invoke<SiteEntry[]>("sites_set", { sites });
 }
 
-/** «https://www.x.com/…» → «x.com»; null — не похоже на адрес сайта. */
+/** «https://www.x.com/…» → «x.com»; null - не похоже на адрес сайта. */
 export function sitesNormalize(input: string): Promise<string | null> {
   return invoke<string | null>("sites_normalize", { input });
 }
@@ -338,12 +339,12 @@ export function sitesStatus(): Promise<SitesStatus> {
 }
 
 /** «Подсмотреть»: хосты со входа сайтов с момента since (часы моста, мс). */
-/** reset — начать запись «Подсмотреть» с чистого листа. */
+/** reset - начать запись «Подсмотреть» с чистого листа. */
 export function sitesHosts(since: number, reset = false): Promise<SeenHosts> {
   return invoke<SeenHosts>("sites_hosts", { since, reset });
 }
 
-/** Запись «Подсмотреть»: на её время весь трафик браузеров — через мост. */
+/** Запись «Подсмотреть»: на её время весь трафик браузеров - через мост. */
 export function sitesPeek(active: boolean): Promise<void> {
   return invoke<void>("sites_peek", { active });
 }
@@ -353,7 +354,7 @@ export function sitesScopeGet(): Promise<SitesScope> {
   return invoke<SitesScope>("sites_scope_get");
 }
 
-/** selected=false — во всех; true — только в browsers (домены политик). Одно окно UAC. */
+/** selected=false - во всех; true - только в browsers (домены политик). Одно окно UAC. */
 export function sitesScopeSet(selected: boolean, browsers: string[]): Promise<SitesScope> {
   return invoke<SitesScope>("sites_scope_set", { selected, browsers });
 }
@@ -392,6 +393,11 @@ export function systemPacSet(enable: boolean): Promise<SystemPacStatus> {
   return invoke<SystemPacStatus>("system_pac_set", { enable });
 }
 
+/** Замер скорости одного прокси (качает до 25 МБ, до 8 с). */
+export function proxySpeedtest(url: string): Promise<ProxySpeed> {
+  return invoke<ProxySpeed>("proxy_speedtest", { url });
+}
+
 /** Лёгкий TCP-пинг всего пула (параллельно). */
 export async function proxiesPing(): Promise<ProxyPing[]> {
   return invoke<ProxyPing[]>("proxies_ping");
@@ -422,7 +428,7 @@ export async function proxyLabelsGet(): Promise<Record<string, string>> {
   return invoke<Record<string, string>>("proxy_labels_get");
 }
 
-/** Проблема с файлом моста (удалён антивирусом); null — всё в порядке. */
+/** Проблема с файлом моста (удалён антивирусом); null - всё в порядке. */
 export async function bridgeFileIssue(): Promise<BridgeFileIssue | null> {
   return invoke<BridgeFileIssue | null>("bridge_file_issue");
 }
@@ -447,7 +453,7 @@ export async function proxyBackupsGet(): Promise<Record<string, string[]>> {
   return invoke<Record<string, string[]>>("proxy_backups_get");
 }
 
-/** Задать резервы прокси (пустой список — убрать). Перезапускает мост. */
+/** Задать резервы прокси (пустой список - убрать). Перезапускает мост. */
 export async function proxyBackupsSet(parent: string, backups: string[]): Promise<Record<string, string[]>> {
   return invoke<Record<string, string[]>>("proxy_backups_set", { parent, backups });
 }
@@ -467,7 +473,7 @@ export async function showMainWindow(): Promise<void> {
   return invoke<void>("show_main_window");
 }
 
-/** Полный выход из приложения (мост продолжает работать — он отдельный процесс). */
+/** Полный выход из приложения (мост продолжает работать - он отдельный процесс). */
 export async function quitApp(): Promise<void> {
   return invoke<void>("quit_app");
 }
@@ -477,7 +483,7 @@ export function privacyCheck(): Promise<PrivacyReport> {
   return invoke<PrivacyReport>("privacy_check");
 }
 
-/** «Всегда через мост» у браузера; null — браузер без политик. */
+/** «Всегда через мост» у браузера; null - браузер без политик. */
 export function browserPolicyStatus(id: string): Promise<BrowserPolicyStatus | null> {
   return invoke<BrowserPolicyStatus | null>("browser_policy_status", { id });
 }
@@ -486,7 +492,7 @@ export function browserPolicySet(id: string, enable: boolean): Promise<BrowserPo
   return invoke<BrowserPolicyStatus>("browser_policy_set", { id, enable });
 }
 
-/** Новая версия Clod Helper (null — уже последняя). */
+/** Новая версия Clod Helper (null - уже последняя). */
 export function updateCheck(): Promise<UpdateInfo | null> {
   return invoke<UpdateInfo | null>("update_check");
 }
@@ -501,7 +507,7 @@ export function updateLatest(): Promise<UpdateInfo | null> {
   return invoke<UpdateInfo | null>("update_latest");
 }
 
-/** Клик по уведомлению (id — «update-X» или рассылка): главное окно + что нужно. */
+/** Клик по уведомлению (id - «update-X» или рассылка): главное окно + что нужно. */
 export function updateToastOpen(id?: string): Promise<void> {
   return invoke<void>("update_toast_open", { id: id ?? null });
 }
@@ -516,7 +522,7 @@ export function noticesRefresh(): Promise<void> {
   return invoke<void>("notices_refresh");
 }
 
-/** Отметить прочитанными; пустой список — все. */
+/** Отметить прочитанными; пустой список - все. */
 export function noticesMarkRead(ids: string[]): Promise<NoticeItem[]> {
   return invoke<NoticeItem[]>("notices_mark_read", { ids });
 }
@@ -534,7 +540,7 @@ export function playChime(): Promise<void> {
   return invoke<void>("play_chime");
 }
 
-/** «Отчёт для поддержки» — текст без паролей. */
+/** «Отчёт для поддержки» - текст без паролей. */
 export function diagnosticsReport(): Promise<string> {
   return invoke<string>("diagnostics_report");
 }
@@ -543,7 +549,7 @@ export function leakGuardStatus(): Promise<LeakGuardStatus> {
   return invoke<LeakGuardStatus>("leak_guard_status");
 }
 
-/** Пустой список — снять защиту. Mac попросит пароль. */
+/** Пустой список - снять защиту. Mac попросит пароль. */
 export function leakGuardSet(services: string[]): Promise<LeakGuardStatus> {
   return invoke<LeakGuardStatus>("leak_guard_set", { services });
 }
@@ -558,7 +564,7 @@ export async function claudeWipeRunning(): Promise<WipeRunning> {
   return invoke<WipeRunning>("claude_wipe_running");
 }
 
-/** Закрыть Claude и удалить данные аккаунта. exportChats — сначала архив чатов. */
+/** Закрыть Claude и удалить данные аккаунта. exportChats - сначала архив чатов. */
 export async function claudeWipeRun(
   includeDesktop: boolean,
   includeCode: boolean,

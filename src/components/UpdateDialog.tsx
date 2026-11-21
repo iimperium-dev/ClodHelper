@@ -22,9 +22,9 @@ const STEPS: { id: UpdateProgress["stage"]; title: string }[] = [
 ];
 
 /*
-  Окно обновления — одно на всё приложение (App shell). Открывается кнопкой
+  Окно обновления - одно на всё приложение (App shell). Открывается кнопкой
   «Обновить» в баннере или кликом по уведомлению в углу экрана. Показывает,
-  что нового, а после «Обновить» — живой ход установки: кольцо прогресса
+  что нового, а после «Обновить» - живой ход установки: кольцо прогресса
   скачивания и шаги. Пока идёт установка, окно не закрывается.
 */
 export function UpdateDialog() {
@@ -33,7 +33,7 @@ export function UpdateDialog() {
   const [progress, setProgress] = useState<UpdateProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [current, setCurrent] = useState("");
-  // Подписки ставятся один раз — текущая фаза читается через ref.
+  // Подписки ставятся один раз - текущая фаза читается через ref.
   const phaseRef = useRef<Phase>(phase);
   phaseRef.current = phase;
 
@@ -240,7 +240,7 @@ export function UpdateDialog() {
 function stageHint(p: UpdateProgress | null): string {
   switch (p?.stage) {
     case "verify":
-      return "Сверяю контрольную сумму — файл не подменён";
+      return "Сверяю контрольную сумму - файл не подменён";
     case "install":
       return "Ставлю новую версию на место старой";
     case "restart":
@@ -254,7 +254,7 @@ function stageHint(p: UpdateProgress | null): string {
   }
 }
 
-/** Логотип с расходящимися волнами — «есть что-то новое». */
+/** Логотип с расходящимися волнами - «есть что-то новое». */
 function PulseLogo() {
   return (
     <div className="relative grid h-16 w-16 place-items-center">
@@ -273,7 +273,7 @@ function PulseLogo() {
   );
 }
 
-/** C-монограмма (как BrandMark, но без статуса — не нужен StatusProvider). */
+/** C-монограмма (как BrandMark, но без статуса - не нужен StatusProvider). */
 export function LogoTile({ size }: { size: number }) {
   return (
     <svg viewBox="0 0 32 32" width={size} height={size} aria-hidden className="relative">
@@ -292,8 +292,8 @@ export function LogoTile({ size }: { size: number }) {
 }
 
 /*
-  Кольцо прогресса: при скачивании — точная доля (если размер известен),
-  на остальных шагах — бегущая дуга. Внутри — проценты или значок шага.
+  Кольцо прогресса: при скачивании - точная доля (если размер известен),
+  на остальных шагах - бегущая дуга. Внутри - проценты или значок шага.
 */
 function ProgressRing({ progress, failed }: { progress: UpdateProgress | null; failed: boolean }) {
   const R = 52;

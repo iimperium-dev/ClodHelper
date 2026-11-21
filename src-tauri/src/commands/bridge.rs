@@ -38,7 +38,7 @@ pub async fn bridge_task_status() -> crate::tasks::BridgeTaskStatus {
 pub async fn bridge_task_register() -> Result<crate::tasks::BridgeTaskStatus, String> {
     let url = settings::load()
         .proxy_url
-        .ok_or_else(|| "Прокси ещё не настроен — сначала сохраните его".to_string())?;
+        .ok_or_else(|| "Прокси ещё не настроен - сначала сохраните его".to_string())?;
     tokio::task::spawn_blocking(move || -> Result<crate::tasks::BridgeTaskStatus, String> {
         crate::tasks::register(&url)?;
         // Повторная настройка должна сразу восстановить мост, а не только
@@ -58,7 +58,7 @@ pub struct BridgeUpstreamHealth {
     pub healthy: bool,
     pub ok: u64,
     pub fail: u64,
-    /// Отказов подряд (мост 1.5.0+; у старых — 0).
+    /// Отказов подряд (мост 1.5.0+; у старых - 0).
     #[serde(default)]
     pub fail_streak: u64,
 }
@@ -89,10 +89,10 @@ pub struct BridgeHealth {
     pub last_errors: Vec<BridgeErrorEntry>,
 }
 
-/// Установленный мост — старый python-exe (без /healthz и --rules)?
+/// Установленный мост - старый python-exe (без /healthz и --rules)?
 /// Проба `--version` кэшируется по mtime exe. По этому флагу UI показывает
-/// «Обновить мост» — надёжнее, чем гадать по тексту ошибки healthz (старый
-/// мост может и таймаутить запрос, и вернуть мусор — зависит от upstream).
+/// «Обновить мост» - надёжнее, чем гадать по тексту ошибки healthz (старый
+/// мост может и таймаутить запрос, и вернуть мусор - зависит от upstream).
 #[tauri::command]
 pub async fn bridge_exe_legacy() -> Result<bool, String> {
     tokio::task::spawn_blocking(crate::tasks::bridge_exe_is_legacy)
@@ -101,7 +101,7 @@ pub async fn bridge_exe_legacy() -> Result<bool, String> {
 }
 
 /// Версии моста: установленного и встроенного в приложение. Если встроенный
-/// новее — UI предлагает «Обновить мост» (иначе после апдейта Clod Helper
+/// новее - UI предлагает «Обновить мост» (иначе после апдейта Clod Helper
 /// пользователь навсегда остался бы на старом мосте: exe копируется только
 /// мастером установки).
 #[derive(Debug, Serialize)]
@@ -147,13 +147,13 @@ pub async fn update_check(app: AppHandle) -> Result<Option<crate::updater::Updat
     Ok(found)
 }
 
-/// Последнее найденное обновление (без запроса к GitHub) — для окна-уведомления.
+/// Последнее найденное обновление (без запроса к GitHub) - для окна-уведомления.
 #[tauri::command]
 pub fn update_latest() -> Option<crate::updater::UpdateInfo> {
     crate::update_notify::latest()
 }
 
-/// Скачать, проверить SHA-256, поставить и перезапуститься. Ход —
+/// Скачать, проверить SHA-256, поставить и перезапуститься. Ход -
 /// событиями `update:progress` (окно обновления рисует по ним прогресс).
 #[tauri::command]
 pub async fn update_install(app: AppHandle, info: crate::updater::UpdateInfo) -> Result<(), String> {
@@ -182,7 +182,7 @@ pub fn update_toast_open(app: AppHandle, id: Option<String>) {
     crate::update_notify::open_from_toast(&app, &id);
 }
 
-/// Открыли окно или трей-попап — проверить рассылки (не чаще раза в минуту).
+/// Открыли окно или трей-попап - проверить рассылки (не чаще раза в минуту).
 #[tauri::command]
 pub async fn notices_refresh(app: AppHandle) {
     crate::update_notify::refresh_notices(&app, false).await;
@@ -197,7 +197,7 @@ pub async fn notices_list() -> Result<Vec<crate::notices::NoticeItem>, String> {
         .map_err(|e| format!("Внутренняя ошибка: {e}"))
 }
 
-/// Отметить прочитанными (пустой список — все).
+/// Отметить прочитанными (пустой список - все).
 #[tauri::command]
 pub async fn notices_mark_read(app: AppHandle, ids: Vec<String>) -> Result<Vec<crate::notices::NoticeItem>, String> {
     tokio::task::spawn_blocking(move || -> Result<Vec<crate::notices::NoticeItem>, String> {
@@ -239,7 +239,7 @@ pub async fn diagnostics_report() -> Result<String, String> {
         .map_err(|e| format!("Внутренняя ошибка: {e}"))
 }
 
-/// Проблема с файлом моста (удалён антивирусом и т.п.); None — всё в порядке.
+/// Проблема с файлом моста (удалён антивирусом и т.п.); None - всё в порядке.
 #[tauri::command]
 pub fn bridge_file_issue() -> Option<crate::bridge_file::Issue> {
     crate::bridge_file::issue()
@@ -251,7 +251,7 @@ pub fn bridge_file_dismiss() {
     crate::bridge_file::dismiss()
 }
 
-/// «Проверить снова»: человек разрешил файл / добавил исключение —
+/// «Проверить снова»: человек разрешил файл / добавил исключение -
 /// восстановить мост (даже если антивирус только что удалял) и запустить.
 #[tauri::command]
 pub async fn bridge_file_retry() -> Result<Option<crate::bridge_file::Issue>, String> {
@@ -265,7 +265,7 @@ pub async fn bridge_file_retry() -> Result<Option<crate::bridge_file::Issue>, St
 }
 
 /// Открыть «Безопасность Windows» → «Защита от вирусов и угроз» (журнал
-/// защиты и исключения — оттуда в один-два клика).
+/// защиты и исключения - оттуда в один-два клика).
 #[tauri::command]
 pub fn open_windows_security() -> Result<(), String> {
     #[cfg(target_os = "windows")]
@@ -284,13 +284,13 @@ pub fn open_windows_security() -> Result<(), String> {
 
 /// При запуске: встроенный мост новее установленного → обновить сразу.
 /// Без этого после обновления приложения мост оставался старым до ручного
-/// «Обновить мост» (а новые возможности — SOCKS, закреплённые входы —
+/// «Обновить мост» (а новые возможности - SOCKS, закреплённые входы -
 /// недоступны).
 pub(crate) async fn auto_update_bridge(app: AppHandle) {
     if !crate::tasks::is_registered() {
         return;
     }
-    // Правила новой версии (например, новые домены Claude) — сразу в мост.
+    // Правила новой версии (например, новые домены Claude) - сразу в мост.
     let rules_changed = tokio::task::spawn_blocking(crate::tasks::write_rules_file_if_changed)
         .await
         .ok()
@@ -298,7 +298,7 @@ pub(crate) async fn auto_update_bridge(app: AppHandle) {
         .is_some_and(|(_, changed)| changed);
     let Ok(v) = bridge_versions(app.clone()).await else { return };
     // Мост уже умеет сайты, но задача зарегистрирована со старыми
-    // аргументами (мост поставили поверх раньше, чем появились сайты) —
+    // аргументами (мост поставили поверх раньше, чем появились сайты) -
     // перерегистрировать: иначе браузер в режиме «только сайты» без сети.
     if !v.outdated && tokio::task::spawn_blocking(crate::tasks::sites_args_stale).await.unwrap_or(false) {
         let fixed = tokio::task::spawn_blocking(|| -> Result<(), String> {
@@ -336,7 +336,7 @@ pub async fn claude_wipe_scan() -> Result<crate::claude_wipe::Scan, String> {
         .map_err(|e| format!("Внутренняя ошибка: {e}"))
 }
 
-/// Запущены ли Claude Desktop и отдельный Claude Code — для частого опроса.
+/// Запущены ли Claude Desktop и отдельный Claude Code - для частого опроса.
 #[tauri::command]
 pub async fn claude_wipe_running() -> Result<crate::claude_wipe::Running, String> {
     tokio::task::spawn_blocking(crate::claude_wipe::running)
@@ -344,7 +344,7 @@ pub async fn claude_wipe_running() -> Result<crate::claude_wipe::Running, String
         .map_err(|e| format!("Внутренняя ошибка: {e}"))
 }
 
-/// Закрыть Claude и удалить данные аккаунта (с Claude Code и чатами — по
+/// Закрыть Claude и удалить данные аккаунта (с Claude Code и чатами - по
 /// флагам). С `export_chats` локальные чаты сначала сохраняются в архив.
 #[tauri::command]
 pub async fn claude_wipe_run(
@@ -376,7 +376,7 @@ pub fn claude_chats_export_progress() -> crate::claude_chats_export::Progress {
 #[tauri::command]
 pub fn reveal_in_folder(path: String) -> Result<(), String> {
     if !std::path::Path::new(&path).exists() {
-        return Err("Файл не найден — возможно, его переместили".into());
+        return Err("Файл не найден - возможно, его переместили".into());
     }
     #[cfg(target_os = "windows")]
     {

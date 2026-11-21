@@ -6,6 +6,7 @@ import {
   Check,
   ChevronDown,
   Eraser,
+  ExternalLink,
   Fingerprint,
   FolderOpen,
   Globe2,
@@ -14,6 +15,7 @@ import {
   Loader2,
   MessagesSquare,
   Monitor,
+  ScanSearch,
   ScrollText,
   SquareTerminal,
   UserRound,
@@ -52,7 +54,7 @@ function useExportProgress(active: boolean): number | null {
         const p = await claudeChatsExportProgress();
         if (!stop) setPct(p.active && p.total > 0 ? Math.min(100, (p.done / p.total) * 100) : null);
       } catch {
-        /* нет ответа — оставим прежнее значение */
+        /* нет ответа - оставим прежнее значение */
       }
     };
     void tick();
@@ -122,7 +124,7 @@ function plural(n: number, one: string, few: string, many: string): string {
 }
 
 const GROUPS: Record<WipeGroup, { label: string; sub: string; icon: typeof KeyRound; step: string }> = {
-  login: { label: "Вход в аккаунт", sub: "Куки и токены — Claude попросит войти заново", icon: KeyRound, step: "Удаляю вход и куки" },
+  login: { label: "Вход в аккаунт", sub: "Куки и токены - Claude попросит войти заново", icon: KeyRound, step: "Удаляю вход и куки" },
   device: {
     label: "Идентификаторы устройства",
     sub: "Постоянные id установки, по которым узнают этот компьютер",
@@ -137,10 +139,10 @@ const GROUPS: Record<WipeGroup, { label: string; sub: string; icon: typeof KeyRo
     step: "Отвязываю аккаунт",
   },
   logs: { label: "Журналы и отчёты об ошибках", sub: "В них почта и id аккаунта", icon: ScrollText, step: "Удаляю журналы" },
-  cache: { label: "Кэш", sub: "Страницы и графика — создастся заново", icon: HardDrive, step: "Очищаю кэш" },
+  cache: { label: "Кэш", sub: "Страницы и графика - создастся заново", icon: HardDrive, step: "Очищаю кэш" },
   chats: {
     label: "Локальные чаты и проекты",
-    sub: "Переписка Claude Code и задачи Cowork — безвозвратно",
+    sub: "Переписка Claude Code и задачи Cowork - безвозвратно",
     icon: MessagesSquare,
     step: "Удаляю локальные чаты",
   },
@@ -155,7 +157,7 @@ const reveal = {
   exit: { height: 0, opacity: 0, transition: { height: { duration: 0.24, ease: EASE }, opacity: { duration: 0.12 } } },
 };
 
-/** Подсказку с подробностями открываем при первом нажатии ластика — дальше можно не раскрывать. */
+/** Подсказку с подробностями открываем при первом нажатии ластика - дальше можно не раскрывать. */
 const SEEN_KEY = "clod.wipe.seen";
 const seenBefore = () => {
   try {
@@ -168,7 +170,7 @@ const markSeen = () => {
   try {
     localStorage.setItem(SEEN_KEY, "1");
   } catch {
-    /* приватный режим — просто откроем подробности ещё раз */
+    /* приватный режим - просто откроем подробности ещё раз */
   }
 };
 
@@ -190,7 +192,7 @@ function TargetRow({
   sub: string;
   checked: boolean;
   disabled?: boolean;
-  /** Включение необратимо (удаление чатов) — красный акцент. */
+  /** Включение необратимо (удаление чатов) - красный акцент. */
   danger?: boolean;
   onChange: (v: boolean) => void;
 }) {
@@ -282,7 +284,7 @@ function stepsFor(
   return steps;
 }
 
-/** Анимированная полоса: идёт по шагам, пока работает очистка; в конце — 100%. */
+/** Анимированная полоса: идёт по шагам, пока работает очистка; в конце - 100%. */
 function WipeProgress({
   steps,
   finished,
@@ -310,14 +312,14 @@ function WipeProgress({
       return;
     }
     if (exporting) {
-      // Архив — самая долгая часть: полоса идёт по его настоящему проценту
+      // Архив - самая долгая часть: полоса идёт по его настоящему проценту
       // внутри своего шага.
       const from = (92 * exportIdx) / steps.length;
       const span = 92 / steps.length;
       setP(Math.max(pRef.current, from + (span * (exportPct ?? 0)) / 100));
       return;
     }
-    // Доходим до ~92% за время, пропорциональное числу шагов, дальше — ждём
+    // Доходим до ~92% за время, пропорциональное числу шагов, дальше - ждём
     // ответ. Пока архив не начался, полоса не уходит дальше его шага.
     const cap = exportIdx >= 0 && !exportSeen ? (92 * exportIdx) / steps.length : 92;
     const from = Math.min(pRef.current, cap);
@@ -371,11 +373,11 @@ function WipeProgress({
 }
 
 /*
-  Очистка данных аккаунта Claude — чтобы следующий аккаунт вошёл как с
-  нового компьютера. Карточка свёрнута: заголовок и ластик справа. Ластик —
+  Очистка данных аккаунта Claude - чтобы следующий аккаунт вошёл как с
+  нового компьютера. Карточка свёрнута: заголовок и ластик справа. Ластик -
   подтверждение, затем полоса прогресса прямо в карточке. Нажатие на саму
   карточку раскрывает настройки: что очищать (Desktop / Code) и три
-  раскрывающихся пункта — что удалится, что останется, чего очистка не
+  раскрывающихся пункта - что удалится, что останется, чего очистка не
   меняет. При первом нажатии ластика подробности раскрываются сами.
 */
 function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
@@ -385,9 +387,9 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
   const [panel, setPanel] = useState<Panel | null>(null);
   const [desktopOn, setDesktopOn] = useState(true);
   const [codeOn, setCodeOn] = useState(true);
-  // Локальные чаты по умолчанию остаются: удаление — только осознанным выбором.
+  // Локальные чаты по умолчанию остаются: удаление - только осознанным выбором.
   const [chatsOn, setChatsOn] = useState(false);
-  // Перед удалением чатов — архив в «Загрузки» (по умолчанию включено).
+  // Перед удалением чатов - архив в «Загрузки» (по умолчанию включено).
   const [exportOn, setExportOn] = useState(true);
   const [phase, setPhase] = useState<Phase>("idle");
   const [steps, setSteps] = useState<string[]>([]);
@@ -410,7 +412,7 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
   useEffect(() => {
     alive.current = true;
     void load();
-    // Запущен ли Claude — меняется, пока человек читает. Опрашиваем только
+    // Запущен ли Claude - меняется, пока человек читает. Опрашиваем только
     // процессы: полный скан папок занимает секунды.
     const t = window.setInterval(() => {
       if (document.visibilityState !== "visible") return;
@@ -463,7 +465,7 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
   };
 
   const run = async () => {
-    // Звук «готово» сыграет позже — аудио разблокируем сейчас, на нажатии.
+    // Звук «готово» сыграет позже - аудио разблокируем сейчас, на нажатии.
     unlockWipeSound();
     const plan = stepsFor(scan, useDesktop, useCode, useChats, useExport);
     setSteps(plan);
@@ -474,7 +476,7 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
     const started = Date.now();
     try {
       const r = await claudeWipeRun(useDesktop, useCode, useChats, useExport);
-      // Полоса не должна проскочить за долю секунды — даём ей пройти шаги.
+      // Полоса не должна проскочить за долю секунды - даём ей пройти шаги.
       const minMs = 650 * plan.length * 0.8;
       const wait = Math.max(0, minMs - (Date.now() - started));
       await new Promise((ok) => setTimeout(ok, wait));
@@ -523,7 +525,7 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
 
   return (
     <motion.section variants={fadeInUp} className="surface-card overflow-hidden">
-      {/* ── Заголовок: по клику раскрывает настройки; справа — ластик ── */}
+      {/* ── Заголовок: по клику раскрывает настройки; справа - ластик ── */}
       <div className="flex items-center gap-3 p-3.5">
         <button
           type="button"
@@ -536,7 +538,7 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
           </span>
           <span className="min-w-0 flex-1">
             <span className="flex items-center gap-1.5">
-              <span className="text-[14px] font-semibold leading-tight text-vb-fg">Очистка аккаунта Claude</span>
+              <span className="text-[14px] font-semibold leading-tight text-vb-fg">Очистка локальных данных Claude</span>
               <ChevronDown
                 className={cn(
                   "h-3.5 w-3.5 text-vb-silver-faint transition-transform duration-300 group-hover:text-vb-silver",
@@ -548,7 +550,7 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
               {!scan
                 ? "Ищу данные Claude…"
                 : nothing
-                  ? "Уже чисто — следов прошлого аккаунта нет"
+                  ? "Уже чисто - следов прошлого аккаунта нет"
                   : `Следующий аккаунт войдёт как с нового компьютера · ${formatSize(total)}`}
             </span>
           </span>
@@ -559,7 +561,7 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
           disabled={!canWipe || busy}
           whileTap={{ scale: 0.92 }}
           title="Очистить"
-          aria-label="Очистить данные аккаунта Claude"
+          aria-label="Очистить локальные данные Claude"
           className={cn(
             "relative flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition-colors duration-200",
             "disabled:cursor-not-allowed disabled:opacity-35",
@@ -572,7 +574,7 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
         </motion.button>
       </div>
 
-      {/* ── Подтверждение / прогресс / результат — выезжают под заголовком ── */}
+      {/* ── Подтверждение / прогресс / результат - выезжают под заголовком ── */}
       <AnimatePresence initial={false} mode="wait">
         {phase === "confirm" && (
           <motion.div key="confirm" {...reveal} className="overflow-hidden">
@@ -596,7 +598,7 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
               {closesCli && (
                 <p className="mt-2.5 flex gap-1.5 pl-[26px] text-[11.5px] leading-snug text-vb-warn">
                   <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
-                  Claude Code {isMac ? "в Терминале" : "в терминале"} или редакторе тоже закроется — иначе он
+                  Claude Code {isMac ? "в Терминале" : "в терминале"} или редакторе тоже закроется - иначе он
                   запишет данные аккаунта обратно. Несохранённый ответ в нём прервётся.
                 </p>
               )}
@@ -626,7 +628,7 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
                 </motion.span>
                 <div className="min-w-0">
                   <div className="text-[13px] font-semibold text-vb-fg">
-                    Готово{result.removed_bytes > 0 ? ` — удалено ${formatSize(result.removed_bytes)}` : ""}
+                    Готово{result.removed_bytes > 0 ? ` - удалено ${formatSize(result.removed_bytes)}` : ""}
                   </div>
                   <div className="text-[11.5px] text-vb-silver-dim">
                     {result.closed_desktop ? "Claude был закрыт. " : ""}Откройте его и войдите в новый аккаунт
@@ -642,7 +644,7 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
                     Не удалось очистить {result.failed.length}{" "}
                     {plural(result.failed.length, "элемент", "элемента", "элементов")}
                   </span>{" "}
-                  — файл занят другой программой или повреждён. Закройте Claude и очистите ещё раз.
+                  - файл занят другой программой или повреждён. Закройте Claude и очистите ещё раз.
                   <ul className="mt-1.5 space-y-0.5 text-[11px] text-vb-silver-faint">
                     {result.failed.slice(0, 4).map((f) => (
                       <li key={f} className="truncate" title={f}>
@@ -839,8 +841,8 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
                                 <div className="text-[12px] leading-tight text-vb-loss">Локальные чаты и проекты</div>
                                 <div className="truncate text-[11px] leading-tight text-vb-silver-faint">
                                   {useExport
-                                    ? "Переписка Claude Code и задачи Cowork — сначала в архив"
-                                    : "Переписка Claude Code и задачи Cowork — безвозвратно"}
+                                    ? "Переписка Claude Code и задачи Cowork - сначала в архив"
+                                    : "Переписка Claude Code и задачи Cowork - безвозвратно"}
                                 </div>
                               </div>
                               {chatsBytes > 0 && (
@@ -869,7 +871,7 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
                                 Локальные чаты и задачи Cowork
                                 {scan.kept_sessions > 0 ? ` (${scan.kept_sessions})` : ""}
                               </span>{" "}
-                              — остаются на компьютере и вернутся при входе в прошлый аккаунт
+                              - остаются на компьютере и вернутся при входе в прошлый аккаунт
                             </span>
                           </li>
                         )}
@@ -877,7 +879,7 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
                           <li className="flex gap-2">
                             <Archive className="mt-px h-3.5 w-3.5 shrink-0 text-vb-emerald" strokeWidth={1.9} />
                             <span>
-                              <span className="text-vb-silver">Архив локальных чатов</span> — в папке «Загрузки»;
+                              <span className="text-vb-silver">Архив локальных чатов</span> - в папке «Загрузки»;
                               храните его отдельно от нового аккаунта
                             </span>
                           </li>
@@ -885,7 +887,7 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
                         <li className="flex gap-2">
                           <MessagesSquare className="mt-px h-3.5 w-3.5 shrink-0 text-vb-emerald" strokeWidth={1.9} />
                           <span>
-                            <span className="text-vb-silver">Облачные чаты и проекты</span> — они хранятся в самом
+                            <span className="text-vb-silver">Облачные чаты и проекты</span> - они хранятся в самом
                             аккаунте у Anthropic и остаются в нём
                           </span>
                         </li>
@@ -911,7 +913,7 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
                         </li>
                         <li>
                           <span className="text-vb-silver">Сам компьютер.</span> Имя компьютера, видеокарта, экран,
-                          процессор и система — их файлами не сменить. Отчёты Claude об ошибках с этими данными
+                          процессор и система - их файлами не сменить. Отчёты Claude об ошибках с этими данными
                           отсекает «Не отправлять телеметрию» в настройках Claude Desktop.
                         </li>
                         <li>
@@ -937,7 +939,7 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
 
 /*
   Архив локальных чатов: вся переписка Claude Code и Cowork с этого
-  компьютера — одним ZIP в «Загрузки», с README для агента. Ничего не
+  компьютера - одним ZIP в «Загрузки», с README для агента. Ничего не
   удаляет: удалить чаты можно в очистке (там архив сохраняется сам).
 */
 function ChatsArchiveCard() {
@@ -977,7 +979,7 @@ function ChatsArchiveCard() {
         <span className="min-w-0 flex-1">
           <span className="block text-[14px] font-semibold leading-tight text-vb-fg">Архив локальных чатов</span>
           <span className="mt-0.5 block truncate text-[12px] leading-snug text-vb-silver-faint">
-            Переписка Code и Cowork — ZIP в «Загрузки»
+            Переписка Code и Cowork - ZIP в «Загрузки»
           </span>
         </span>
         <Button variant="secondary" size="sm" onClick={() => void save()} disabled={phase === "working"}>
@@ -1010,7 +1012,7 @@ function ChatsArchiveCard() {
             <div className="mx-3.5 mb-3.5">
               <ArchiveSaved archive={archive} />
               <p className="mt-2 text-[11.5px] leading-snug text-vb-silver-dim">
-                Внутри — README с описанием, где что лежит. Распакуйте архив и попросите агента найти нужный чат.
+                Внутри - README с описанием, где что лежит. Распакуйте архив и попросите агента найти нужный чат.
               </p>
             </div>
           </motion.div>
@@ -1021,6 +1023,100 @@ function ChatsArchiveCard() {
               <div className="font-medium text-vb-loss">Не получилось</div>
               <p className="mt-0.5">{error}</p>
             </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.section>
+  );
+}
+
+const CLOD_SCAN_URL = "https://clodhelper.com/scan/";
+
+/** Строки примера в карточке Clod Scan - те же поля, что показывает закладка. */
+const SCAN_SAMPLE: { label: string; value: string }[] = [
+  { label: "Создан", value: "1 год 4 мес." },
+  { label: "Номер телефона", value: "подтверждён" },
+  { label: "Статус KYC", value: "верифицирован" },
+];
+
+/*
+  Clod Scan живёт закладкой в браузере: Claude Desktop не даёт подключиться
+  к своей сессии. Здесь - только рассказ, пример результата и ссылка на сайт.
+*/
+function ClodScanCard() {
+  const reduce = useReducedMotion();
+  const [expanded, setExpanded] = useState(false);
+  const open = () => void import("@tauri-apps/plugin-opener").then((m) => m.openUrl(CLOD_SCAN_URL));
+  return (
+    <motion.section variants={fadeInUp} className="surface-card mt-3 overflow-hidden">
+      <div className="flex items-center gap-3 p-3.5">
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          className="group flex min-w-0 flex-1 items-center gap-3 rounded-lg text-left"
+        >
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-vb-border bg-vb-surface-2 text-vb-silver transition-colors group-hover:border-vb-border-strong">
+            <ScanSearch className="h-[18px] w-[18px]" strokeWidth={1.8} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="flex items-center gap-1.5">
+              <span className="text-[14px] font-semibold leading-tight text-vb-fg">Clod Scan</span>
+              <ChevronDown
+                className={cn(
+                  "h-3.5 w-3.5 text-vb-silver-faint transition-transform duration-300 group-hover:text-vb-silver",
+                  expanded && "rotate-180",
+                )}
+              />
+            </span>
+            <span className="mt-0.5 block truncate text-[12px] leading-snug text-vb-silver-faint">
+              Регистрация, телефон и KYC - закладкой в браузере
+            </span>
+          </span>
+        </button>
+        <Button variant="secondary" size="sm" onClick={open}>
+          <ExternalLink className="h-3.5 w-3.5" />
+          На сайт
+        </Button>
+      </div>
+      <AnimatePresence initial={false}>
+        {expanded && (
+          <motion.div {...reveal} className="overflow-hidden">
+      <div className="relative mx-3.5 mb-3.5 overflow-hidden rounded-xl border border-vb-border bg-vb-surface-2/50 px-3 py-2.5">
+        {!reduce && (
+          <motion.span
+            aria-hidden
+            className="pointer-events-none absolute inset-x-0 h-8 bg-gradient-to-b from-transparent via-vb-emerald/[0.07] to-transparent"
+            initial={{ top: "-2rem" }}
+            animate={{ top: "100%" }}
+            transition={{ duration: 2.4, ease: "easeInOut", repeat: Infinity, repeatDelay: 2.6 }}
+          />
+        )}
+        <div className="mb-1.5 flex items-center justify-between">
+          <span className="text-[11px] text-vb-silver-faint">Пример результата</span>
+          <motion.span
+            initial={reduce ? false : { opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ delay: 0.75, type: "spring", stiffness: 380, damping: 24 }}
+            className="inline-flex items-center gap-1 rounded-full bg-vb-emerald/[0.12] px-2 py-0.5 text-[11px] font-medium text-vb-emerald"
+          >
+            <Check className="h-3 w-3" strokeWidth={2.4} />
+            Разрешено
+          </motion.span>
+        </div>
+        {SCAN_SAMPLE.map((r, i) => (
+          <motion.div
+            key={r.label}
+            initial={reduce ? false : { opacity: 0, x: -6 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ delay: 0.2 + i * 0.12, duration: 0.3 }}
+            className="flex items-center justify-between py-[3px] text-[12px]"
+          >
+            <span className="text-vb-silver-faint">{r.label}</span>
+            <span className="font-medium text-vb-fg">{r.value}</span>
+          </motion.div>
+        ))}
+      </div>
           </motion.div>
         )}
       </AnimatePresence>
@@ -1047,6 +1143,7 @@ export function Tools({ onOpenApps }: { onOpenApps: () => void }) {
       <div className="mt-5">
         <ClaudeWipeCard onOpenApps={onOpenApps} />
         <ChatsArchiveCard />
+        <ClodScanCard />
       </div>
     </motion.div>
   );

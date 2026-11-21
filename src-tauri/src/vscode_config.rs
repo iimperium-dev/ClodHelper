@@ -3,12 +3,12 @@
 //! Раньше хелпер прописывал `http.proxy` + `terminal.integrated.env.windows`,
 //! потому что прокси жил только в env дочерних процессов лаунчера, а VS Code
 //! пересобирает окружение терминала и env не наследовал. Теперь прокси
-//! доставляется глобальными User env-переменными (env_proxy.rs) — терминал
+//! доставляется глобальными User env-переменными (env_proxy.rs) - терминал
 //! VS Code наследует их сам, ключи в settings.json стали лишними дублями.
 //!
 //! Остался только `disable()`: убрать наши ключи у существующих установок
 //! (вызывается best-effort при включении глобального прокси). Чужие настройки
-//! не трогаем; JSONC (комментарии) не парсим — тогда просто выходим.
+//! не трогаем; JSONC (комментарии) не парсим - тогда просто выходим.
 
 use std::path::PathBuf;
 
@@ -54,7 +54,7 @@ pub fn disable() -> Result<bool, String> {
     }
     let text = std::fs::read_to_string(&path).unwrap_or_default();
     if !text.trim().is_empty() && serde_json::from_str::<Value>(&text).is_err() {
-        // JSONC — не трогаем.
+        // JSONC - не трогаем.
         return Ok(false);
     }
     let mut map = read_settings(&path);

@@ -1,9 +1,9 @@
 //! Windows: быстрые нативные запросы вместо PowerShell.
 //!
-//! Каждый запуск powershell.exe стоит 1–2 секунды (загрузка, проверка
-//! антивирусом), а статусы опрашиваются постоянно — интерфейс «грузился»
+//! Каждый запуск powershell.exe стоит 1-2 секунды (загрузка, проверка
+//! антивирусом), а статусы опрашиваются постоянно - интерфейс «грузился»
 //! секундами. Здесь то же самое за микро- и миллисекунды:
-//!   - TCP-соединения с PID (GetExtendedTcpTable) — статусы «через мост»;
+//!   - TCP-соединения с PID (GetExtendedTcpTable) - статусы «через мост»;
 //!   - реестр (winreg): политики Claude и браузеров, правила брандмауэра,
 //!     пакеты Store, обработчик ссылок tg://;
 //!   - иконки exe в PNG (SHDefExtractIcon + GDI).
@@ -17,7 +17,7 @@ use winreg::RegKey;
 // ─── TCP-соединения ─────────────────────────────────────────────
 
 /// Установленные TCP-соединения: (PID, удалённый адрес «ip:порт» или
-/// «[ipv6]:порт» — как в netstat).
+/// «[ipv6]:порт» - как в netstat).
 pub fn established_tcp() -> Vec<(u32, String)> {
     use windows_sys::Win32::NetworkManagement::IpHelper::{
         GetExtendedTcpTable, MIB_TCP6ROW_OWNER_PID, MIB_TCPROW_OWNER_PID, MIB_TCP_STATE_ESTAB,
@@ -27,7 +27,7 @@ pub fn established_tcp() -> Vec<(u32, String)> {
 
     let mut out = Vec::new();
     for family in [AF_INET, AF_INET6] {
-        // Таблица может вырасти между вызовами — несколько попыток с запасом.
+        // Таблица может вырасти между вызовами - несколько попыток с запасом.
         let mut buf: Vec<u32> = Vec::new();
         let mut size: u32 = 0;
         let mut ok = false;
@@ -72,7 +72,7 @@ pub fn established_tcp() -> Vec<(u32, String)> {
     out
 }
 
-/// Порт в таблице — в сетевом порядке байт в младших 16 битах.
+/// Порт в таблице - в сетевом порядке байт в младших 16 битах.
 fn port(raw: u32) -> u16 {
     u16::from_be(raw as u16)
 }
@@ -89,7 +89,7 @@ pub fn hkcu() -> RegKey {
     RegKey::predef(HKEY_CURRENT_USER)
 }
 
-/// 64-битное представление — как у PowerShell-скриптов (Registry64).
+/// 64-битное представление - как у PowerShell-скриптов (Registry64).
 fn open(root: &RegKey, path: &str) -> std::io::Result<RegKey> {
     root.open_subkey_with_flags(path, KEY_READ | KEY_WOW64_64KEY)
 }
@@ -105,7 +105,7 @@ pub fn value(root: &RegKey, path: &str, name: &str) -> RegValue {
     }
 }
 
-/// Строковое значение (REG_SZ / REG_EXPAND_SZ — как есть) или None.
+/// Строковое значение (REG_SZ / REG_EXPAND_SZ - как есть) или None.
 pub fn string(root: &RegKey, path: &str, name: &str) -> Option<String> {
     open(root, path).ok()?.get_value::<String, _>(name).ok()
 }
@@ -119,9 +119,9 @@ fn utf16_z(bytes: &[u8]) -> String {
     String::from_utf16_lossy(&words)
 }
 
-/// Правило брандмауэра Windows по имени (InstanceID) — строка вида
+/// Правило брандмауэра Windows по имени (InstanceID) - строка вида
 /// «v2.33|Action=Block|Active=TRUE|Dir=Out|…». Читается без прав
-/// администратора. Err — нет доступа к хранилищу правил.
+/// администратора. Err - нет доступа к хранилищу правил.
 pub fn firewall_rule(name: &str) -> Result<Option<String>, std::io::Error> {
     let key = open(
         &hklm(),
@@ -173,7 +173,7 @@ impl StorePackage {
     }
 }
 
-/// Установленные пакеты Store с этим именем (новые версии первыми) — из
+/// Установленные пакеты Store с этим именем (новые версии первыми) - из
 /// репозитория пакетов пользователя в реестре, без Get-AppxPackage.
 pub fn store_packages(name: &str) -> Vec<StorePackage> {
     let Ok(repo) = open(
@@ -211,7 +211,7 @@ pub(crate) fn manifest_app_in(xml: &str, exe_name: &str) -> Option<(String, Stri
         Some(tag[start..].split('"').next()?.to_string())
     };
     xml.split("<Application ").skip(1).find_map(|rest| {
-        // Пробел впереди — чтобы и первый атрибут искался как « Имя="».
+        // Пробел впереди - чтобы и первый атрибут искался как « Имя="».
         let tag = format!(" {}", rest.split('>').next()?);
         let tag = tag.as_str();
         let exe = attr(tag, "Executable")?;
@@ -224,7 +224,7 @@ pub(crate) fn manifest_app_in(xml: &str, exe_name: &str) -> Option<(String, Stri
 }
 
 /// Описание файла из ресурса версии (FileDescription): у Telegram и его
-/// копий под другим именем (второй аккаунт) — «Telegram Desktop».
+/// копий под другим именем (второй аккаунт) - «Telegram Desktop».
 pub fn file_description(path: &Path) -> Option<String> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW};
@@ -243,7 +243,7 @@ pub fn file_description(path: &Path) -> Option<String> {
         let key: Vec<u16> = sub.encode_utf16().chain(Some(0)).collect();
         let mut ptr: *mut core::ffi::c_void = std::ptr::null_mut();
         let mut len: u32 = 0;
-        // SAFETY: data — блок версии от GetFileVersionInfoW, ключ с нулём на конце.
+        // SAFETY: data - блок версии от GetFileVersionInfoW, ключ с нулём на конце.
         let ok = unsafe { VerQueryValueW(data.as_ptr().cast(), key.as_ptr(), &mut ptr, &mut len) };
         (ok != 0 && !ptr.is_null() && len > 0).then_some((ptr as *const u16, len as usize))
     };
@@ -267,7 +267,7 @@ pub fn file_description(path: &Path) -> Option<String> {
 // ─── Окна ───────────────────────────────────────────────────────
 
 /// Разрешить запускаемой программе вывести своё окно вперёд. Окно, которое
-/// пользователь только что нажал, — наше, и право на передний план есть у
+/// пользователь только что нажал, - наше, и право на передний план есть у
 /// нас; без передачи Windows может не пустить вперёд уже запущенную
 /// программу (только мигнёт её кнопкой на панели задач).
 pub fn allow_foreground() {
@@ -286,7 +286,7 @@ fn top_windows(pids: &[u32]) -> Vec<windows_sys::Win32::Foundation::HWND> {
         found: Vec<HWND>,
     }
     unsafe extern "system" fn each(hwnd: HWND, lparam: LPARAM) -> windows_sys::core::BOOL {
-        // SAFETY: lparam — указатель на Ctx, живой на время EnumWindows.
+        // SAFETY: lparam - указатель на Ctx, живой на время EnumWindows.
         let ctx = unsafe { &mut *(lparam as *mut Ctx) };
         let mut pid = 0u32;
         unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
@@ -303,10 +303,10 @@ fn top_windows(pids: &[u32]) -> Vec<windows_sys::Win32::Foundation::HWND> {
 
 /// Попросить программу закрыться так же, как это делает Windows, когда
 /// закрывает программы для обновления (Restart Manager): WM_QUERYENDSESSION,
-/// затем WM_ENDSESSION с ENDSESSION_CLOSEAPP — всем её окнам, и скрытым.
-/// В ответ программа сохраняет состояние целиком: Chrome — сессию со всеми
+/// затем WM_ENDSESSION с ENDSESSION_CLOSEAPP - всем её окнам, и скрытым.
+/// В ответ программа сохраняет состояние целиком: Chrome - сессию со всеми
 /// окнами (WM_CLOSE по окнам оставлял в ней только последнее закрытое),
-/// Telegram выходит, а не прячется в трей. false — программа отказалась
+/// Telegram выходит, а не прячется в трей. false - программа отказалась
 /// закрываться: ответила FALSE, зависла или не ответила за 3 секунды
 /// (спрашивает человека о несохранённом).
 pub fn end_session(pids: &[u32]) -> bool {
@@ -317,7 +317,7 @@ pub fn end_session(pids: &[u32]) -> bool {
     let windows = top_windows(pids);
     for &window in &windows {
         let mut answer: usize = 1;
-        // SAFETY: сообщение без указателей; зависшее окно — отказ без ожидания.
+        // SAFETY: сообщение без указателей; зависшее окно - отказ без ожидания.
         let sent = unsafe {
             SendMessageTimeoutW(
                 window,
@@ -329,7 +329,7 @@ pub fn end_session(pids: &[u32]) -> bool {
                 &mut answer,
             )
         };
-        // Окно, исчезнувшее после перечисления, — не отказ.
+        // Окно, исчезнувшее после перечисления, - не отказ.
         let refused = if sent == 0 {
             // SAFETY: просто код ошибки этого потока.
             let error = unsafe { GetLastError() };
@@ -343,7 +343,7 @@ pub fn end_session(pids: &[u32]) -> bool {
     }
     for &window in &windows {
         let mut answer: usize = 0;
-        // SAFETY: как выше; окно, чей процесс уже вышел, — просто ошибка.
+        // SAFETY: как выше; окно, чей процесс уже вышел, - просто ошибка.
         unsafe {
             SendMessageTimeoutW(
                 window,
@@ -361,8 +361,8 @@ pub fn end_session(pids: &[u32]) -> bool {
 
 // ─── Иконки ─────────────────────────────────────────────────────
 
-/// Иконка exe размером `size`×`size` в PNG (RGBA) — из ресурсов файла, без
-/// PowerShell. None — у файла нет своей иконки.
+/// Иконка exe размером `size`×`size` в PNG (RGBA) - из ресурсов файла, без
+/// PowerShell. None - у файла нет своей иконки.
 pub fn exe_icon_png(path: &str, size: u32) -> Option<Vec<u8>> {
     use windows_sys::Win32::Graphics::Gdi::{
         CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, GetObjectW, BITMAP, BITMAPINFO,
@@ -379,7 +379,7 @@ pub fn exe_icon_png(path: &str, size: u32) -> Option<Vec<u8>> {
         return None;
     }
     let mut info = ICONINFO::default();
-    // SAFETY: icon — действительная иконка; битмапы освобождаются ниже.
+    // SAFETY: icon - действительная иконка; битмапы освобождаются ниже.
     let pixels = unsafe {
         let got = if GetIconInfo(icon, &mut info) != 0 && !info.hbmColor.is_null() {
             let mut bm: BITMAP = std::mem::zeroed();
@@ -403,7 +403,7 @@ pub fn exe_icon_png(path: &str, size: u32) -> Option<Vec<u8>> {
             };
             let mut color = vec![0u8; (w * h * 4).max(0) as usize];
             if w > 0 && h > 0 && read(info.hbmColor, &mut color) {
-                // Старые иконки без альфа-канала: прозрачность — из маски.
+                // Старые иконки без альфа-канала: прозрачность - из маски.
                 if color.chunks_exact(4).all(|p| p[3] == 0) {
                     let mut mask = vec![0u8; color.len()];
                     if !info.hbmMask.is_null() && read(info.hbmMask, &mut mask) {

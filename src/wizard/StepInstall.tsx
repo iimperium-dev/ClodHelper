@@ -19,9 +19,9 @@ const PHASES: { id: string; label: string }[] = [
   { id: "task", label: "Автозапуск и старт моста" },
   { id: "env", label: "Системное проксирование" },
   { id: "presets", label: "Профили приложений" },
-  // macOS: Claude просит пароль Mac один раз. Telegram мастер не трогает —
+  // macOS: Claude просит пароль Mac один раз. Telegram мастер не трогает -
   // он подключается по выбору в «Приложениях».
-  ...(isMac ? [{ id: "claude", label: "Claude Desktop — macOS спросит пароль" }] : []),
+  ...(isMac ? [{ id: "claude", label: "Claude Desktop - macOS спросит пароль" }] : []),
   { id: "test", label: "Проверка соединения" },
 ];
 
@@ -30,8 +30,8 @@ type PhaseState = "pending" | "run" | "ok" | "err";
 /*
   Шаг 2 нового мастера: установка стартует сама, без кнопки. Всё делает одна
   Rust-команда wizard_install (существующие пути: мост из ресурсов, задача
-  Планировщика, env, пресеты, честный shim-тест) — легаси PS-скрипты и
-  проверки Node/Python отсюда исчезли. Прогресс — события "wizard:step".
+  Планировщика, env, пресеты, честный shim-тест) - легаси PS-скрипты и
+  проверки Node/Python отсюда исчезли. Прогресс - события "wizard:step".
 */
 export function StepInstall({ proxyUrl, onBack, onDone }: Props) {
   const [states, setStates] = useState<Record<string, PhaseState>>({});
@@ -60,7 +60,7 @@ export function StepInstall({ proxyUrl, onBack, onDone }: Props) {
       const state = e.payload.slice(idx + 1);
       setStates((s) => ({
         ...s,
-        // skip — приложения нет, шаг не нужен: показываем как выполненный.
+        // skip - приложения нет, шаг не нужен: показываем как выполненный.
         [phase]: state === "start" ? "run" : state === "ok" || state === "skip" ? "ok" : "err",
       }));
     });
@@ -85,7 +85,7 @@ export function StepInstall({ proxyUrl, onBack, onDone }: Props) {
       <div className="surface-card mt-5 divide-y divide-vb-border/60">
         {PHASES.map(({ id, label }) => {
           const st: PhaseState = states[id] ?? "pending";
-          // env — единственная нефатальная фаза: err здесь = «включите позже».
+          // env - единственная нефатальная фаза: err здесь = «включите позже».
           const softErr = id === "env" && st === "err";
           return (
             <div key={id} className="flex items-center gap-3 px-4 py-3">
@@ -117,7 +117,7 @@ export function StepInstall({ proxyUrl, onBack, onDone }: Props) {
                 {label}
                 {softErr && (
                   <span className="ml-2 text-[11px] text-vb-warn">
-                    не включилось — включается в «Приложениях» → Claude Desktop → ⚙
+                    не включилось - включается в «Приложениях» → Claude Desktop → ⚙
                   </span>
                 )}
               </span>

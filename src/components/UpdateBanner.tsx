@@ -19,13 +19,13 @@ function remember(r: UpdateInfo | null) {
 }
 
 /** Одна проверка за сеанс приложения (GitHub API не дёргаем на каждый заход).
-    Ошибку не кэшируем и не выдаём за «последнюю версию» — показываем её. */
+    Ошибку не кэшируем и не выдаём за «последнюю версию» - показываем её. */
 async function checkOnce(force: boolean): Promise<{ info: UpdateInfo | null; error: string | null }> {
   try {
     const cached = sessionStorage.getItem(SESSION_KEY);
     if (!force && cached) return { info: JSON.parse(cached) as UpdateInfo | null, error: null };
   } catch {
-    /* нет sessionStorage — просто проверим */
+    /* нет sessionStorage - просто проверим */
   }
   try {
     const r = await updateCheck();
@@ -39,7 +39,7 @@ async function checkOnce(force: boolean): Promise<{ info: UpdateInfo | null; err
 /*
   Обновление приложения: «Доступна версия X» → «Обновить» открывает окно
   обновления (UpdateDialog): что нового и живой ход установки.
-  compact — плашка для Обзора; иначе — блок для Настроек с ручной проверкой.
+  compact - плашка для Обзора; иначе - блок для Настроек с ручной проверкой.
 */
 export function UpdateBanner({ compact }: { compact?: boolean }) {
   const [info, setInfo] = useState<UpdateInfo | null>(null);
@@ -89,7 +89,7 @@ export function UpdateBanner({ compact }: { compact?: boolean }) {
             </div>
             <div className={cn("text-[12px]", error && !info ? "text-vb-warn" : "truncate text-vb-silver-faint")}>
               {info
-                ? "Посмотрите, что нового, — обновление в один клик"
+                ? "Посмотрите, что нового, - обновление в один клик"
                 : busy
                   ? "Проверяю…"
                   : error

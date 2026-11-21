@@ -1,6 +1,6 @@
-//! Killswitch через Windows Firewall — единственная НАСТОЯЩАЯ гарантия.
+//! Killswitch через Windows Firewall - единственная НАСТОЯЩАЯ гарантия.
 //!
-//! Почему не env-переменные: HTTP_PROXY/HTTPS_PROXY — вежливая просьба. curl,
+//! Почему не env-переменные: HTTP_PROXY/HTTPS_PROXY - вежливая просьба. curl,
 //! git, реальный python её уважают (fail-closed при мёртвом мосте), но Node.js
 //! глобальный `fetch` и PowerShell Invoke-WebRequest её ИГНОРИРУЮТ и текут
 //! напрямую под настоящим IP. Codex внутри тащит свой node → та же дыра.
@@ -10,8 +10,8 @@
 //! Механика fail-closed: вешаем outbound-BLOCK на каждый целевой процесс
 //! (Code.exe, ChatGPT.exe, node.exe, git.exe, python.exe, codex-рантайм).
 //! Ключевой факт Windows: трафик на loopback (127.0.0.0/8) файрволом НЕ
-//! фильтруется — заблокированный процесс всё равно достаёт локальный мост
-//! 127.0.0.1:8889, а мост уже сам решает, жив ли upstream. Если мост мёртв —
+//! фильтруется - заблокированный процесс всё равно достаёт локальный мост
+//! 127.0.0.1:8889, а мост уже сам решает, жив ли upstream. Если мост мёртв -
 //! процесс никуда не выйдет (нет обходного пути наружу) = fail-closed.
 //!
 //! Правила по ИМЕНИ процесса, не по пути: MSIX-приложения (Codex) живут по
@@ -24,7 +24,7 @@ use std::process::Command;
 
 use serde::Serialize;
 
-/// Префикс DisplayName всех наших правил — по нему находим и удаляем свои.
+/// Префикс DisplayName всех наших правил - по нему находим и удаляем свои.
 const RULE_PREFIX: &str = "ClodHelper Killswitch";
 /// Группа правил (для оптовых операций enable/remove).
 const RULE_GROUP: &str = "ClodHelper";
@@ -41,7 +41,7 @@ pub struct KillswitchStatus {
 }
 
 /// Прочитать фактическое состояние killswitch из Windows Firewall.
-/// Read-only (Get-NetFirewallRule) — прав администратора НЕ требует.
+/// Read-only (Get-NetFirewallRule) - прав администратора НЕ требует.
 pub fn status() -> KillswitchStatus {
     let script = format!(
         "$r = Get-NetFirewallRule -Group '{group}' -ErrorAction SilentlyContinue | \
@@ -78,22 +78,22 @@ pub fn status() -> KillswitchStatus {
 
 /// Включить killswitch: создать outbound-block правила для указанных программ.
 ///
-/// `program_paths` — уже РАЗРЕШЁННЫЕ полные пути к exe (Windows Firewall
+/// `program_paths` - уже РАЗРЕШЁННЫЕ полные пути к exe (Windows Firewall
 /// требует путь в `-Program`, имя процесса не принимает). Резолв имён процессов
-/// в пути делает `apps::resolve_process_paths` до вызова этой функции — включая
+/// в пути делает `apps::resolve_process_paths` до вызова этой функции - включая
 /// версионированный путь MSIX (Codex в WindowsApps), который пересобирается при
 /// каждом включении, поэтому апдейт Store не ломает killswitch.
 ///
-/// Граница по MSIX: правила по `-Program` надёжно матчат exe с обычным путём —
+/// Граница по MSIX: правила по `-Program` надёжно матчат exe с обычным путём -
 /// это ВСЕ сетевые дети агента Codex (node.exe, codex*.exe в WindowsApps), т.е.
 /// именно тот трафик, что реально ходит наружу. Главный Electron-процесс MSIX
 /// (ChatGPT.exe) под пакетной идентичностью в редких случаях требует правила по
-/// `-Package` SID — но егресс-риск несёт агентный рантайм, а он покрыт путём.
+/// `-Package` SID - но егресс-риск несёт агентный рантайм, а он покрыт путём.
 ///
 /// Требует прав администратора → выполняется через elevated PowerShell (UAC).
 pub fn enable(program_paths: &[String]) -> Result<(), String> {
     if program_paths.is_empty() {
-        return Err("Нет процессов для блокировки — включите хотя бы одно приложение".into());
+        return Err("Нет процессов для блокировки - включите хотя бы одно приложение".into());
     }
 
     // Собираем один PS-скрипт: сначала чистим свои старые правила (идемпотентность),
@@ -139,7 +139,7 @@ pub fn disable() -> Result<(), String> {
 
 /// Выполнить PS-скрипт БЕЗ elevation (read-only статус). Возвращает stdout.
 fn run_ps_capture(script: &str) -> Option<String> {
-    // UTF-8-прелюдия: PS 5.1 пишет в пайп OEM-866 — кириллические пути exe
+    // UTF-8-прелюдия: PS 5.1 пишет в пайп OEM-866 - кириллические пути exe
     // в правилах превращались бы в кашу (см. tasks::run_ps).
     let script = format!(
         "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; \
@@ -169,7 +169,7 @@ fn run_ps_capture(script: &str) -> Option<String> {
 /// elevated-процесса нам напрямую недоступен.
 fn run_ps_elevated(inner_script: &str) -> Result<(), String> {
     // Скрипт кладём в СВОЮ папку настроек, не в общий %TEMP%: «скрытый
-    // elevated powershell -File из темпа» — хрестоматийная AV-эвристика,
+    // elevated powershell -File из темпа» - хрестоматийная AV-эвристика,
     // плюс чужие tmp-клинеры могут удалить файл между записью и запуском.
     let tmp = dirs::config_dir()
         .map(|d| d.join("Clod Helper"))

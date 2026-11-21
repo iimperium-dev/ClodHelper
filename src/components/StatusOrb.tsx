@@ -13,7 +13,7 @@ interface Props {
 /*
   Статус-орб: ядро + тонкое кольцо + мягкое «дыхание» свечения (только ok).
   Правила скиллов: idle-анимация тонкая и медленная (не мигание), reduced
-  motion — статичный вариант, никаких bounce.
+  motion - статичный вариант, никаких bounce.
 */
 export function StatusOrb({ state, size = 14, className }: Props) {
   const reduce = useReducedMotion();
@@ -55,7 +55,7 @@ export function StatusOrb({ state, size = 14, className }: Props) {
         className={cn("absolute inset-0 rounded-full border", ring)}
         aria-hidden
       />
-      {/* Дыхание — только для активного состояния */}
+      {/* Дыхание - только для активного состояния */}
       {state === "ok" && !reduce && (
         <motion.span
           className="absolute inset-0 rounded-full border border-vb-emerald/25"

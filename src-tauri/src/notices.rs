@@ -2,12 +2,12 @@
 //!
 //! Рассылка без своего сервера: файл `notices.json` в репозитории (ветка
 //! main). Приложение скачивает его при запуске и раз в несколько часов
-//! (update_notify::spawn_watcher); новое — всплывает в углу экрана со звуком
-//! и ложится в колокольчик. Кто был офлайн — увидит при следующем запуске:
+//! (update_notify::spawn_watcher); новое - всплывает в углу экрана со звуком
+//! и ложится в колокольчик. Кто был офлайн - увидит при следующем запуске:
 //! список проверяется сразу при старте и кэшируется в настройках (виден и
 //! без сети). Прочитанное помнится на этом компьютере.
 //!
-//! Формат файла — см. notices.json в корне репозитория.
+//! Формат файла - см. notices.json в корне репозитория.
 
 use serde::{Deserialize, Serialize};
 
@@ -18,15 +18,15 @@ const URL: &str = "https://raw.githubusercontent.com/iimperium-dev/ClodHelper/ma
 pub struct Notice {
     /// Уникальный и неизменный: по нему помнится «прочитано».
     pub id: String,
-    /// YYYY-MM-DD — для сортировки и подписи.
+    /// YYYY-MM-DD - для сортировки и подписи.
     pub date: String,
     pub title: String,
     #[serde(default)]
     pub body: String,
-    /// Кнопка «Подробнее» — только https.
+    /// Кнопка «Подробнее» - только https.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<String>,
-    /// "windows" / "macos"; пусто — всем.
+    /// "windows" / "macos"; пусто - всем.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub platforms: Vec<String>,
     /// Только для версий в диапазоне (включительно).
@@ -84,7 +84,7 @@ fn parse(text: &str, current: &str) -> Result<Vec<Notice>, String> {
         .into_iter()
         .filter(|n| applies(n, current))
         .map(|mut n| {
-            // Ссылка только https — никаких file:/javascript: из файла.
+            // Ссылка только https - никаких file:/javascript: из файла.
             n.link = n.link.filter(|l| l.starts_with("https://"));
             n
         })
@@ -96,7 +96,7 @@ fn parse(text: &str, current: &str) -> Result<Vec<Notice>, String> {
 
 /// Скачать рассылки и обновить кэш. Возвращает новые (ещё не всплывавшие).
 pub async fn fetch() -> Result<Vec<Notice>, String> {
-    // Только отладочная сборка: рассылка из локального файла — проверить
+    // Только отладочная сборка: рассылка из локального файла - проверить
     // колокольчик, не отправляя ничего настоящим пользователям.
     #[cfg(debug_assertions)]
     if let Some(path) = std::env::var_os("CLOD_NOTICES_FILE") {
@@ -105,14 +105,14 @@ pub async fn fetch() -> Result<Vec<Notice>, String> {
         return Ok(s.notices_cache.iter().filter(|n| !s.notices_toasted.contains(&n.id)).cloned().collect());
     }
     // raw.githubusercontent.com у части провайдеров в России заблокирован:
-    // не достали напрямую — берём через свой прокси (строгий вход моста).
+    // не достали напрямую - берём через свой прокси (строгий вход моста).
     let text = match download(None).await {
         Ok(t) => t,
         Err(direct) => download(Some(&format!("http://127.0.0.1:{}", crate::claude_desktop::PROXY_PORT)))
             .await
-            .map_err(|via| format!("рассылки: напрямую — {direct}; через мост — {via}"))?,
+            .map_err(|via| format!("рассылки: напрямую - {direct}; через мост - {via}"))?,
     };
-    // Файла нет (404) — рассылок нет, это нормально.
+    // Файла нет (404) - рассылок нет, это нормально.
     let list = match text {
         Some(t) => parse(&t, env!("CARGO_PKG_VERSION"))?,
         None => Vec::new(),
@@ -121,7 +121,7 @@ pub async fn fetch() -> Result<Vec<Notice>, String> {
     Ok(s.notices_cache.iter().filter(|n| !s.notices_toasted.contains(&n.id)).cloned().collect())
 }
 
-/// Скачать notices.json (через прокси, если задан). None — файла нет (404).
+/// Скачать notices.json (через прокси, если задан). None - файла нет (404).
 async fn download(proxy: Option<&str>) -> Result<Option<String>, String> {
     let mut b = reqwest::Client::builder()
         .user_agent(concat!("ClodHelper/", env!("CARGO_PKG_VERSION")))
@@ -160,14 +160,14 @@ fn date_days_ago(days_ago: u64) -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
-/// Всплывать в углу экрана — только свежим рассылкам: тот, кто поставил
+/// Всплывать в углу экрана - только свежим рассылкам: тот, кто поставил
 /// программу через месяц, не должен получать старые новости всплывающим
 /// окном (в колокольчике они остаются).
 pub fn worth_toast(n: &Notice) -> bool {
     n.date.as_str() >= date_days_ago(7).as_str()
 }
 
-/// id элемента «вышло обновление» — свой на каждую версию.
+/// id элемента «вышло обновление» - свой на каждую версию.
 pub fn update_id(version: &str) -> String {
     format!("update-{version}")
 }
@@ -256,7 +256,7 @@ mod tests {
     #[test]
     fn repo_notices_file_is_valid() {
         let text = include_str!("../../notices.json");
-        let all: NoticesFile = serde_json::from_str(text).expect("notices.json — не JSON");
+        let all: NoticesFile = serde_json::from_str(text).expect("notices.json - не JSON");
         let mut ids: Vec<&str> = all.notices.iter().map(|n| n.id.as_str()).collect();
         ids.sort_unstable();
         let before = ids.len();

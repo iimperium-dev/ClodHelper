@@ -1,16 +1,16 @@
 #!/bin/sh
 # «Защита от утечек» Clod Helper (macOS): брандмауэр pf запрещает ПРЯМОЙ выход
-# к сетям сервисов — Claude (Anthropic) и Telegram. Мост ходит к ним только
+# к сетям сервисов - Claude (Anthropic) и Telegram. Мост ходит к ним только
 # через ваш прокси, поэтому его это не задевает; любая программа, которая
 # попробует мимо моста, получит мгновенный отказ, а не ваш IP.
 #
 # Правила живут в своём якоре com.apple/250.ClodHelper (основной набор правил
-# системы не трогаем). pf включается с токеном (pfctl -E) — снятие защиты
+# системы не трогаем). pf включается с токеном (pfctl -E) - снятие защиты
 # отдаёт только свой токен. Служба (LaunchDaemon) возвращает защиту после
 # перезагрузки (якоря pf не сохраняются).
 #
 # Использование: sh leak-guard.sh Status|Enable|Disable|Restore [claude,telegram]
-# Enable/Disable/Restore требуют root. Результат — одна строка JSON в stdout.
+# Enable/Disable/Restore требуют root. Результат - одна строка JSON в stdout.
 
 ACTION="${1:-Status}"
 SERVICES="$2"
@@ -48,7 +48,7 @@ apply() {
     printf 'table <clod_guard> persist {%s }\nblock return out quick to <clod_guard>\n' "$nets" > "$RULES" || return 1
     /bin/chmod 644 "$RULES"
     # Якорь com.apple/* подключён в системном /etc/pf.conf; если основной
-    # набор правил ещё не загружен (pf выключен с загрузки) — загрузить его.
+    # набор правил ещё не загружен (pf выключен с загрузки) - загрузить его.
     /sbin/pfctl -sr 2>/dev/null | grep -q 'anchor "com.apple/\*"' || /sbin/pfctl -q -f /etc/pf.conf >/dev/null 2>&1
     /sbin/pfctl -a "$ANCHOR" -f "$RULES" >/dev/null 2>&1 || return 1
     # Включить pf со своим токеном (не мешает другим, кто тоже его включил).

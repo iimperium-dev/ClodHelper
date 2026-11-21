@@ -18,7 +18,7 @@ mod firewall;
 // юнит-тестами, а реальный прогон на macOS доступен только в CI.
 #[cfg(any(not(target_os = "windows"), test))]
 mod macos;
-// Разбор ярлыков .lnk: нужен на Windows, тесты — на любой ОС.
+// Разбор ярлыков .lnk: нужен на Windows, тесты - на любой ОС.
 #[cfg(any(target_os = "windows", test))]
 mod lnk;
 mod monitor;
@@ -50,7 +50,7 @@ use tauri::{
 };
 
 /// Служебные CLI-режимы, которые отрабатывают и выходят без GUI
-/// (LaunchAgent переменных прокси). None — обычный запуск приложения.
+/// (LaunchAgent переменных прокси). None - обычный запуск приложения.
 pub fn cli_mode() -> Option<i32> {
     #[cfg(not(target_os = "windows"))]
     {
@@ -75,7 +75,7 @@ pub fn run() {
         )
         .init();
 
-    // Из Dock/Finder приложение получает PATH без Homebrew/nvm — node, npm и
+    // Из Dock/Finder приложение получает PATH без Homebrew/nvm - node, npm и
     // claude не нашлись бы. Чиним до любых спавнов.
     #[cfg(not(target_os = "windows"))]
     macos::fix_path_env();
@@ -84,7 +84,7 @@ pub fn run() {
     // generate_context! вшил бы фронтенд в exe повторно.
     let context = tauri::generate_context!();
 
-    // Заставка на время установки обновления — отдельный короткий режим.
+    // Заставка на время установки обновления - отдельный короткий режим.
     #[cfg(target_os = "windows")]
     {
         let args: Vec<String> = std::env::args().collect();
@@ -103,7 +103,7 @@ pub fn run() {
             show_main_window(app);
         }
     }));
-    // Автозапуск: на Windows — плагин (ключ Run), на macOS — SMAppService
+    // Автозапуск: на Windows - плагин (ключ Run), на macOS - SMAppService
     // (src/autostart.rs); плагин там больше не регистрируется.
     #[cfg(target_os = "windows")]
     let builder = builder.plugin(tauri_plugin_autostart::init(
@@ -234,6 +234,7 @@ pub fn run() {
             commands::google_ads_get,
             commands::google_ads_set,
             commands::proxies_ping,
+            commands::proxy_speedtest,
             // Окна (трей-попап)
             commands::show_main_window,
             commands::quit_app,
@@ -250,7 +251,7 @@ pub fn run() {
             // мост → Claude Code теряет связь»). Фоновый поток, переживает любые
             // ошибки, поднимает шим за ~5с после падения. Второй эшелон после
             // RestartOnFailure Планировщика (тот работает и без нашего GUI).
-            // Где лежит встроенный мост — чтобы вернуть его, если антивирус
+            // Где лежит встроенный мост - чтобы вернуть его, если антивирус
             // удалит установленный (до watchdog: тот первым заметит пропажу).
             bridge_file::init(
                 app.handle(),
@@ -259,11 +260,11 @@ pub fn run() {
             shim::spawn_watchdog();
 
             // Миграция старых установок: .vbs в Startup → задача Планировщика
-            // с автоперезапуском. Фоново — PS-вызовы медленные, UI не ждёт.
+            // с автоперезапуском. Фоново - PS-вызовы медленные, UI не ждёт.
             std::thread::spawn(tasks::migrate_from_startup_vbs);
 
             // Мост обновляется вместе с приложением: встроенный новее
-            // установленного — тихо заменить (перезапуск моста ~1 с).
+            // установленного - тихо заменить (перезапуск моста ~1 с).
             {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
@@ -271,7 +272,7 @@ pub fn run() {
                 });
             }
 
-            // Фоновая проверка обновлений: новая версия — уведомление в углу
+            // Фоновая проверка обновлений: новая версия - уведомление в углу
             // экрана со звуком (одно на версию).
             update_notify::spawn_watcher(app.handle().clone());
 
@@ -287,7 +288,7 @@ pub fn run() {
             // (окно закрыли посреди неё) и освежить метку PAC.
             std::thread::spawn(system_pac::on_startup);
 
-            // Если запущены с флагом --tray (после автозапуска Windows) —
+            // Если запущены с флагом --tray (после автозапуска Windows) -
             // прячем главное окно при старте, видна только иконка в трее.
             let args: Vec<String> = std::env::args().collect();
             if args.iter().any(|a| a == "--tray") {
@@ -302,14 +303,14 @@ pub fn run() {
             match event {
                 WindowEvent::CloseRequested { api, .. } => {
                     // Close-to-tray: крестик прячет окно, не закрывает приложение.
-                    // Полный выход — только через меню трея "Выход".
+                    // Полный выход - только через меню трея "Выход".
                     api.prevent_close();
                     let _ = window.hide();
                     if window.label() == "main" {
                         set_dock_visible(window.app_handle(), false);
                     }
                 }
-                // Трей-попап: light dismiss — потерял фокус → спрятался
+                // Трей-попап: light dismiss - потерял фокус → спрятался
                 // (паттерн Tailscale/WARP).
                 WindowEvent::Focused(false) if window.label() == "tray" => {
                     let _ = window.hide();
@@ -337,13 +338,13 @@ pub fn run() {
 
 fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<monitor::TrayHandles> {
     // Нативного меню НЕТ намеренно: Windows не даёт его стилизовать, и оно
-    // выглядело «как у старых приложух». Вместо него фирменный попап —
+    // выглядело «как у старых приложух». Вместо него фирменный попап -
     // паттерн Cloudflare WARP. Вся функциональность меню (статус, тест,
     // тумблеры, рестарт/стоп, выход) живёт в попапе.
-    // Windows: правый щелчок — попап, двойной левый — главное окно (привычная
+    // Windows: правый щелчок - попап, двойной левый - главное окно (привычная
     // схема трея). Одиночный левый ничего не делает: иначе перед главным
     // окном мелькал бы попап от первого щелчка двойного.
-    // macOS: значок в строке меню — любой щелчок открывает попап.
+    // macOS: значок в строке меню - любой щелчок открывает попап.
     let builder = TrayIconBuilder::with_id("main-tray");
     // macOS: сразу монохромная template-иконка (цветная иконка приложения в
     // строке меню выглядит чужеродно); дальше её ведёт monitor.
@@ -385,12 +386,12 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<monitor::TrayHandles> {
 
 /// Показать трей-попап у точки клика (physical px). Позиция: над курсором,
 /// правый край примерно под иконкой (таскбар Windows обычно снизу справа);
-/// клампится в границы монитора — на случай таскбара сверху/сбоку.
-/// macOS: окно попапа — неактивирующая панель, как системные меню строки
+/// клампится в границы монитора - на случай таскбара сверху/сбоку.
+/// macOS: окно попапа - неактивирующая панель, как системные меню строки
 /// меню. Обычное окно при показе активирует приложение, а macOS при активации
-/// уводит пользователя в пространство с главным окном Clod Helper — поверх
+/// уводит пользователя в пространство с главным окном Clod Helper - поверх
 /// полноэкранного приложения меню не появлялось. Поэтому класс окна меняется
-/// на подкласс NSPanel (canBecomeKeyWindow = YES), стиль — nonactivatingPanel;
+/// на подкласс NSPanel (canBecomeKeyWindow = YES), стиль - nonactivatingPanel;
 /// плюс: на всех рабочих столах, поверх полноэкранных, уровень всплывающего меню.
 #[cfg(target_os = "macos")]
 pub(crate) fn mac_popup_window(win: &tauri::WebviewWindow) -> bool {
@@ -423,7 +424,7 @@ pub(crate) fn mac_popup_window(win: &tauri::WebviewWindow) -> bool {
     });
     let Some(panel) = panel else { return false };
 
-    // SAFETY: ns_window() — живой NSWindow этого окна; вызов на главном потоке
+    // SAFETY: ns_window() - живой NSWindow этого окна; вызов на главном потоке
     // (обработчик событий трея исполняется в цикле событий). Подкласс NSPanel
     // не добавляет ivar'ов, поэтому смена класса безопасна (так делает и
     // tauri-nspanel); делегат окна (события фокуса) остаётся прежним.
@@ -442,7 +443,7 @@ pub(crate) fn mac_popup_window(win: &tauri::WebviewWindow) -> bool {
     true
 }
 
-/// macOS: значок в строке меню «нажат», пока открыт попап — как у системных
+/// macOS: значок в строке меню «нажат», пока открыт попап - как у системных
 /// меню; вместе с панелью под ним это читается как одно целое.
 #[cfg(target_os = "macos")]
 fn mac_highlight_tray(app: &tauri::AppHandle, on: bool) {
@@ -478,7 +479,7 @@ pub(crate) fn mac_order_front(win: &tauri::WebviewWindow) {
     }
 }
 
-/// macOS: показать панель поверх всего и сделать её ключевой — без
+/// macOS: показать панель поверх всего и сделать её ключевой - без
 /// активации приложения (никакого переключения рабочих столов).
 #[cfg(target_os = "macos")]
 fn mac_show_panel(win: &tauri::WebviewWindow) {
@@ -498,7 +499,7 @@ fn mac_show_panel(win: &tauri::WebviewWindow) {
 
 fn show_tray_popup(app: &tauri::AppHandle, cx: f64, cy: f64, icon: tauri::Rect) {
     // Окно объявлено в tauri.conf.json и создаётся при старте; если его нет
-    // (создание упало) — создаём на лету, иначе клик по трею «молчит».
+    // (создание упало) - создаём на лету, иначе клик по трею «молчит».
     let win = match app.get_webview_window("tray") {
         Some(w) => w,
         None => {
@@ -528,7 +529,7 @@ fn show_tray_popup(app: &tauri::AppHandle, cx: f64, cy: f64, icon: tauri::Rect) 
         }
     };
     // Повторный клик при открытом попапе: blur уже спрятал его до того, как
-    // пришёл Click, так что здесь попап почти всегда скрыт — просто покажем.
+    // пришёл Click, так что здесь попап почти всегда скрыт - просто покажем.
     // Позиция над курсором + кламп в границы монитора клика.
     let place = |w: f64, h: f64| -> (f64, f64) {
         let mut x = cx - w + 24.0;
@@ -556,7 +557,7 @@ fn show_tray_popup(app: &tauri::AppHandle, cx: f64, cy: f64, icon: tauri::Rect) 
         (x, y)
     };
 
-    // macOS: значок — в строке меню сверху. Попап висит прямо под ним, по
+    // macOS: значок - в строке меню сверху. Попап висит прямо под ним, по
     // центру значка, как системные меню; поверх всех рабочих столов и
     // полноэкранных приложений (иначе macOS открывал его на «своём» столе).
     #[cfg(target_os = "macos")]
@@ -584,7 +585,7 @@ fn show_tray_popup(app: &tauri::AppHandle, cx: f64, cy: f64, icon: tauri::Rect) 
             let _ = win.set_focus();
         }
     }
-    // Windows: трей внизу — попап над курсором, клампится в монитор клика.
+    // Windows: трей внизу - попап над курсором, клампится в монитор клика.
     #[cfg(not(target_os = "macos"))]
     {
         let _ = icon;
@@ -592,7 +593,7 @@ fn show_tray_popup(app: &tauri::AppHandle, cx: f64, cy: f64, icon: tauri::Rect) 
         let (x, y) = place(size.width as f64, size.height as f64);
         let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
         // Смешанные DPI: перенос окна на монитор с другим масштабом меняет его
-        // physical-размер — первый кламп считался по старому. Перемеряем и, если
+        // physical-размер - первый кламп считался по старому. Перемеряем и, если
         // размер сменился, позиционируем ещё раз по фактическому.
         if let Ok(after) = win.outer_size() {
             if after.width != size.width || after.height != size.height {
@@ -605,7 +606,7 @@ fn show_tray_popup(app: &tauri::AppHandle, cx: f64, cy: f64, icon: tauri::Rect) 
     }
 }
 
-/// macOS: иконка в Dock — только пока видно главное окно (как у менюбар-
+/// macOS: иконка в Dock - только пока видно главное окно (как у менюбар-
 /// утилит). Без этого после автозапуска с --tray в Dock висела иконка без окна.
 pub(crate) fn set_dock_visible(app: &tauri::AppHandle, visible: bool) {
     #[cfg(target_os = "macos")]

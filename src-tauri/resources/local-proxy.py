@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-local-proxy.py — HTTP-bridge: слушает 127.0.0.1:8888 без auth и форвардит
+local-proxy.py - HTTP-bridge: слушает 127.0.0.1:8888 без auth и форвардит
 трафик в купленный HTTP-прокси с auth (login:pass@ip:port).
 
 Зачем: Electron-приложения (Claude Desktop, Cursor, VS Code) при запуске
@@ -30,7 +30,7 @@ import time
 from urllib.parse import urlparse
 
 # Потолок одновременных проброшенных соединений. Защита от пика деплоя
-# (ssh/scp/docker-pull открывают шквал соединений через шим) — без лимита
+# (ssh/scp/docker-pull открывают шквал соединений через шим) - без лимита
 # процесс плодил по потоку на коннект → too-many-threads/OOM → шим падал,
 # рвя SSE-стрим Claude Code. Семафор держит число живых хендлеров; лишние
 # ждут слота, а не валят процесс. 256 с запасом для нормального стрима+деплоя.
@@ -64,15 +64,15 @@ def enable_keepalive(sock: socket.socket) -> None:
     тихо убивать idle-соединение посреди долгого SSE-стрима Claude Code.
 
     Идея: каждые 30 сек слать невидимый probe-пакет (заголовок TCP без
-    данных). Если 5 проб подряд не получили ACK — рвём соединение явно
+    данных). Если 5 проб подряд не получили ACK - рвём соединение явно
     (а не молча получаем RST через несколько минут).
     """
     try:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
     except OSError:
         return
-    # Платформо-специфичные опции — на Windows работают через TCP_KEEPIDLE
-    # с Python 3.7+. На Linux — те же константы. На macOS — TCP_KEEPALIVE.
+    # Платформо-специфичные опции - на Windows работают через TCP_KEEPIDLE
+    # с Python 3.7+. На Linux - те же константы. На macOS - TCP_KEEPALIVE.
     try:
         if hasattr(socket, "TCP_KEEPIDLE"):
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 30)
@@ -113,7 +113,7 @@ def handle_client(
     """Один client-коннект: пробрасываем первый CONNECT/request и потом 2-way pipe."""
     try:
         client.settimeout(30)
-        # Читаем первый chunk запроса — там headers.
+        # Читаем первый chunk запроса - там headers.
         head_buf = b""
         while b"\r\n\r\n" not in head_buf:
             chunk = client.recv(8192)
@@ -127,18 +127,18 @@ def handle_client(
         # Подключаемся к upstream-прокси.
         upstream = socket.create_connection((upstream_host, upstream_port), timeout=30)
 
-        # Включаем TCP keepalive на оба сокета — Claude Code держит SSE-стрим
+        # Включаем TCP keepalive на оба сокета - Claude Code держит SSE-стрим
         # минутами; без keepalive NAT/прокси-провайдер тихо убивают idle
         # соединение → клиент получает "socket closed unexpectedly".
         enable_keepalive(client)
         enable_keepalive(upstream)
 
-        # Снимаем 30-сек timeout с client после прокидки заголовков —
-        # дальше идёт long-lived стрим, блокирующий recv() — это норма.
+        # Снимаем 30-сек timeout с client после прокидки заголовков -
+        # дальше идёт long-lived стрим, блокирующий recv() - это норма.
         client.settimeout(None)
         upstream.settimeout(None)
 
-        # Если есть auth — нужно вставить Proxy-Authorization в первый запрос.
+        # Если есть auth - нужно вставить Proxy-Authorization в первый запрос.
         # CONNECT-запрос и обычный HTTP-запрос обрабатываем одинаково: просто
         # добавляем header перед \r\n\r\n.
         if upstream_auth:
@@ -155,7 +155,7 @@ def handle_client(
 
         upstream.sendall(head_buf)
 
-        # Дальше — простой 2-way pipe в отдельных потоках.
+        # Дальше - простой 2-way pipe в отдельных потоках.
         t1 = threading.Thread(target=pipe, args=(client, upstream), daemon=True)
         t2 = threading.Thread(target=pipe, args=(upstream, client), daemon=True)
         t1.start()
@@ -210,11 +210,11 @@ def main() -> int:
     try:
         server.bind((listen_host, listen_port))
     except OSError as e:
-        log.error("Cannot bind %s:%s — %s", listen_host, listen_port, e)
+        log.error("Cannot bind %s:%s - %s", listen_host, listen_port, e)
         log.error("Is another process already listening on this port?")
         return 1
     # Backlog побольше: при пике деплоя десятки соединений встают в очередь
-    # ОС — без запаса часть отбивается RST, и Claude Code видит обрыв.
+    # ОС - без запаса часть отбивается RST, и Claude Code видит обрыв.
     server.listen(256)
 
     log.info(
@@ -236,16 +236,16 @@ def main() -> int:
                 client, addr = server.accept()
             except OSError as e:
                 # transient (EMFILE «too many open files» под пиком деплоя,
-                # сетевой сбой) — НЕ валим сервер, ждём чуть и продолжаем.
-                log.warning("accept() failed (%s) — продолжаю слушать", e)
+                # сетевой сбой) - НЕ валим сервер, ждём чуть и продолжаем.
+                log.warning("accept() failed (%s) - продолжаю слушать", e)
                 time.sleep(0.1)
                 continue
 
             # лимит одновременных соединений: ждём свободный слот (с таймаутом,
             # чтобы зависший пик не заблокировал приём навсегда). Нет слота за
-            # 5с → отбиваем этот коннект, но СЕРВЕР живёт (приоритет — не упасть).
+            # 5с → отбиваем этот коннект, но СЕРВЕР живёт (приоритет - не упасть).
             if not _conn_slots.acquire(timeout=5.0):
-                log.warning("Лимит %d соединений — отбиваю %s, сервер жив",
+                log.warning("Лимит %d соединений - отбиваю %s, сервер жив",
                             _MAX_CONNECTIONS, addr)
                 try:
                     client.close()
@@ -261,9 +261,9 @@ def main() -> int:
                 )
                 t.start()
             except (RuntimeError, OSError) as e:
-                # can't start new thread — освобождаем слот, закрываем коннект,
+                # can't start new thread - освобождаем слот, закрываем коннект,
                 # но сервер ПРОДОЛЖАЕТ слушать (не падаем).
-                log.warning("Не смог запустить поток (%s) — отбиваю %s", e, addr)
+                log.warning("Не смог запустить поток (%s) - отбиваю %s", e, addr)
                 _conn_slots.release()
                 try:
                     client.close()

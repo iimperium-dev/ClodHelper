@@ -21,7 +21,7 @@ function Assert-Throws([scriptblock]$Code, [string]$Pattern, [string]$Message) {
     throw "$Message. Expected an error."
 }
 
-# Подменённые командлеты брандмауэра: правила — в хеш-таблице по имени.
+# Подменённые командлеты брандмауэра: правила - в хеш-таблице по имени.
 $script:Rules = @{}
 function Get-NetFirewallRule([string]$Name, $ErrorAction) {
     if ($script:Rules.ContainsKey($Name)) { return $script:Rules[$Name] }
@@ -42,7 +42,7 @@ function Remove-NetFirewallRule($Group, $Name, $ErrorAction) {
 
 Assert-Equal ($script:LeakGuardGroup -cne 'ClodHelper') $true 'Leak guard never shares the killswitch rule group'
 
-# Пути exe — во временной папке теста; без programs.json UDP-правил нет.
+# Пути exe - во временной папке теста; без programs.json UDP-правил нет.
 $script:Tmp = Join-Path ([IO.Path]::GetTempPath()) ('leak-guard-test-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $script:Tmp | Out-Null
 $script:LeakGuardProgramsFile = Join-Path $script:Tmp 'programs.json'

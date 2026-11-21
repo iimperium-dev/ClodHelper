@@ -24,16 +24,16 @@ import type { AppView, WizardInstallResult, WizardStep } from "./lib/types";
 
 /** Окно трей-попапа рендерит тот же bundle с ?view=tray. */
 const IS_TRAY = new URLSearchParams(window.location.search).get("view") === "tray";
-/** Уведомление «Доступно обновление» в углу экрана — ?view=toast. */
+/** Уведомление «Доступно обновление» в углу экрана - ?view=toast. */
 const IS_TOAST = new URLSearchParams(window.location.search).get("view") === "toast";
-/** Заставка на время установки обновления (отдельный процесс) — ?view=updating. */
+/** Заставка на время установки обновления (отдельный процесс) - ?view=updating. */
 const IS_SPLASH = new URLSearchParams(window.location.search).get("view") === "updating";
 
 /*
-  Переход между разделами — CSS-анимация появления (index.css, .view-enter):
+  Переход между разделами - CSS-анимация появления (index.css, .view-enter):
   раздел въезжает со стороны движения по навигации. Раньше это делал
   framer-motion (AnimatePresence mode="wait"), и после долгой работы окна
-  контейнер раздела изредка застревал в начальном состоянии opacity 0 —
+  контейнер раздела изредка застревал в начальном состоянии opacity 0 -
   «Обзор» и «Прокси» выглядели чёрными (видно в ui.log). CSS-анимация
   застрять не может: в худшем случае раздел просто появляется без неё.
 */
@@ -49,7 +49,7 @@ function App() {
 
   useEffect(() => {
     if (IS_TRAY || IS_TOAST || IS_SPLASH) return;
-    // До выбора мастер/Обзор: первый запуск после установки ещё без прокси —
+    // До выбора мастер/Обзор: первый запуск после установки ещё без прокси -
     // это не обновление, «Что нового» не нужно.
     void whatsNewTake().then(setWhatsNew).catch(() => {});
     void (async () => {
@@ -159,7 +159,7 @@ function App() {
           <div className="flex items-center gap-3 border-b border-vb-warn/25 bg-vb-warn/[0.07] px-5 py-2.5">
             <AlertTriangle className="h-4 w-4 shrink-0 text-vb-warn" />
             <span className="min-w-0 flex-1 text-[13px] text-vb-silver">
-              Прокси ещё не добавлен — Claude пока ходит напрямую. Добавьте его, когда сервер будет готов.
+              Прокси ещё не добавлен. Приложения пока ходят напрямую. Добавьте его, когда сервер будет готов.
             </span>
             <Button
               size="sm"
