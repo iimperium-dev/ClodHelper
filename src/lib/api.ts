@@ -45,6 +45,7 @@ import type {
   BrowserProxyExtensions,
   BypassApp,
   NoticeItem,
+  BannerView,
   SitesScope,
 } from "./types";
 
@@ -531,6 +532,14 @@ export function noticesMarkRead(ids: string[]): Promise<NoticeItem[]> {
 }
 
 /** Событие уведомления для статистики: shown | clicked | dismissed (один раз, только при включённой статистике). */
+export function noticesBanner(): Promise<BannerView | null> {
+  return invoke<BannerView | null>("notices_banner");
+}
+
+export function noticesBannerDismiss(id: string): Promise<void> {
+  return invoke<void>("notices_banner_dismiss", { id });
+}
+
 export function noticeEvent(id: string, ev: "shown" | "clicked" | "dismissed"): Promise<void> {
   return invoke<void>("notice_event", { id, ev });
 }

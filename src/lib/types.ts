@@ -456,6 +456,17 @@ export interface PrivacyState {
 export type PrivacyKey = "auto_update" | "crash_reports" | "usage_stats";
 
 /** Элемент колокольчика: обновление или рассылка разработчика (notices.rs). */
+/** Баннер на «Обзоре» (объявление из админки с оформлением). */
+export interface BannerView {
+  id: string;
+  title: string;
+  body: string;
+  accent: "emerald" | "blue" | "violet" | "amber" | "rose" | "neutral";
+  eyebrow?: string | null;
+  buttons: { label: string; url: string }[];
+  dismissible: boolean;
+}
+
 export interface NoticeItem {
   id: string;
   kind: "update" | "news";

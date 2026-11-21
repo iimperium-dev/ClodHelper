@@ -236,6 +236,22 @@ pub async fn notices_list() -> Result<Vec<crate::notices::NoticeItem>, String> {
         .map_err(|e| format!("Внутренняя ошибка: {e}"))
 }
 
+/// Баннер на «Обзоре»: действующий или None.
+#[tauri::command]
+pub async fn notices_banner() -> Option<crate::notices::BannerView> {
+    tokio::task::spawn_blocking(|| crate::notices::active_banner(&crate::settings::load())).await.ok().flatten()
+}
+
+/// Закрыть баннер крестиком: больше не показывать.
+#[tauri::command]
+pub async fn notices_banner_dismiss(app: AppHandle, id: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || crate::settings::mark_notices_read(&[format!("banner:{id}")]))
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))??;
+    let _ = app.emit("notices:changed", crate::notices::unread());
+    Ok(())
+}
+
 /// Отметить прочитанными (пустой список - все).
 #[tauri::command]
 pub async fn notices_mark_read(app: AppHandle, ids: Vec<String>) -> Result<Vec<crate::notices::NoticeItem>, String> {

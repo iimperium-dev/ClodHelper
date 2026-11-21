@@ -37,6 +37,89 @@ pub struct Notice {
     pub min_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_version: Option<String>,
+    /// Есть - это баннер на «Обзоре», а не обычное объявление.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub banner: Option<Banner>,
+}
+
+/// Оформление баннера на «Обзоре». Текст и заголовок - из самой записи.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Banner {
+    /// Цвет акцента: emerald, blue, violet, amber, rose, neutral.
+    #[serde(default = "default_accent")]
+    pub accent: String,
+    /// Короткая метка над заголовком («Партнёр», «Новое»).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eyebrow: Option<String>,
+    /// До двух кнопок, первая - главная.
+    #[serde(default)]
+    pub buttons: Vec<BannerButton>,
+    /// Можно закрыть крестиком (закрытый не возвращается).
+    #[serde(default = "yes")]
+    pub dismissible: bool,
+    /// Заодно положить в колокольчик и показать в углу экрана.
+    #[serde(default)]
+    pub bell: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BannerButton {
+    pub label: String,
+    pub url: String,
+}
+
+fn default_accent() -> String {
+    "emerald".into()
+}
+
+fn yes() -> bool {
+    true
+}
+
+const ACCENTS: [&str; 6] = ["emerald", "blue", "violet", "amber", "rose", "neutral"];
+
+/// Привести баннер к безопасному виду: только https, короткие подписи,
+/// известный цвет. Без кнопок и без текста баннер тоже допустим.
+fn clean_banner(mut b: Banner) -> Banner {
+    if !ACCENTS.contains(&b.accent.as_str()) {
+        b.accent = default_accent();
+    }
+    b.eyebrow = b.eyebrow.map(|e| e.trim().chars().take(24).collect::<String>()).filter(|e| !e.is_empty());
+    b.buttons = b
+        .buttons
+        .into_iter()
+        .filter(|x| x.url.starts_with("https://"))
+        .map(|x| BannerButton { label: x.label.trim().chars().take(24).collect(), url: x.url })
+        .filter(|x| !x.label.is_empty())
+        .take(2)
+        .collect();
+    b
+}
+
+/// Баннер для «Обзора» (для UI).
+#[derive(Debug, Clone, Serialize)]
+pub struct BannerView {
+    pub id: String,
+    pub title: String,
+    pub body: String,
+    #[serde(flatten)]
+    pub banner: Banner,
+}
+
+/// Показывать ли запись в колокольчике и всплывающим окном.
+pub fn in_bell(n: &Notice) -> bool {
+    n.banner.as_ref().is_none_or(|b| b.bell)
+}
+
+/// Действующий баннер: самый свежий, который человек не закрыл.
+pub fn active_banner(s: &crate::settings::Settings) -> Option<BannerView> {
+    cached(s).into_iter().find_map(|n| {
+        let b = n.banner?;
+        if b.dismissible && s.notices_read.contains(&format!("banner:{}", n.id)) {
+            return None;
+        }
+        Some(BannerView { id: n.id, title: n.title, body: n.body, banner: b })
+    })
 }
 
 #[derive(Deserialize)]
@@ -95,6 +178,7 @@ fn parse(text: &str, current: &str) -> Result<Vec<Notice>, String> {
                 .link_label
                 .map(|l| l.trim().chars().take(40).collect::<String>())
                 .filter(|l| !l.is_empty() && n.link.is_some());
+            n.banner = n.banner.map(clean_banner);
             n
         })
         .collect();
@@ -103,9 +187,10 @@ fn parse(text: &str, current: &str) -> Result<Vec<Notice>, String> {
     Ok(v)
 }
 
-/// Сервер рассылок спрашиваем не чаще раза в час (по фокусу окна запрос шёл
-/// бы раз в минуту). GitHub - как раньше.
-const SERVER_MIN_GAP: std::time::Duration = std::time::Duration::from_secs(3600);
+/// Сервер рассылок спрашиваем не чаще раза в 10 минут (по фокусу окна запрос
+/// шёл бы раз в минуту). GitHub - как раньше. Баннер, включённый в админке, должен появиться при следующем открытии
+/// окна, а не через час: 10 минут (ответ сервера и так кэшируется 5 минут).
+const SERVER_MIN_GAP: std::time::Duration = std::time::Duration::from_secs(600);
 static SERVER_AT: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
 
 fn server_due() -> bool {
@@ -274,7 +359,7 @@ fn date_days_ago(days_ago: u64) -> String {
 /// программу через месяц, не должен получать старые новости всплывающим
 /// окном (в колокольчике они остаются).
 pub fn worth_toast(n: &Notice) -> bool {
-    n.date.as_str() >= date_days_ago(7).as_str()
+    in_bell(n) && n.date.as_str() >= date_days_ago(7).as_str()
 }
 
 /// id элемента «вышло обновление» - свой на каждую версию.
@@ -301,7 +386,7 @@ pub fn list() -> Vec<NoticeItem> {
     }
     // Итог установки обновления: «Обновлено до X» / «Не установилось».
     items.extend(crate::auto_update::bell_items(&s, crate::auto_update::now_secs()));
-    for n in &cached(&s) {
+    for n in cached(&s).iter().filter(|n| in_bell(n)) {
         items.push(NoticeItem {
             id: n.id.clone(),
             kind: "news",
@@ -357,6 +442,7 @@ mod tests {
             platforms: vec![],
             min_version: None,
             max_version: None,
+            banner: None,
         };
         let gh = vec![n("a", "2026-11-01", "из GitHub"), n("b", "2026-11-03", "b")];
         let srv = vec![n("a", "2026-11-01", "с сервера"), n("c", "2026-11-05", "c")];
@@ -386,6 +472,7 @@ mod tests {
             platforms: vec![],
             min_version: None,
             max_version: max.map(str::to_string),
+            banner: None,
         };
         let prev_gh = vec![n("gh-old", None), n("gh-gone", Some("0.1.0"))];
         let prev_srv = vec![n("srv-old", None)];
@@ -451,6 +538,7 @@ mod tests {
             platforms: vec![],
             min_version: None,
             max_version: None,
+            banner: None,
         };
         let today = date_days_ago(0);
         assert_eq!(today.len(), 10);
@@ -472,5 +560,35 @@ mod tests {
         ids.dedup();
         assert_eq!(before, ids.len(), "id в notices.json должны быть уникальны");
         assert!(parse(text, env!("CARGO_PKG_VERSION")).is_ok());
+    }
+
+    #[test]
+    fn banner_is_cleaned_and_kept_out_of_the_bell() {
+        let text = r#"{"notices":[
+            {"id":"promo","date":"2026-11-21","title":"Скидка","body":"Текст","banner":{
+                "accent":"pink","eyebrow":"  Партнёр-с-очень-длинной-подписью  ",
+                "buttons":[{"label":"Открыть","url":"https://example.com"},{"label":"Плохо","url":"javascript:alert(1)"},
+                           {"label":"  ","url":"https://a.b"},{"label":"Вторая","url":"https://b.c"},{"label":"Третья","url":"https://c.d"}]}},
+            {"id":"both","date":"2026-11-20","title":"И там и там","banner":{"bell":true,"dismissible":false}},
+            {"id":"news","date":"2026-11-19","title":"Обычное"}
+        ]}"#;
+        let v = parse(text, "0.9.2").unwrap();
+        let promo = v.iter().find(|n| n.id == "promo").unwrap();
+        let b = promo.banner.as_ref().unwrap();
+        assert_eq!(b.accent, "emerald", "неизвестный цвет - по умолчанию");
+        assert_eq!(b.eyebrow.as_deref().map(|e| e.chars().count()), Some(24));
+        assert_eq!(b.buttons.iter().map(|x| x.label.as_str()).collect::<Vec<_>>(), ["Открыть", "Вторая"], "только https, без пустых, не больше двух");
+        assert!(b.dismissible, "по умолчанию можно закрыть");
+        assert!(!in_bell(promo));
+        assert!(!worth_toast(promo), "баннер не всплывает в углу");
+        assert!(in_bell(v.iter().find(|n| n.id == "both").unwrap()));
+        assert!(in_bell(v.iter().find(|n| n.id == "news").unwrap()));
+
+        let mut st = crate::settings::Settings { notices_cache_server: v, ..Default::default() };
+        assert_eq!(active_banner(&st).map(|b| b.id), Some("promo".into()), "самый свежий");
+        st.notices_read.push("banner:promo".into());
+        assert_eq!(active_banner(&st).map(|b| b.id), Some("both".into()), "закрытый не возвращается");
+        st.notices_read.push("banner:both".into());
+        assert_eq!(active_banner(&st).map(|b| b.id), Some("both".into()), "незакрываемый показывается всегда");
     }
 }

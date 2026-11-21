@@ -159,6 +159,12 @@
       ? [{ id: "whats-new-0-9-1", kind: "news", date: "2026-11-11", title: "Вышла версия 0.9.1", body: "Что изменилось в этой версии.", link: "https://example.com/new", link_label: "Что нового", read: false }]
       : [],
     proxy_backups_get: {},
+    // ?promo - баннер на «Обзоре» (?promo=blue|violet|amber|rose|neutral - цвет).
+    notices_banner: params.has("promo")
+      ? { id: "promo-demo", title: "Свой прокси за 5 минут", body: "Пошаговая инструкция: купить сервер, поднять прокси и подключить его к Clod Helper.",
+          accent: params.get("promo") || "emerald", eyebrow: "Новое", dismissible: true,
+          buttons: [{ label: "Смотреть", url: "https://example.com/guide" }, { label: "Подробнее", url: "https://example.com" }] }
+      : null,
     notices_mark_read: [],
     whats_new_take: params.has("whatsnew") ? "0.8.18" : null,
     bridge_file_issue: null,
@@ -366,6 +372,10 @@
         if (params.has("reportbusy")) throw "Сервер сейчас не принимает отчёты. Попробуйте позже";
         if (params.has("reportfail")) throw "Не получилось отправить. Проверьте интернет и попробуйте ещё раз";
         window.__reports.push({ text: args.text, contact: args.contact });
+        return null;
+      }
+      if (cmd === "notices_banner_dismiss") {
+        R.notices_banner = null;
         return null;
       }
       if (cmd === "notice_event") {

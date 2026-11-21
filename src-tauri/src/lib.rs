@@ -157,6 +157,8 @@ pub fn run() {
             commands::telemetry_ui_error,
             commands::telemetry_report,
             commands::notice_event,
+            commands::notices_banner,
+            commands::notices_banner_dismiss,
             commands::play_chime,
             commands::diagnostics_report,
             commands::notices_list,

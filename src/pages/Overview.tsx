@@ -15,6 +15,7 @@ import { StatusOrb } from "../components/StatusOrb";
 import { NumberTicker } from "../components/NumberTicker";
 import { Sparkline } from "../components/Sparkline";
 import { UpdateBanner } from "../components/UpdateBanner";
+import { PromoBanner } from "../components/PromoBanner";
 import { BridgeFileNotice } from "../components/BridgeFileNotice";
 import {
   bridgeTaskRegister,
@@ -591,6 +592,9 @@ export function Overview({ onOpenProxies }: Props) {
       )}
 
       <UpdateBanner compact />
+
+      {/* Баннер из админки (объявление с оформлением) */}
+      <PromoBanner className="mt-3" />
 
       {health && (
         <p className="mt-4 text-center font-mono text-[10px] text-vb-silver-faint/70">

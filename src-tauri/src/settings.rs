@@ -753,7 +753,9 @@ where
         // Отметки о прочтении - только для живых id: файл рассылок может
         // похудеть, а список прочитанного не должен расти вечно.
         let alive: Vec<String> = github.iter().chain(server.iter()).map(|n| n.id.clone()).collect();
-        s.notices_read.retain(|id| id.starts_with("update-") || alive.contains(id));
+        // «banner:<id>» - закрытый баннер: живёт, пока жива запись.
+        s.notices_read
+            .retain(|id| id.starts_with("update-") || alive.contains(id) || id.strip_prefix("banner:").is_some_and(|b| alive.iter().any(|a| a == b)));
         s.notices_toasted.retain(|id| alive.contains(id));
         s.notices_cache = github;
         s.notices_cache_server = server;
