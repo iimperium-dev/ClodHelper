@@ -183,6 +183,9 @@ interface StatusContextValue {
   proxies: ProxyState[];
   /** Итоговое состояние для орба/логотипа/сайдбара/трея - одно на всё UI. */
   orb: OrbState;
+  /** Мост работает, но часть прокси с проблемой: орб зелёный и раз в
+      столько секунд мигает жёлтым (10 - один прокси, 5 - два и больше). */
+  orbPulse: number | null;
   /** История трафика текущей сессии GUI (для sparkline). */
   history: TrafficSample[];
   /** Последний TCP-пинг пула прокси (обновляется раз в 5 минут). */
@@ -428,6 +431,7 @@ export function StatusProvider({ children }: { children: ReactNode }) {
 
   const proxies = proxyStatesOf(poolPing, health, quality);
   const orb = orbStateOf(status, proxies);
+  const orbPulse = orbPulseOf(orb, proxies);
 
   return (
     <StatusContext.Provider
@@ -442,6 +446,7 @@ export function StatusProvider({ children }: { children: ReactNode }) {
         quality,
         proxies,
         orb,
+        orbPulse,
         history,
         poolPing,
         refresh,
@@ -465,14 +470,28 @@ export function useStatus(): StatusContextValue {
   return ctx;
 }
 
+/** Сколько прокси с проблемой: не отвечает или нестабилен (резервы тоже). */
+export function proxyProblems(proxies: ProxyState[]): number {
+  return proxies.filter((p) => p.state === "down" || p.state === "unstable").length;
+}
+
 /** Единая логика статуса для орба/логотипа/трея: loading/down/warn/ok.
-    warn - какой-то прокси пула не работает или нестабилен: мост жив, но
-    часть трафика (закреплённая за этим прокси) может стоять. */
+    down - мост остановлен. warn - не работает ни один прокси пула (и
+    резерв не подменил). Если не работает только часть прокси, это ok:
+    трафик идёт, о проблеме говорит редкое жёлтое мигание (orbPulseOf). */
 export function orbStateOf(status: ShimStatus | null, proxies: ProxyState[] = []): OrbState {
   if (status === null) return "loading";
   if (!status.running) return "down";
-  if (proxies.some((p) => p.state === "down" || p.state === "unstable")) return "warn";
+  const pool = poolOnly(proxies);
+  if (pool.length > 0 && pool.every((p) => p.state === "down" && p.coveredBy === undefined)) return "warn";
   return "ok";
+}
+
+/** Период жёлтого мигания зелёного орба, с: null - проблем нет. */
+export function orbPulseOf(orb: OrbState, proxies: ProxyState[]): number | null {
+  if (orb !== "ok") return null;
+  const n = proxyProblems(proxies);
+  return n === 0 ? null : n === 1 ? 10 : 5;
 }
 
 export function formatUptime(sec?: number): string {

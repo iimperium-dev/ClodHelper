@@ -111,6 +111,8 @@ export interface ScopeBrowser {
   /** pac - сайты в этом браузере; bridge - весь трафик через мост; off; conflict. */
   state: "pac" | "bridge" | "off" | "conflict";
   conflict: string | null;
+  /** Файл браузера (exe или .app) - для иконки. */
+  exe?: string;
 }
 
 export interface SitesScope {
@@ -126,6 +128,8 @@ export interface BypassApp {
   /** Папка программы - правило действует на все её exe и профили. */
   dir: string;
   running: boolean;
+  /** Файл программы - для иконки (у старых записей нет). */
+  exe?: string;
 }
 
 /** Браузер, в котором расширения перехватывают прокси (сайты в нём не работают). */

@@ -90,7 +90,7 @@ function proxyProblemLabel(proxies: ProxyState[]): string | null {
     return pool.length > 1 ? "Прокси не отвечают" : "Прокси не отвечает";
   }
   if (lost.length > 1) return `${lost.length} прокси не отвечают`;
-  if (lost.length === 1) return pool[0] === lost[0] ? "Основной прокси не отвечает" : "Запасной прокси не отвечает";
+  if (lost.length === 1) return pool[0] === lost[0] ? "Основной прокси не отвечает" : "1 прокси не отвечает";
   if (down.length > 0) return "Работает резервный прокси";
   if (pool.some((p) => p.state === "unstable")) return "Прокси нестабилен";
   if (proxies.some((p) => p.backupOf !== undefined && p.state === "down")) return "Резервный прокси не отвечает";
@@ -98,7 +98,7 @@ function proxyProblemLabel(proxies: ProxyState[]): string | null {
 }
 
 export function Sidebar({ view, onNavigate }: Props) {
-  const { status, health, healthErr, exeLegacy, orb, proxies, bridgeFile, sitesBroken } = useStatus();
+  const { status, health, healthErr, exeLegacy, orb, orbPulse, proxies, bridgeFile, sitesBroken } = useStatus();
   const [expanded, setExpanded] = useState(readExpanded);
   const [logoHover, setLogoHover] = useState(false);
 
@@ -121,15 +121,21 @@ export function Sidebar({ view, onNavigate }: Props) {
       ? "Антивирус удаляет мост"
       : !running
       ? "Мост остановлен"
-      : proxyProblemLabel(proxies) ?? "Мост активен";
+      : orb === "warn"
+        ? proxyProblemLabel(proxies) ?? "Мост активен"
+        : "Мост активен";
+  // Часть прокси с проблемой - мост работает: заголовок спокойный, а что
+  // именно не так - второй строкой вместо времени работы.
+  const partialProblem = !loading && running && orb === "ok" ? proxyProblemLabel(proxies) : null;
   const statusSub =
-    !loading && running
+    partialProblem ??
+    (!loading && running
       ? health
         ? `${formatUptime(health.uptime_sec)} · ${health.mode === "smart" ? "smart" : "весь трафик"}`
         : exeLegacy || healthErr
           ? "легаси-мост"
           : formatUptime(status?.uptime_sec)
-      : null;
+      : null);
 
   return (
     <motion.aside
@@ -274,7 +280,7 @@ export function Sidebar({ view, onNavigate }: Props) {
         aria-label={`${statusLabel} - открыть Обзор`}
       >
         <span className="relative shrink-0">
-          <StatusOrb state={orb} size={8} />
+          <StatusOrb state={orb} pulse={orbPulse} size={8} />
         </span>
         <Label show={expanded}>
           <span className="block truncate text-[12px] font-medium leading-tight text-vb-silver">

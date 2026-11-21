@@ -89,14 +89,20 @@ function StatusDot({ row, size = 8 }: { row: PoolRow; size?: number }) {
 const statusTitle = (r: PoolRow) =>
   r.live === "down" ? (r.coverHost ? "Не работает - подменяет резерв" : "Не работает") : r.live === "unstable" ? "Сбоит" : r.live === "slow" ? "Медленно отвечает" : r.live === "ok" ? "Работает" : "Проверяю";
 
-/** Причина «не работает / сбоит» - прямо под именем, не молча. */
+/** Причина «не работает / сбоит» - одной тихой строкой под именем; полный
+    текст - в подсказке и в раскрытой строке. Цвет говорит точка слева. */
 function Problem({ row }: { row: PoolRow }) {
   if (!(row.live === "down" || row.live === "unstable") || !row.reason) return null;
+  const full =
+    (row.live === "down" ? "Не работает: " : "Сбоит: ") +
+    row.reason.charAt(0).toLowerCase() +
+    row.reason.slice(1) +
+    (row.coverHost ? ` - подменяет резерв ${row.coverHost}` : "");
+  const short = row.live === "down" ? (row.coverHost ? "Не отвечает, работает резерв" : "Не отвечает") : "Сбоит";
   return (
-    <div className={cn("mt-1 text-[11px] leading-snug", row.live === "down" && !row.coverHost ? "text-vb-loss" : "text-vb-warn")}>
-      {row.live === "down" ? "Не работает: " : "Сбоит: "}
-      {row.reason.charAt(0).toLowerCase() + row.reason.slice(1)}
-      {row.coverHost && ` - подменяет резерв ${row.coverHost}`}
+    <div title={full} className="mt-1 truncate text-[11px] leading-snug text-vb-silver-dim">
+      {short}
+      {row.open && <span className="text-vb-silver-faint"> - {row.reason.charAt(0).toLowerCase() + row.reason.slice(1)}</span>}
     </div>
   );
 }
@@ -131,6 +137,7 @@ export function ago(at: number): string {
 }
 
 const SPEED_STEPS = [1, 5, 15, 40, 100];
+const FAIL_SHOW_MS = 20_000;
 const speedLevel = (mbps: number) => SPEED_STEPS.filter((t) => mbps >= t).length;
 
 /** Мини-индикатор скорости: 5 столбиков. Во время замера бегут волной,
@@ -138,6 +145,21 @@ const speedLevel = (mbps: number) => SPEED_STEPS.filter((t) => mbps >= t).length
 export function SpeedMeter({ entry, busy, showLabel = true }: { entry?: SpeedEntry; busy: boolean; showLabel?: boolean }) {
   const reduced = useReducedMotion();
   const ok = entry && "mbps" in entry ? entry : undefined;
+  // Неудачный замер видно 20 секунд (причина - в подсказке), потом строка
+  // возвращается к «скорость -»: висеть вечно ему незачем.
+  const failed = entry && "error" in entry ? entry : undefined;
+  const [failShown, setFailShown] = useState(false);
+  useEffect(() => {
+    if (!failed) return setFailShown(false);
+    const left = FAIL_SHOW_MS - (Date.now() - failed.at);
+    setFailShown(left > 0);
+    if (left <= 0) return;
+    const t = window.setTimeout(() => setFailShown(false), left);
+    return () => window.clearTimeout(t);
+  }, [failed]);
+  if (!busy && failed && !failShown) {
+    return showLabel ? <span className="text-vb-silver-faint/70">скорость -</span> : null;
+  }
   const level = ok ? speedLevel(ok.mbps) : 0;
   const slow = !!ok && ok.mbps < 2;
   return (
@@ -174,8 +196,8 @@ export function SpeedMeter({ entry, busy, showLabel = true }: { entry?: SpeedEnt
           <span className={cn("tnum font-mono", slow ? "text-vb-warn" : "text-vb-silver-dim")}>
             <CountUp key={ok.at} value={ok.mbps} format={formatMbps} /> Мбит/с
           </span>
-        ) : entry ? (
-          <span className="text-vb-warn">не замерить</span>
+        ) : failed ? (
+          <span className="text-vb-warn" title={failed.error}>не удалось замерить</span>
         ) : null)}
     </span>
   );

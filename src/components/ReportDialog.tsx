@@ -53,6 +53,7 @@ export function ReportDialog({ open, onClose, returnFocusTo }: Props) {
   const [slow, setSlow] = useState(false);
   const nonce = useRef("");
   const sending = useRef(false);
+  const backdropDown = useRef(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
   const doneRef = useRef<HTMLButtonElement>(null);
@@ -158,6 +159,16 @@ export function ReportDialog({ open, onClose, returnFocusTo }: Props) {
           animate={{ opacity: 1, transition: { duration: 0.2, ease: "easeOut" } }}
           exit={{ opacity: 0, transition: { duration: 0.15, ease: "easeIn" } }}
           className="fixed inset-x-0 bottom-0 top-9 z-[86] flex items-center justify-center bg-black/55 p-5 backdrop-blur-[6px]"
+          // Клик по фону закрывает окно (не во время отправки). Нажатие тоже
+          // должно начаться на фоне: выделение текста, отпущенное снаружи,
+          // окно не закрывает.
+          onMouseDown={(e) => {
+            backdropDown.current = e.target === e.currentTarget;
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && backdropDown.current && !sending.current) onClose();
+            backdropDown.current = false;
+          }}
         >
           <motion.div
             ref={dialogRef}

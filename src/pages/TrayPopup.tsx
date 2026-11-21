@@ -36,7 +36,7 @@ import { cn } from "../lib/cn";
 */
 export function TrayPopup() {
   // orb - единое состояние из StatusProvider (учитывает и «нестабилен»).
-  const { status, health, refresh, orb } = useStatus();
+  const { status, health, refresh, orb, orbPulse } = useStatus();
 
   const [busy, setBusy] = useState<"start" | "stop" | "restart" | "test" | null>(null);
   const [testResult, setTestResult] = useState<ShimTestResult | null>(null);
@@ -156,7 +156,7 @@ export function TrayPopup() {
       >
         {/* Статус */}
         <div className="flex items-center gap-3 px-4 pb-3 pt-4">
-          <StatusOrb state={orb} size={11} />
+          <StatusOrb state={orb} pulse={orbPulse} size={11} />
           <div className="min-w-0 flex-1">
             <div className="text-[14px] font-semibold leading-tight text-vb-fg">
               {loading ? "Проверяю…" : running ? "Мост активен" : "Мост остановлен"}

@@ -5,6 +5,8 @@ export type OrbState = "loading" | "ok" | "warn" | "down";
 
 interface Props {
   state: OrbState;
+  /** Период мягкого жёлтого мигания зелёного орба, с (часть прокси с проблемой). */
+  pulse?: number | null;
   /** Диаметр ядра, px (кольцо и свечение масштабируются от него). */
   size?: number;
   className?: string;
@@ -15,7 +17,7 @@ interface Props {
   Правила скиллов: idle-анимация тонкая и медленная (не мигание), reduced
   motion - статичный вариант, никаких bounce.
 */
-export function StatusOrb({ state, size = 14, className }: Props) {
+export function StatusOrb({ state, pulse, size = 14, className }: Props) {
   const reduce = useReducedMotion();
 
   const core =
@@ -75,9 +77,29 @@ export function StatusOrb({ state, size = 14, className }: Props) {
       )}
       {/* Ядро */}
       <span
-        className={cn("rounded-full", core)}
+        className={cn("relative rounded-full", core)}
         style={{ width: size, height: size, boxShadow: glow }}
-      />
+      >
+        <WarnPulse on={state === "ok" && !!pulse} period={pulse ?? 10} reduce={!!reduce} />
+      </span>
     </span>
+  );
+}
+
+/**
+ * Мягкое жёлтое мигание поверх зелёного: «есть проблема с одним из прокси,
+ * но всё работает». Короткая вспышка раз в period секунд (CSS-анимация,
+ * index.css). Без анимаций (reduced motion) - тонкий жёлтый оттенок.
+ */
+export function WarnPulse({ on, period, reduce }: { on: boolean; period: number; reduce: boolean }) {
+  if (!on) return null;
+  if (reduce) {
+    return <span className="absolute inset-0 rounded-full bg-vb-warn/45" aria-hidden />;
+  }
+  return (
+    <span
+      className={cn("absolute inset-0 rounded-full bg-vb-warn opacity-0", period <= 5 ? "warn-pulse-5" : "warn-pulse-10")}
+      aria-hidden
+    />
   );
 }

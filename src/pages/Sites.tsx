@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Check, ChevronDown, Eye, FolderOpen, Loader2, Pencil, Plus, RotateCw, Trash2, X } from "lucide-react";
 import { Button } from "../components/Button";
 import { Toggle } from "../components/Toggle";
+import { ProgramIcon, useProgramIcons } from "../components/ProgramIcon";
 import { ProxySelect } from "./Proxies";
 import {
   appsSettingsSet,
@@ -126,6 +127,7 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
   // true - только в выбранных (PAC их политикой). scopeView - что показано
   // (выбор «только в выбранных» вступает в силу по «Применить»).
   const [scope, setScope] = useState<SitesScope | null>(null);
+  const scopeIcons = useProgramIcons(scope?.browsers.map((b) => b.exe) ?? []);
   const [scopeView, setScopeView] = useState(false);
   const [draft, setDraft] = useState<Set<string>>(new Set());
   const applyScopeState = (sc: SitesScope) => {
@@ -662,15 +664,31 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
                 onClick={() => void chooseScope(sel)}
                 disabled={busy !== null}
                 className={cn(
-                  "flex-1 rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors",
-                  scopeView === sel ? "bg-vb-surface text-vb-fg shadow-[0_1px_2px_rgba(0,0,0,0.3)]" : "text-vb-silver-dim hover:text-vb-silver",
+                  "relative flex-1 rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors duration-200",
+                  scopeView === sel ? "text-vb-fg" : "text-vb-silver-dim hover:text-vb-silver",
                 )}
               >
-                {sel ? "Только в выбранных" : "Во всех браузерах"}
+                {/* Подложка выбранного пункта переезжает, а не прыгает */}
+                {scopeView === sel && (
+                  <motion.span
+                    layoutId="sites-scope-pill"
+                    className="absolute inset-0 rounded-md bg-vb-surface ring-1 ring-white/[0.07] shadow-[0_1px_3px_rgba(0,0,0,0.45)]"
+                    transition={{ type: "spring", stiffness: 420, damping: 36 }}
+                  />
+                )}
+                <span className="relative">{sel ? "Только в выбранных" : "Во всех браузерах"}</span>
               </button>
             ))}
           </div>
 
+          <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={scopeView ? "selected" : "all"}
+            initial={{ opacity: 0, x: scopeView ? 12 : -12 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: scopeView ? -12 : 12 }}
+            transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+          >
           {!scopeView ? (
             <>
           <div className="surface-card mt-2 divide-y divide-vb-border/70">
@@ -764,7 +782,10 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
                           {on && <Check className="h-3 w-3 text-black" />}
                         </span>
                         <span className="min-w-0 flex-1">
-                          <span className="block text-[13px] font-medium text-vb-fg">{b.name}</span>
+                          <span className="flex items-center gap-1.5 text-[13px] font-medium text-vb-fg">
+                            <ProgramIcon name={b.name} icon={b.exe ? scopeIcons[b.exe] : null} size={15} />
+                            {b.name}
+                          </span>
                           <span className={cn("block truncate text-[11px]", b.state === "conflict" ? "text-vb-warn" : "text-vb-silver-faint")}>
                             {b.state === "pac"
                               ? "Сайты из списка - через прокси"
@@ -794,6 +815,8 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
               </div>
             </>
           )}
+          </motion.div>
+          </AnimatePresence>
 
               </motion.div>
             )}
@@ -943,9 +966,15 @@ function BypassCard() {
   const [candidates, setCandidates] = useState<BypassApp[] | null>(null);
   const [picking, setPicking] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Для иконок: у старых записей нет файла программы - берём его у кандидата
+  // из той же папки.
+  const [known, setKnown] = useState<BypassApp[]>([]);
+  const exeOf = (a: BypassApp) => a.exe ?? known.find((k) => k.dir.toLowerCase() === a.dir.toLowerCase())?.exe;
+  const icons = useProgramIcons([...(apps ?? []), ...(candidates ?? [])].map(exeOf));
 
   useEffect(() => {
     void sitesBypassGet().then(setApps).catch(() => setApps([]));
+    void sitesBypassCandidates().then(setKnown).catch(() => {});
   }, []);
 
   const save = async (next: BypassApp[]) => {
@@ -1020,12 +1049,12 @@ function BypassCard() {
                     onClick={() => add(c)}
                     className="flex w-full items-center gap-2.5 border-b border-vb-border/50 px-3 py-2 text-left transition-colors hover:bg-vb-surface-2/80"
                   >
-                    <span
-                      className={cn("h-1.5 w-1.5 shrink-0 rounded-full", c.running ? "bg-vb-emerald" : "bg-vb-border-strong")}
-                      title={c.running ? "Запущен" : "Не запущен"}
-                    />
+                    <ProgramIcon name={c.name} icon={icons[exeOf(c) ?? ""]} size={18} />
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[13px] text-vb-fg">{c.name}</span>
+                      <span className="flex items-center gap-1.5 truncate text-[13px] text-vb-fg">
+                        {c.name}
+                        {c.running && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-vb-emerald" title="Запущен" />}
+                      </span>
                       <span className="block truncate font-mono text-[10px] text-vb-silver-faint">{c.dir}</span>
                     </span>
                     <Plus className="h-3.5 w-3.5 shrink-0 text-vb-silver-faint" />
@@ -1054,8 +1083,9 @@ function BypassCard() {
               <span
                 key={a.dir}
                 title={a.dir}
-                className="inline-flex items-center gap-1.5 rounded-full border border-vb-border bg-vb-surface-2/60 py-1 pl-3 pr-1 text-[12px] text-vb-silver"
+                className="inline-flex items-center gap-1.5 rounded-full border border-vb-border bg-vb-surface-2/60 py-1 pl-1.5 pr-1 text-[12px] text-vb-silver"
               >
+                <ProgramIcon name={a.name} icon={icons[exeOf(a) ?? ""]} size={14} />
                 {a.name}
                 <button
                   type="button"

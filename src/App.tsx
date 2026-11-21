@@ -17,6 +17,7 @@ import { UpdateSplash } from "./pages/UpdateSplash";
 import { UpdateDialog } from "./components/UpdateDialog";
 import { WhatsNewModal } from "./components/WhatsNewModal";
 import { AutoUpdateOffer } from "./components/AutoUpdateOffer";
+import { openPrivacyNext } from "./components/PrivacyCard";
 import { StatusProvider } from "./lib/status";
 import { Button } from "./components/Button";
 import { AlertTriangle, Info } from "lucide-react";
@@ -379,7 +380,10 @@ function App() {
             <Button
               variant="secondary"
               size="sm"
-              onClick={() => closeBanner(() => navigate("settings"))}
+              onClick={() => closeBanner(() => {
+                openPrivacyNext();
+                navigate("settings");
+              })}
             >
               Настройки
             </Button>
@@ -420,6 +424,7 @@ function App() {
         onOpenSettings={() => {
           // Без ответа: auto_update остаётся пустым, предложение вернётся при следующем запуске.
           setOfferAuto(false);
+          openPrivacyNext();
           navigate("settings");
         }}
       />

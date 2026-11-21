@@ -43,8 +43,22 @@ test("мастер: три переключателя включены и зап
   expect(await privacy(page)).toEqual({ auto_update: true, crash_reports: false, usage_stats: true });
 });
 
+test("настройки: блок отчётов внизу, свёрнут, раскрывается", async ({ page }) => {
+  await openSettings(page);
+  const head = page.getByRole("button", { name: "Обновления и отчёты" });
+  await expect(head).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByRole("switch", { name: "Обновлять автоматически" })).toHaveCount(0);
+  // Ниже всего остального на странице.
+  const about = (await page.getByText("Мост запускается сам").boundingBox())!;
+  expect((await head.boundingBox())!.y).toBeGreaterThan(about.y);
+  await head.click();
+  await expect(head).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByText("Что именно отправляется")).toHaveCount(0);
+});
+
 test("настройки: три переключателя с пояснениями", async ({ page }) => {
   await openSettings(page);
+  await page.getByRole("button", { name: "Обновления и отчёты" }).click();
   const stats = page.getByRole("switch", { name: "Отправлять анонимную статистику" });
   await expect(page.getByRole("switch", { name: "Обновлять автоматически" })).toBeVisible();
   await expect(page.getByRole("switch", { name: "Отправлять отчёты об ошибках" })).toBeVisible();
@@ -53,6 +67,12 @@ test("настройки: три переключателя с пояснени�
   await expect(stats).toHaveAttribute("aria-checked", "false");
   expect((await privacy(page)).usage_stats).toBe(false);
   await expect(page.getByText("Раз в день, без адресов и настроек прокси")).toBeVisible();
+});
+
+test("отчёт: клик по фону закрывает окно", async ({ page }) => {
+  const { dialog } = await openReport(page);
+  await page.mouse.click(8, 300);
+  await expect(dialog).toHaveCount(0);
 });
 
 test("отчёт: успех", async ({ page }) => {
@@ -111,6 +131,7 @@ test("предложение для обновившихся: строка пр�
   await dialog.getByRole("button", { name: "в настройках" }).click();
   await expect(dialog).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Обновления и отчёты" })).toBeVisible();
+  await expect(page.getByRole("switch", { name: "Отправлять анонимную статистику" })).toBeVisible();
   // Ответ не записан: auto_update остаётся пустым.
   expect(await page.evaluate(() => (window as unknown as { __autoUpdate: () => boolean | null }).__autoUpdate())).toBeNull();
   // Не трогал - при следующем запуске предложение снова показывается.
@@ -218,27 +239,13 @@ test("плашка: «Настройки» открывает настройки
   await banner.getByRole("button", { name: "Настройки" }).click();
   await expect(banner).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Обновления и отчёты" })).toBeVisible();
+  await expect(page.getByRole("switch", { name: "Отправлять анонимную статистику" })).toBeVisible();
 });
 
 test("плашки нет, если флаг уже стоит", async ({ page }) => {
   await page.goto("/mock.html?still&platform=win");
   await expect(page.getByText("Мост активен").first()).toBeVisible({ timeout: 20_000 });
   await expect(page.getByRole("region", { name: "Отчёты и статистика" })).toHaveCount(0);
-});
-
-test("настройки: «Что именно отправляется» раскрывается и сворачивается", async ({ page }) => {
-  await openSettings(page);
-  const toggle = page.getByRole("button", { name: "Что именно отправляется" });
-  await expect(toggle).toHaveAttribute("aria-expanded", "false");
-  await expect(page.getByText("неделя установки (только в первый раз и раз в неделю)")).toHaveCount(0);
-  await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-expanded", "true");
-  await expect(page.getByText(/неделя установки \(только в первый раз и раз в неделю\)/)).toBeVisible();
-  await expect(page.getByText(/какой это сбой \(программа, окно, мост, обновление\)/)).toBeVisible();
-  await expect(page.getByText("показано, нажато, закрыто")).toBeVisible();
-  await expect(page.getByText(/спрашивает сервер объявлений/)).toBeVisible();
-  await toggle.click();
-  await expect(page.getByText("показано, нажато, закрыто")).toHaveCount(0);
 });
 
 test("отчёт: «Посмотреть, что уйдёт» показывает очищенное тело", async ({ page }) => {
@@ -391,6 +398,7 @@ test("отчёт: долгая отправка - строка про запас
 
 test("настройки: не прочиталось - ошибка и «Повторить», переключателей нет", async ({ page }) => {
   await openSettings(page, "&privacyfail");
+  await page.getByRole("button", { name: "Обновления и отчёты" }).click();
   const card = page.getByRole("region", { name: "Обновления и отчёты" });
   await expect(card.getByRole("alert")).toContainText("Не получилось прочитать настройки");
   await expect(card.getByRole("switch")).toHaveCount(0);

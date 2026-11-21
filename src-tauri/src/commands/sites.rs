@@ -117,6 +117,8 @@ pub struct ScopeBrowser {
     /// («Всегда через мост» в Приложениях); "off"; "conflict" - чужая политика.
     pub state: &'static str,
     pub conflict: Option<String>,
+    /// Файл браузера (exe или .app) - для иконки.
+    pub exe: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -142,7 +144,7 @@ fn scope_browsers() -> Vec<ScopeBrowser> {
             Ok(_) => ("off", None),
             Err(e) => ("conflict", Some(e)),
         };
-        out.push(ScopeBrowser { domain, name, state, conflict });
+        out.push(ScopeBrowser { domain, name, state, conflict, exe });
     }
     out
 }
@@ -220,7 +222,7 @@ pub fn sites_bypass_from_exe(path: String) -> Result<crate::browser_ext::BypassA
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "Программа".into());
-    Ok(crate::browser_ext::BypassApp { name, dir, running: false })
+    Ok(crate::browser_ext::BypassApp { name, dir, running: false, exe: Some(path) })
 }
 
 /// Сохранить список и сразу отдать мосту (он перечитывает файл за ~2 с).

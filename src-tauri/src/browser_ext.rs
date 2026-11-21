@@ -297,6 +297,10 @@ pub struct BypassApp {
     /// Запущена сейчас (только для подсказок в UI).
     #[serde(default)]
     pub running: bool,
+    /// Файл программы (exe или .app) - для иконки в списке. У записей из
+    /// старых версий его нет: иконку тогда ищем по кандидатам.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exe: Option<String>,
 }
 
 /// Папка программы по пути к её exe: «…\Google\Chrome\Application\chrome.exe»
@@ -368,7 +372,7 @@ pub fn bypass_candidates() -> Vec<BypassApp> {
                 found.running |= is_running;
                 return;
             }
-            out.push(BypassApp { name, dir, running: is_running });
+            out.push(BypassApp { name, dir, running: is_running, exe: Some(exe.to_string()) });
         };
         for (name, exe) in installed_browsers() {
             let is_running = running.iter().any(|r| r.eq_ignore_ascii_case(&exe));
@@ -400,7 +404,7 @@ pub fn bypass_candidates() -> Vec<BypassApp> {
                 return;
             }
             let is_running = running.iter().any(|r| r == &bundle);
-            out.push(BypassApp { name, dir: bundle, running: is_running });
+            out.push(BypassApp { name, exe: Some(bundle.clone()), dir: bundle, running: is_running });
         };
         for (name, app) in installed_browsers() {
             push(name, app.trim_end_matches('/').to_string(), &mut out);

@@ -218,6 +218,24 @@
     }
   }
 
+  /* Статус «часть прокси с проблемой»: зелёный орб коротко вспыхивает
+     жёлтым раз в 10 с (один прокси) или раз в 5 с (два и больше).
+     Вспышка ~1,6 с в начале цикла. */
+  .warn-pulse-10 {
+    animation: warn-pulse-10 10s ease-in-out infinite;
+  }
+  .warn-pulse-5 {
+    animation: warn-pulse-5 5s ease-in-out infinite;
+  }
+  @keyframes warn-pulse-10 {
+    0%, 16%, 100% { opacity: 0; }
+    4%, 10% { opacity: 1; }
+  }
+  @keyframes warn-pulse-5 {
+    0%, 32%, 100% { opacity: 0; }
+    8%, 20% { opacity: 1; }
+  }
+
   /* Reduced motion: не «ноль», а мягче - убираем движение, оставляем opacity. */
   @media (prefers-reduced-motion: reduce) {
     *,

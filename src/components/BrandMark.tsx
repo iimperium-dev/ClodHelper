@@ -1,5 +1,7 @@
 import { useStatus } from "../lib/status";
 import { cn } from "../lib/cn";
+import { useReducedMotion } from "framer-motion";
+import { WarnPulse } from "./StatusOrb";
 
 interface Props {
   size?: number;
@@ -15,7 +17,8 @@ interface Props {
   у иконки в трее. Используется в titlebar и сайдбаре.
 */
 export function BrandMark({ size = 32, withStatus = true, className }: Props) {
-  const { orb: st } = useStatus();
+  const { orb: st, orbPulse } = useStatus();
+  const reduce = useReducedMotion();
   const dotColor =
     st === "ok"
       ? "bg-vb-emerald"
@@ -54,14 +57,16 @@ export function BrandMark({ size = 32, withStatus = true, className }: Props) {
       </svg>
       {withStatus && (
         <span
-          className={cn("absolute rounded-full border-2 border-vb-bg", dotColor)}
+          className={cn("absolute overflow-hidden rounded-full border-2 border-vb-bg", dotColor)}
           style={{
             width: Math.max(8, size * 0.34),
             height: Math.max(8, size * 0.34),
             right: -size * 0.07,
             bottom: -size * 0.07,
           }}
-        />
+        >
+          <WarnPulse on={st === "ok" && !!orbPulse} period={orbPulse ?? 10} reduce={!!reduce} />
+        </span>
       )}
     </span>
   );

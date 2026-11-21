@@ -53,12 +53,30 @@
   const health = {
     status: "ok", version: "1.8.0", uptime_sec: 28000, listen: "127.0.0.1:8889", mode: "smart",
     active: 3, total: 700, via_upstream: 412, via_direct: 288, errors: 6,
-    upstreams: [{ url: "http://185.68.187.138:8000", healthy: true, ok: 900, fail: 6, fail_streak: 0, latency_ms: 66 }],
+    upstreams: [{ url: "http://185.68.187.138:8000", healthy: params.get("down") !== "all", ok: 900, fail: params.get("down") === "all" ? 60 : 6, fail_streak: params.get("down") === "all" ? 9 : 0, latency_ms: 66 }],
     last_errors: [
       { t: 26000, msg: "назначенный прокси http://185.68.187.138:8000 не отвечает (коннект: Network is unreachable (os error 51))" },
       { t: 26010, msg: "назначенный прокси x не отвечает (принял соединение, но молчит на CONNECT)" },
     ],
   };
+  // ?browsers - браузеры с иконками на «Сайтах» (выбор и «Не трогать»).
+  const ICO = (c1, c2) =>
+    "data:image/svg+xml," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><radialGradient id="g" cx="35%" cy="30%" r="80%"><stop offset="0" stop-color="${c1}"/><stop offset="1" stop-color="${c2}"/></radialGradient></defs><circle cx="32" cy="32" r="28" fill="url(#g)"/><circle cx="32" cy="32" r="11" fill="#fff" opacity=".9"/></svg>`);
+  const BROWSERS_DEMO = params.has("browsers")
+    ? {
+        exe: { "C:/chrome.exe": ICO("#ffd34d", "#1a9e4b"), "C:/msedge.exe": ICO("#58d6a6", "#1268c4"), "C:/brave.exe": ICO("#ff8a4c", "#e2441a") },
+        scope: [
+          { domain: "Google\Chrome", name: "Google Chrome", state: "pac", conflict: null, exe: "C:/chrome.exe" },
+          { domain: "Microsoft\Edge", name: "Microsoft Edge", state: "off", conflict: null, exe: "C:/msedge.exe" },
+          { domain: "BraveSoftware\Brave", name: "Brave", state: "off", conflict: null, exe: "C:/brave.exe" },
+        ],
+        candidates: [
+          { name: "Google Chrome", dir: "C:/Google/Chrome", running: true, exe: "C:/chrome.exe" },
+          { name: "Microsoft Edge", dir: "C:/Microsoft/Edge", running: false, exe: "C:/msedge.exe" },
+          { name: "1browser", dir: "C:/1browser", running: true },
+        ],
+      }
+    : null;
   let layout = null;
   let leak = params.get("tg") === "blocked"
     ? { enabled: true, services: "claude,telegram", auto_restore: true, verified: true }
@@ -79,9 +97,10 @@
       ],
     },
     system_pac_status: { supported: true, enabled: true, active: true, foreign: null },
-    sites_scope_get: { supported: true, selected: false, browsers: [] },
+    sites_scope_get: { supported: true, selected: false, browsers: BROWSERS_DEMO ? BROWSERS_DEMO.scope : [] },
     sites_proxy_extensions: [],
     sites_bypass_get: [],
+    ...(BROWSERS_DEMO ? { sites_bypass_candidates: BROWSERS_DEMO.candidates, sites_bypass_get: [BROWSERS_DEMO.candidates[2]] } : {}),
     google_ads_get: true,
   };
   const R = {
@@ -96,8 +115,9 @@
     global_proxy_env: { present: true, points_to_bridge: true, values: [] },
     proxies_ping: [
       { url: "http://u:p@185.68.187.138:8000", host: "185.68.187.138", port: 8000, ms: 74 },
-      { url: "socks5://u:p@93.1.2.3:1080", host: "93.1.2.3", port: 1080, ms: 131 },
-    ],
+      { url: "socks5://u:p@93.1.2.3:1080", host: "93.1.2.3", port: 1080, ms: ["2", "all"].includes(params.get("down")) ? null : 131 },
+      ...(params.has("down") ? [{ url: "http://u:p@193.8.114.42:8080", host: "193.8.114.42", port: 8080, ms: null }] : []),
+    ].map((x, i) => (params.get("down") === "all" && i === 0 ? { ...x, ms: null } : x)),
     apps_list: apps,
     apps_traffic: [
       { id: "claude-desktop", running: true, via_bridge: 6, direct: 0, proxy_extension: null },
@@ -111,13 +131,16 @@
         : { id: "telegram", running: true, via_bridge: 4, direct: 0, proxy_extension: null },
       { id: "custom-1", running: true, via_bridge: 0, direct: 9, proxy_extension: { id: "foxy", name: "FoxyProxy" } },
     ],
-    apps_icons: {},
+    apps_icons: BROWSERS_DEMO ? BROWSERS_DEMO.exe : {},
     claude_proxy_status: {
       policy: { configured: true, managed: true, conflict: null, proxy_url: "http://127.0.0.1:8890", pac_configured: false, notice: null, auto_restore: true },
       bridge_ready: true, bridge_error: null, network_enforced: false,
     },
     telegram_status: { supported: true, app_path: "/Applications/Telegram.app", running: true, socks_ready: true, via_bridge: 4, direct: 0 },
-    proxies_get: ["http://u:p@185.68.187.138:8000", "socks5://u:p@93.1.2.3:1080"],
+    // ?down=1 - один прокси пула не отвечает, ?down=2 - два, ?down=all - все.
+    proxies_get: params.has("down")
+      ? ["http://u:p@185.68.187.138:8000", "socks5://u:p@93.1.2.3:1080", "http://u:p@193.8.114.42:8080"]
+      : ["http://u:p@185.68.187.138:8000", "socks5://u:p@93.1.2.3:1080"],
     proxy_labels_get: { "http://u:p@185.68.187.138:8000": "Claude main" },
     proxy_assignments_get: { anthropic: 0 },
     apps_search: [{ name: "WeChat", path: win ? "C:\\Program Files\\Tencent\\Weixin\\Weixin.exe" : "/Applications/WeChat.app" }],

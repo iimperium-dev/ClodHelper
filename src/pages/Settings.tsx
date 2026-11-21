@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Loader2 } from "lucide-react";
+import { Loader2, MessageSquareWarning } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
 import { Toggle } from "../components/Toggle";
 import { PrivacyCard } from "../components/PrivacyCard";
+import { ReportDialog } from "../components/ReportDialog";
+import { Button } from "../components/Button";
 import { UpdateBanner } from "../components/UpdateBanner";
 import { useStatus } from "../lib/status";
 import { autostartGet, autostartSet } from "../lib/api";
@@ -24,6 +26,8 @@ export function Settings() {
   const [autostartBusy, setAutostartBusy] = useState(false);
   const [autostartError, setAutostartError] = useState<string | null>(null);
   const [appVersion, setAppVersion] = useState<string>("");
+  const [reportOpen, setReportOpen] = useState(false);
+  const reportBtn = useRef<HTMLButtonElement>(null);
 
   const load = useCallback(async () => {
     const st = await autostartGet().catch(() => null);
@@ -98,11 +102,6 @@ export function Settings() {
         )}
       </motion.section>
 
-      {/* ── Обновления и отчёты ── */}
-      <motion.div variants={fadeInUp}>
-        <PrivacyCard />
-      </motion.div>
-
       <motion.section variants={fadeInUp} className="mt-4">
         <UpdateBanner />
       </motion.section>
@@ -127,7 +126,20 @@ export function Settings() {
             {task === null ? "-" : task.registered ? "да" : "нет"}
           </span>
         </div>
+        <div className="flex items-center justify-between px-4 py-2.5">
+          <span className="text-[13px] text-vb-silver-dim">Что-то не так</span>
+          <Button ref={reportBtn} variant="ghost" size="sm" onClick={() => setReportOpen(true)}>
+            <MessageSquareWarning className="h-3.5 w-3.5" aria-hidden />
+            Сообщить о проблеме
+          </Button>
+        </div>
       </motion.section>
+
+      {/* ── Обновления и отчёты: свёрнуто, внизу ── */}
+      <motion.div variants={fadeInUp}>
+        <PrivacyCard />
+      </motion.div>
+      <ReportDialog open={reportOpen} onClose={() => setReportOpen(false)} returnFocusTo={reportBtn} />
     </motion.div>
   );
 }

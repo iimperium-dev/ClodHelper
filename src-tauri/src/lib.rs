@@ -257,6 +257,7 @@ pub fn run() {
             commands::google_ads_get,
             commands::google_ads_set,
             commands::proxies_ping,
+            commands::proxy_speedtest,
             // Окна (трей-попап)
             commands::show_main_window,
             commands::quit_app,

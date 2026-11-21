@@ -228,10 +228,16 @@ fn run(app: AppHandle, h: TrayHandles) {
             .map(|hh| hh.upstreams.iter().all(|u| u.healthy))
             .unwrap_or(true);
         let high_ping = ping_high_streak >= PING_ALERT_STREAK;
+        // Жёлтая иконка - только когда не отвечает ни один прокси. Если упал
+        // один из нескольких, трафик идёт через остальные: иконка зелёная,
+        // о проблеме говорит подсказка (и мигание орба в окне).
+        let all_down = health
+            .as_ref()
+            .is_some_and(|hh| !hh.upstreams.is_empty() && hh.upstreams.iter().all(|u| !u.healthy));
 
         let state = if !listening {
             BridgeState::Down
-        } else if !upstream_ok || high_ping {
+        } else if all_down || high_ping {
             BridgeState::Warn
         } else {
             BridgeState::Ok
@@ -268,7 +274,7 @@ fn run(app: AppHandle, h: TrayHandles) {
             }
             (Some(BridgeState::Down), BridgeState::Ok | BridgeState::Warn) => {
                 if nf_up.ready() {
-                    notify(&app, "Мост снова в строю ✅");
+                    notify(&app, "Мост снова работает");
                 }
             }
             _ => {}
@@ -326,7 +332,13 @@ fn describe(
             Some(hh) => {
                 let mode = if hh.mode == "smart" { "smart" } else { "весь трафик" };
                 let ping = latency.map(|ms| format!(" · пинг {ms} мс")).unwrap_or_default();
-                let warn = if state == BridgeState::Warn { " ⚠" } else { "" };
+                let bad = hh.upstreams.iter().filter(|u| !u.healthy).count();
+                let warn = match bad {
+                    0 => String::new(),
+                    n if n == hh.upstreams.len() => " · прокси не отвечают".into(),
+                    1 => " · 1 прокси не отвечает".into(),
+                    n => format!(" · {n} прокси не отвечают"),
+                };
                 format!("Clod Helper - мост активен · {mode} · соединений: {}{ping}{warn}", hh.active)
             }
             None => "Clod Helper - мост активен (легаси, без телеметрии)".into(),

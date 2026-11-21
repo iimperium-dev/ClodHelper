@@ -163,6 +163,7 @@ test("настройки: переключатель автообновлени�
   await page.goto("/mock.html?still&platform=win");
   await expect(page.getByText("Мост активен").first()).toBeVisible({ timeout: 20_000 });
   await page.getByRole("tab", { name: "Настройки" }).click();
+  await page.getByRole("button", { name: "Обновления и отчёты" }).click();
   const sw = page.getByRole("switch", { name: "Обновлять автоматически" });
   await expect(sw).toHaveAttribute("aria-checked", "true");
   await sw.click();

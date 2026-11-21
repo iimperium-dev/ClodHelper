@@ -154,6 +154,7 @@ export function Overview({ onOpenProxies }: Props) {
     versions,
     proxies,
     orb,
+    orbPulse,
     history,
     refresh,
     refreshPoolPing,
@@ -306,7 +307,7 @@ export function Overview({ onOpenProxies }: Props) {
     >
       {/* ── Статус ── */}
       <motion.section variants={fadeInUp} className="flex items-center gap-3">
-        <StatusOrb state={orb} size={12} />
+        <StatusOrb state={orb} pulse={orbPulse} size={12} />
         <div className="min-w-0 flex-1">
           <h1 className="text-[20px] font-semibold leading-tight tracking-[-0.02em] text-vb-fg">
             {loading ? "Проверяю…" : running ? "Мост активен" : "Мост остановлен"}
