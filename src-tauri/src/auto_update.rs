@@ -697,6 +697,10 @@ async fn tick_inner(app: &AppHandle) {
     let probe = tokio::task::spawn_blocking(|| (idle_secs(), sample_bridge()))
         .await
         .unwrap_or((None, false));
+    // Только отладка: живая проверка на машине, где через мост идёт своя
+    // работа (CLOD_UPDATE_BRIDGE_QUIET - считать мост тихим).
+    #[cfg(debug_assertions)]
+    let probe = if std::env::var_os("CLOD_UPDATE_BRIDGE_QUIET").is_some() { (probe.0, true) } else { probe };
     let hidden = main_hidden(app);
     let facts = Facts {
         enabled: true,
