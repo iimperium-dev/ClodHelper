@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { AlertTriangle, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { AlertTriangle, Loader2, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import { Button } from "./Button";
 import { CountryFlag } from "./CountryFlag";
 import { ProxyInputField, useProxyInput } from "./ProxyInput";
@@ -173,7 +173,7 @@ export function ProxyBackups({
   const danger = warnings.some((w) => w.tone === "loss");
   const reduce = useReducedMotion();
   // Веточка - только когда есть резервы (или открыта форма добавления).
-  const tree = backups.length > 0 || adding;
+  const tree = backups.length > 0;
   // Ветка «растёт» при раскрытии: ствол тянется вниз, отводы выдвигаются
   // вбок, строки проявляются по очереди. Без анимаций - сразу на месте.
   const grow = (k: number) =>
@@ -301,9 +301,8 @@ export function ProxyBackups({
             transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
             className="relative overflow-hidden"
           >
-            {tree && <span aria-hidden className="absolute -left-[15px] top-[19px] h-px w-[15px] bg-vb-border-strong/80" />}
-            <div className="mt-1 rounded-xl border border-vb-border bg-vb-surface-2/40 p-3">
-              <div className="mb-2 text-[11px] font-medium text-vb-silver">Резервный прокси</div>
+            {/* Без рамки и заголовка: поле и кнопки одной строкой под именем. */}
+            <div className="pl-2.5 pt-1">
               {phase === "confirm" ? (
                 <div className="space-y-2">
                   {warnings.map((w, k) => (
@@ -327,11 +326,14 @@ export function ProxyBackups({
                     </div>
                   ))}
                 </div>
-              ) : (
-                <ProxyInputField input={input} autoFocus compact onEnter={() => void submit()} />
-              )}
-              {error && <p className="mt-2 text-[12px] text-vb-loss">{error}</p>}
-              <div className="mt-3 flex items-center gap-2">
+              ) : null}
+              {error && <p className="mb-1.5 text-[12px] text-vb-loss">{error}</p>}
+              <div className={cn("flex items-center gap-2", phase === "confirm" && "mt-2")}>
+                {phase !== "confirm" && (
+                  <div className="min-w-0 flex-1">
+                    <ProxyInputField input={input} autoFocus compact onEnter={() => void submit()} />
+                  </div>
+                )}
                 {phase === "confirm" ? (
                   <Button
                     variant={danger ? "danger" : "primary"}
@@ -351,9 +353,16 @@ export function ProxyBackups({
                     {phase === "checking" ? "Проверяю…" : phase === "saving" ? "Добавляю…" : "Добавить"}
                   </Button>
                 )}
-                <Button variant="ghost" size="sm" onClick={close} disabled={phase === "saving"}>
-                  Отмена
-                </Button>
+                <button
+                  type="button"
+                  onClick={close}
+                  disabled={phase === "saving"}
+                  title="Отмена"
+                  aria-label="Отмена"
+                  className="shrink-0 rounded-lg p-1.5 text-vb-silver-faint transition-colors hover:bg-vb-surface-2 hover:text-vb-silver disabled:opacity-40"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
               </div>
             </div>
           </motion.div>

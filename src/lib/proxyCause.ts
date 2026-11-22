@@ -31,6 +31,18 @@ export interface CauseContext {
 /** Прокси отказал в логине или пароле: тут не поможет ни VPN, ни перезапуск. */
 export const isAuthReason = (reason?: string) => /логин или пароль|407/i.test(reason ?? "");
 
+/** Причина двумя-тремя словами - для правой колонки строки прокси. */
+export function causeLabel(reason?: string): string {
+  const r = reason ?? "";
+  if (isAuthReason(r)) return "Неверный пароль";
+  if (/молчит|блокирует/i.test(r)) return "Молчит";
+  if (/порт закрыт|сервер выключен|не удалось подключиться/i.test(r)) return "Сервер недоступен";
+  if (/не ответил за/i.test(r)) return "Нет ответа";
+  if (/ошибкой 5\d\d/.test(r)) return "Ошибка прокси";
+  if (/Мост не может/.test(r)) return "Нет связи с мостом";
+  return "Не отвечает";
+}
+
 export function causeOf(p: ProxyState, ctx: CauseContext): ProxyCause {
   const spare = (text: string): ProxyCause =>
     ctx.canAddSpare && p.backupOf === undefined ? { text, action: "addSpare" } : { text, action: "recheck" };

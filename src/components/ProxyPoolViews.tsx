@@ -5,7 +5,8 @@ import { CountryFlag } from "./CountryFlag";
 import { CopyIp } from "../pages/Proxies";
 import type { ProxyLive } from "../lib/status";
 import { cn } from "../lib/cn";
-import { isAuthReason } from "../lib/proxyCause";
+import { causeLabel, causeOf, isAuthReason } from "../lib/proxyCause";
+import type { ProxyState } from "../lib/status";
 
 /* ───────────────────────── Модель строки ───────────────────────── */
 
@@ -109,22 +110,16 @@ function Problem({ row, a }: { row: PoolRow; a: PoolActions }) {
       </div>
     );
   }
-  if (!(row.live === "down" || row.live === "unstable") || !row.reason) return null;
+  // Свёрнуто причина видна справа, вместо цифр; раскрыто - здесь, одной
+  // понятной фразой с советом.
+  if (!row.open || !(row.live === "down" || row.live === "unstable") || !row.reason) return null;
   const auth = isAuthReason(row.reason);
-  const full =
-    (row.live === "down" ? "Не работает: " : "Сбоит: ") +
-    row.reason.charAt(0).toLowerCase() +
-    row.reason.slice(1) +
-    (row.coverHost ? ` - подменяет резерв ${row.coverHost}` : "");
-  const short = row.live === "down" ? (row.coverHost ? "Не отвечает, работает резерв" : "Не отвечает") : "Сбоит";
-  // Раскрыто - причина целиком одной фразой (она и так начинается с «Прокси
-  // не отвечает…»), свёрнуто - коротко.
-  const reason = row.reason.charAt(0).toUpperCase() + row.reason.slice(1) + (row.coverHost ? `. Работает резерв ${row.coverHost}` : "");
+  const text =
+    causeOf({ state: row.live, reason: row.reason } as ProxyState, { canAddSpare: false }).text +
+    (row.coverHost ? ` Пока работает резерв ${row.coverHost}.` : "");
   return (
     <>
-      <div title={row.open ? undefined : full} className={cn("mt-1 text-[11px] leading-snug text-vb-silver-dim", !row.open && "truncate")}>
-        {row.open ? reason : short}
-      </div>
+      <div className="mt-2 max-w-[46ch] text-[11px] leading-snug text-vb-silver-dim">{text}</div>
       {row.open && auth && (
         <button
           type="button"
@@ -445,16 +440,16 @@ function RowA({ row, a }: { row: PoolRow; a: PoolActions }) {
         </span>
         <div className="min-w-0 flex-1">
           <NameField row={row} a={a} />
-          <Problem row={row} a={a} />
           <ShopLine row={row} a={a} />
           <div className="mt-1 flex min-w-0 items-center gap-1.5 whitespace-nowrap text-[11px] leading-none text-vb-silver-faint">
             <Where row={row} />
-            {row.backups > 0 && (
+            {row.backups > 0 && !(row.live === "down" && row.coverHost) && (
               <span className={cn("ml-1 shrink-0", row.coverHost ? "text-vb-warn" : "")}>
                 · {row.coverHost ? "работает резерв" : backupsLabel(row.backups)}
               </span>
             )}
           </div>
+          <Problem row={row} a={a} />
         </div>
         {/* Цифры ↔ кнопки: один и тот же слот, сменяются при наведении */}
         <div className="relative flex h-9 w-[132px] shrink-0 items-center justify-end">
@@ -465,13 +460,25 @@ function RowA({ row, a }: { row: PoolRow; a: PoolActions }) {
                 "group-focus-within:-translate-y-0.5 group-focus-within:opacity-0 group-hover:-translate-y-0.5 group-hover:opacity-0",
             )}
           >
-            <span className={cn("tnum font-mono", pingWarn(row) ? "text-vb-warn" : row.live === "down" ? "text-vb-loss" : "text-vb-silver")}>
-              {pingText(row)}
-            </span>
-            {row.speed || row.speedBusy ? (
-              <SpeedMeter entry={row.speed} busy={row.speedBusy} />
+            {row.live === "down" && !(row.shop?.expired && !row.coverHost) ? (
+              // Не работает: вместо прочерков - что случилось.
+              <>
+                <span className="text-[12px] text-vb-loss">{causeLabel(row.reason)}</span>
+                {row.coverHost && <span className="text-vb-warn">работает резерв</span>}
+              </>
             ) : (
-              <span className="text-vb-silver-faint/70">скорость -</span>
+              <>
+                <span className={cn("tnum font-mono", pingWarn(row) ? "text-vb-warn" : row.live === "down" ? "text-vb-loss" : "text-vb-silver")}>
+                  {pingText(row)}
+                </span>
+                {row.live === "unstable" ? (
+                  <span className="text-vb-warn">сбоит</span>
+                ) : row.speed || row.speedBusy ? (
+                  <SpeedMeter entry={row.speed} busy={row.speedBusy} />
+                ) : (
+                  <span className="text-vb-silver-faint/70">скорость -</span>
+                )}
+              </>
             )}
           </div>
           <div

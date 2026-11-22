@@ -521,7 +521,9 @@ export function Overview({ onOpenProxies }: Props) {
                       <span
                         className={cn(
                           "mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full",
-                          hurts ? "bg-vb-warn" : "bg-vb-silver-faint/70",
+                          // Цвет - как на «Прокси»: не отвечает - красный, иначе жёлтый.
+                          p.state === "down" && !ru ? "bg-vb-loss" : "bg-vb-warn",
+                          !hurts && "opacity-80",
                         )}
                       />
                       <span className="min-w-0 flex-1">
@@ -530,7 +532,7 @@ export function Overview({ onOpenProxies }: Props) {
                             {name && <span className="text-vb-silver">{name} </span>}
                             <span className="font-mono text-vb-silver-dim">{p.host}</span>
                           </span>
-                          <span className="ml-auto shrink-0 text-vb-silver-faint">
+                          <span className={cn("ml-auto shrink-0", p.state === "down" && !ru ? "text-vb-loss/80" : "text-vb-warn/80")}>
                             {p.backupOf !== undefined ? "резерв " : ""}
                             {ru ? "в России" : p.state === "down" ? "не отвечает" : "сбоит"}
                           </span>
