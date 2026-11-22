@@ -16,7 +16,7 @@ export const PRIVACY_ITEMS: { key: PrivacyKey; title: string; hint: string }[] =
   {
     key: "usage_stats",
     title: "Отправлять анонимную статистику",
-    hint: "Раз в день, без адресов и настроек прокси",
+    hint: "Раз в день, без адресов и паролей прокси",
   },
 ];
 

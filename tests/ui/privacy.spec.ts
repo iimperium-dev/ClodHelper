@@ -66,7 +66,7 @@ test("настройки: три переключателя с пояснени�
   await stats.click();
   await expect(stats).toHaveAttribute("aria-checked", "false");
   expect((await privacy(page)).usage_stats).toBe(false);
-  await expect(page.getByText("Раз в день, без адресов и настроек прокси")).toBeVisible();
+  await expect(page.getByText("Раз в день, без адресов и паролей прокси")).toBeVisible();
 });
 
 test("отчёт: клик по фону закрывает окно", async ({ page }) => {
