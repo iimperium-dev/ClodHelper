@@ -121,7 +121,7 @@ export function ProxyInputField({
           onKeyDown={(e) => {
             if (e.key === "Enter" && (parsed || shopKey)) onEnter?.();
           }}
-          placeholder={shopKeys ? "Прокси в любом формате или ключ из магазина" : "Вставьте прокси в любом формате"}
+          placeholder={shopKeys ? "Прокси в любом формате или ключ из магазина" : compact ? "Вставьте прокси" : "Вставьте прокси в любом формате"}
           aria-label="Адрес прокси"
           className={cn(
             "min-w-0 flex-1 bg-transparent font-mono text-vb-fg outline-none placeholder:font-sans placeholder:text-vb-silver-faint",
@@ -148,10 +148,15 @@ export function ProxyInputField({
           <button
             type="button"
             onClick={() => void paste()}
-            className="flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium text-vb-silver-dim transition-colors hover:bg-vb-surface-2 hover:text-vb-fg active:scale-[0.96]"
+            title={compact ? "Вставить из буфера" : undefined}
+            aria-label={compact ? "Вставить" : undefined}
+            className={cn(
+              "flex shrink-0 items-center gap-1.5 rounded-lg text-[12px] font-medium text-vb-silver-dim transition-colors hover:bg-vb-surface-2 hover:text-vb-fg active:scale-[0.96]",
+              compact ? "h-7 w-7 justify-center" : "px-2.5 py-1.5",
+            )}
           >
             <ClipboardPaste className="h-3.5 w-3.5" />
-            Вставить
+            {!compact && "Вставить"}
           </button>
         )}
       </div>

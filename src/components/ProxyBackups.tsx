@@ -194,7 +194,7 @@ export function ProxyBackups({
         };
 
   return (
-    <div className={cn("relative pb-2.5 pr-4", tree ? "pl-[34px]" : "-mt-1.5 pl-[26px]")}>
+    <div className={cn("relative pb-2.5 pr-4", tree ? "pl-[34px]" : adding ? "pl-[26px]" : "-mt-1.5 pl-[26px]")}>
       {/* Ствол «веточки»: от точки прокси вниз, к резервам. Без резервов
           веточки нет - только тихая строка «Добавить резервный прокси». */}
       {tree && (
@@ -299,10 +299,11 @@ export function ProxyBackups({
             animate={{ opacity: 1, height: "auto" }}
             exit={{ opacity: 0, height: 0 }}
             transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-            className="relative overflow-hidden"
+            className="relative -mx-1 -mb-1 overflow-hidden"
           >
-            {/* Без рамки и заголовка: поле и кнопки одной строкой под именем. */}
-            <div className="pl-2.5 pt-1">
+            {/* Без рамки и заголовка: поле и кнопки одной строкой под именем.
+                Запас 4 px вокруг - чтобы подсветку поля не резало. */}
+            <div className="p-1 pl-3.5 pt-1.5">
               {phase === "confirm" ? (
                 <div className="space-y-2">
                   {warnings.map((w, k) => (
