@@ -134,7 +134,7 @@ test("прокси, настройки и сайдбар", async ({ page }) => {
   await expect(page.getByText("74 мс", { exact: true })).toBeVisible();
   await expect(page.getByText(/Изменение пула перезапускает мост/)).toHaveCount(0);
   await page.getByRole("button", { name: "Добавить" }).click();
-  await expect(page.getByPlaceholder("Вставьте прокси в любом формате", { exact: true })).toBeVisible();
+  await expect(page.getByPlaceholder("Прокси в любом формате или ключ из магазина", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Отмена" }).click();
   await go(page, "Настройки");
   await expect(page.getByText("Открывать при входе")).toBeVisible();

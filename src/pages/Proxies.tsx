@@ -20,6 +20,8 @@ import {
   proxyLabelsGet,
   proxyLabelSet,
   proxySpeedtest,
+  shopMetaGet,
+  shopRenew,
 } from "../lib/api";
 import { ProxyInputField, useProxyInput } from "../components/ProxyInput";
 import { ProxyBackups } from "../components/ProxyBackups";
@@ -31,6 +33,7 @@ import {
   type SpeedEntry,
 } from "../components/ProxyPoolViews";
 import { useStatus } from "../lib/status";
+import { expiryShort, isExpired, openShopKey, POOL_CHANGED_EVENT, type ShopInfo } from "../lib/shopClaim";
 import type { AppProfileStatus, ProxyCheckResult, ServiceGroup } from "../lib/types";
 import { fadeInUp, staggerContainer } from "../lib/motion";
 import { cn } from "../lib/cn";
@@ -270,6 +273,8 @@ export function Proxies() {
 
   const [pool, setPool] = useState<string[] | null>(null);
   const [labels, setLabels] = useState<Record<string, string>>({});
+  // Прокси из магазина: срок (ключ живёт только в Rust).
+  const [shopMeta, setShopMeta] = useState<Record<string, ShopInfo>>({});
   const [assignments, setAssignments] = useState<Record<string, number>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -319,10 +324,18 @@ export function Proxies() {
     setAssignments(await proxyAssignmentsGet().catch(() => ({})));
     setBackups((await proxyBackupsGet().catch(() => null)) ?? {});
     setApps(await appsList().catch(() => []));
+    setShopMeta((await shopMetaGet().catch(() => null)) ?? {});
   }, []);
 
   useEffect(() => {
     void load();
+  }, [load]);
+
+  // Пул поменяли снаружи (купленный прокси по ссылке) - перечитать.
+  useEffect(() => {
+    const on = () => void load();
+    window.addEventListener(POOL_CHANGED_EVENT, on);
+    return () => window.removeEventListener(POOL_CHANGED_EVENT, on);
   }, [load]);
 
   // Гео автоматом для записей без кэша - флаг виден всегда, не только
@@ -401,6 +414,13 @@ export function Proxies() {
   };
 
   const handleAdd = async () => {
+    // Ключ из магазина - то же окно покупки, что по ссылке со страницы оплаты.
+    if (addInput.shopKey) {
+      openShopKey(addInput.shopKey);
+      addInput.reset();
+      setAdding(false);
+      return;
+    }
     const parsed = addInput.parsed;
     if (!parsed || !pool) return;
     if (pool.includes(parsed.url)) {
@@ -521,6 +541,7 @@ export function Proxies() {
       backups: myBackups.length,
       open: expanded.has(url),
       confirm,
+      shop: shopMeta[url] ? { until: expiryShort(shopMeta[url].expires_at), expired: isExpired(shopMeta[url]) } : undefined,
     };
   });
 
@@ -533,6 +554,7 @@ export function Proxies() {
     remove: (i) => void handleRemove(i),
     cancelDelete: () => setConfirmDel(null),
     makePrimary: (i) => void handleMakePrimary(i),
+    renew: (url) => void shopRenew(url).catch((e) => setError(String(e))),
     editing: editingTag,
     tagInput,
     setTagInput,
@@ -594,7 +616,7 @@ export function Proxies() {
           >
             <div className="surface-card mt-4 p-4">
               <div className="mb-3 text-[13px] font-semibold text-vb-fg">Новый прокси</div>
-              <ProxyInputField input={addInput} autoFocus onEnter={() => void handleAdd()} />
+              <ProxyInputField input={addInput} autoFocus shopKeys onEnter={() => void handleAdd()} />
 
               <div className="mt-4 flex items-center justify-end gap-2">
                 <Button
@@ -612,7 +634,7 @@ export function Proxies() {
                   variant="primary"
                   size="sm"
                   onClick={handleAdd}
-                  disabled={!addInput.parsed || busy !== null}
+                  disabled={(!addInput.parsed && !addInput.shopKey) || busy !== null}
                 >
                   {busy === "add" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
                   {busy === "add" ? "Добавляю…" : "Добавить"}

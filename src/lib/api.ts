@@ -651,3 +651,46 @@ export async function claudeChatsExportProgress(): Promise<ChatsExportProgress> 
 export async function revealInFolder(path: string): Promise<void> {
   return invoke<void>("reveal_in_folder", { path });
 }
+
+// ─── Купленный прокси по ссылке clodhelper://add?key=... ─────────
+
+/** Ключ из последней ссылки (один раз; null - ссылок не было). */
+export async function shopLinkTake(): Promise<string | null> {
+  return invoke<string | null>("shop_link_take");
+}
+
+/** Купленные прокси по ключу: напрямую, без связи - через мост. */
+export async function shopClaim(key: string): Promise<import("./shopClaim").Claim> {
+  return invoke<import("./shopClaim").Claim>("shop_claim", { key });
+}
+
+/**
+ * «Добавить» в окне покупки: тот же адрес в пуле - запись обновляется на
+ * месте (имя, резервы и назначения остаются), иначе прокси в конец пула.
+ */
+/** Купленный прокси для пула: ключ и срок хранятся у прокси (ключ - только в Rust). */
+export interface ShopAddItem {
+  url: string;
+  label?: string | null;
+  key?: string | null;
+  expires_at?: string | null;
+}
+
+export async function shopAdd(items: ShopAddItem[], makePrimary: boolean): Promise<string[]> {
+  return invoke<string[]>("shop_add", { items, makePrimary });
+}
+
+/** Мастер: ключ и срок купленного прокси - заранее, до записи пула мастером. */
+export async function shopRemember(item: ShopAddItem): Promise<void> {
+  return invoke<void>("shop_remember", { item });
+}
+
+/** Прокси из магазина: URL - срок (без ключа). */
+export async function shopMetaGet(): Promise<Record<string, import("./shopClaim").ShopInfo>> {
+  return invoke<Record<string, import("./shopClaim").ShopInfo>>("shop_meta_get");
+}
+
+/** «Продлить»: кабинет покупателя в браузере (ключ подставит Rust). */
+export async function shopRenew(url: string): Promise<void> {
+  return invoke<void>("shop_renew", { url });
+}

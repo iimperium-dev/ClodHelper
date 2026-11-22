@@ -17,6 +17,9 @@ import { UpdateSplash } from "./pages/UpdateSplash";
 import { UpdateDialog } from "./components/UpdateDialog";
 import { WhatsNewModal } from "./components/WhatsNewModal";
 import { AutoUpdateOffer } from "./components/AutoUpdateOffer";
+import { ShopClaimDialog, type ShopClaimState } from "./components/ShopClaimDialog";
+import { SHOP_KEY_EVENT } from "./lib/shopClaim";
+import { listen } from "@tauri-apps/api/event";
 import { openPrivacyNext } from "./components/PrivacyCard";
 import { StatusProvider } from "./lib/status";
 import { Button } from "./components/Button";
@@ -30,6 +33,8 @@ import {
   settingsGet,
   shimScriptPath,
   shimStatus,
+  shopClaim,
+  shopLinkTake,
   whatsNewTake,
 } from "./lib/api";
 import type { AppView, PrivacyKey, WizardInstallResult, WizardStep } from "./lib/types";
@@ -172,6 +177,42 @@ function App() {
   // Мастер пропущен кнопкой «Сначала очистка»: программа открыта без прокси,
   // сверху полоса «Прокси ещё не добавлен» с возвратом в мастер.
   const [noProxy, setNoProxy] = useState(false);
+  // Поле мастера заполнили снаружи (купленный прокси) - шаг создаётся заново.
+  const [wizFill, setWizFill] = useState(0);
+
+  // ─── Купленный прокси: ссылка clodhelper://add?key=... ───────
+  // Rust держит ключ, пока окно его не заберёт (холодный старт по ссылке),
+  // и шлёт "shop:link" на каждую новую. Ничего не добавляется без кнопки.
+  const [shop, setShop] = useState<ShopClaimState | null>(null);
+  const shopKey = useRef<string | null>(null);
+  const loadClaim = useCallback((key: string) => {
+    shopKey.current = key;
+    setShop({ kind: "loading" });
+    shopClaim(key).then(
+      (claim) => shopKey.current === key && setShop({ kind: "ready", claim, key }),
+      (e) => shopKey.current === key && setShop({ kind: "error", message: String(e) }),
+    );
+  }, []);
+  const closeShop = useCallback(() => {
+    shopKey.current = null;
+    setShop(null);
+  }, []);
+  useEffect(() => {
+    if (IS_TRAY || IS_TOAST || IS_SPLASH) return;
+    const take = () =>
+      void shopLinkTake()
+        .then((key) => key && loadClaim(key))
+        .catch(() => {});
+    take();
+    const un = listen("shop:link", take);
+    // Ключ вставили в поле прокси (страница «Прокси», мастер).
+    const onKey = (e: Event) => loadClaim((e as CustomEvent<string>).detail);
+    window.addEventListener(SHOP_KEY_EVENT, onKey);
+    return () => {
+      window.removeEventListener(SHOP_KEY_EVENT, onKey);
+      void un.then((f) => f()).catch(() => {});
+    };
+  }, [loadClaim]);
 
   // «Показано» ставится, только когда человек правда мог это увидеть: окно
   // видимо и в фокусе (не --tray и не тихий перезапуск после установки),
@@ -273,6 +314,33 @@ function App() {
     then?.();
   };
 
+  // Первая настройка (мастер или программа без прокси): прокси - в поле
+  // мастера. Пока мастер ставит мост или показывает «Готово», окно ждёт.
+  const shopWizard = view === "wizard" || noProxy;
+  const shopDialog = (
+    <ShopClaimDialog
+      state={view !== null && !(view === "wizard" && step !== "proxy") ? shop : null}
+      wizard={shopWizard}
+      onRetry={() => shopKey.current && loadClaim(shopKey.current)}
+      onClose={closeShop}
+      onWizardFill={(url) => {
+        closeShop();
+        setWizProxyUrl(url);
+        setWizFill((n) => n + 1);
+        setStep("proxy");
+        setView("wizard");
+      }}
+      onOpenProxies={
+        view === "proxies"
+          ? undefined
+          : () => {
+              closeShop();
+              navigate("proxies");
+            }
+      }
+    />
+  );
+
   if (IS_TOAST) return <UpdateToast />;
   if (IS_SPLASH) return <UpdateSplash />;
 
@@ -296,6 +364,7 @@ function App() {
             <WizardShell step={step}>
               {step === "proxy" && (
                 <StepProxy
+                  key={wizFill}
                   initialUrl={wizProxyUrl}
                   onSkipToTools={() => {
                     setNoProxy(true);
@@ -337,6 +406,7 @@ function App() {
             </WizardShell>
           </div>
         </div>
+        {shopDialog}
       </StatusProvider>
     );
   }
@@ -417,6 +487,7 @@ function App() {
         </div>
       </div>
       <UpdateDialog />
+      {shopDialog}
       <WhatsNewModal version={view !== null ? whatsNew : null} onClose={closeWhatsNew} />
       <AutoUpdateOffer
         open={view !== null && whatsNewTaken && !whatsNew && offerAuto}

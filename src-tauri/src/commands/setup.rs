@@ -791,6 +791,8 @@ pub fn ui_log(level: String, message: String) {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
+    // Ключ магазина - доступ к кабинету покупателя: в журнал не пишем.
+    let message = crate::telemetry_scrub::mask_shop_keys(&message);
     let line: String = message.chars().take(2000).collect();
     let level: String = level.chars().take(8).collect();
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
