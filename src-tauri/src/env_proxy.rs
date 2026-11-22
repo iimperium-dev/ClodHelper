@@ -120,6 +120,34 @@ pub fn clear() -> Result<(), String> {
     Ok(())
 }
 
+/// «Остановить мост»: переменные указывают на мост, и без него всё, что их
+/// читает (Claude Code, VS Code, node, python), теряет сеть. Человек жмёт
+/// «стоп», чтобы ходить напрямую, - снимаем их и помним, что вернуть.
+pub fn pause_for_stop() {
+    if !read().points_to_bridge {
+        return;
+    }
+    match clear() {
+        Ok(()) => {
+            let _ = crate::settings::set_env_paused(true);
+        }
+        Err(e) => tracing::warn!("переменные прокси не сняты при остановке моста: {e}"),
+    }
+}
+
+/// Мост снова работает: вернуть переменные, снятые остановкой.
+pub fn resume_after_start() {
+    if !crate::settings::load().env_paused {
+        return;
+    }
+    match set(&format!("http://127.0.0.1:{}", crate::shim::LISTEN_PORT)) {
+        Ok(()) => {
+            let _ = crate::settings::set_env_paused(false);
+        }
+        Err(e) => tracing::warn!("переменные прокси не возвращены после запуска моста: {e}"),
+    }
+}
+
 #[cfg(target_os = "windows")]
 mod backend {
     /// User-переменные - прямо из HKCU\Environment (их хранилище): запуск

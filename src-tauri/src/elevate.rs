@@ -22,6 +22,9 @@ pub struct Outcome {
     pub success: bool,
     /// result.json, если скрипт успел его записать (в т.ч. с ошибкой).
     pub result: Option<String>,
+    /// Для отчёта о сбое: код выхода elevated-процесса или почему он не
+    /// запустился. Без него «не удалось» в админке не разобрать.
+    pub detail: String,
 }
 
 /// Windows PowerShell 5.1 надёжно читает UTF-8 скрипты (русские тексты)
@@ -50,10 +53,17 @@ pub fn run(operation: &str, scripts: &[(&str, &str)], arguments: &str) -> Result
         .output()
         .map_err(|e| format!("Не удалось запросить права администратора: {e}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let failed = stdout.lines().find_map(|l| l.trim().strip_prefix("CLOD_UAC_FAILED")).map(|m| m.trim_start_matches(':').trim().to_string());
+    let detail = match failed {
+        Some(m) if !m.is_empty() => format!("не запустился: {}", m.chars().take(160).collect::<String>()),
+        Some(_) => "не запустился".to_string(),
+        None => output.status.code().map_or_else(|| "без кода выхода".to_string(), |c| format!("код {c}")),
+    };
     Ok(Outcome {
         cancelled: stdout.lines().any(|l| l.trim() == "CLOD_UAC_CANCELLED"),
         success: output.status.success(),
         result: std::fs::read_to_string(&result).ok(),
+        detail,
     })
 }
 
@@ -83,7 +93,7 @@ fn wrapper(script: &Path, arguments: &str, result: &Path) -> String {
              }}; \
              $e = $e.InnerException \
            }}; \
-           Write-Output 'CLOD_UAC_FAILED'; exit 1 \
+           Write-Output ('CLOD_UAC_FAILED: ' + $_.Exception.Message); exit 1 \
          }}"
     )
 }

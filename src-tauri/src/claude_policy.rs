@@ -299,7 +299,7 @@ fn parse_elevated_result(outcome: &crate::elevate::Outcome) -> Result<ClaudePoli
     Err(if outcome.success {
         "Изменение политики Claude не вернуло подтверждение; состояние не подтверждено".into()
     } else {
-        "Не удалось выполнить изменение политики Claude с правами администратора".into()
+        format!("Не удалось выполнить изменение политики Claude с правами администратора ({})", outcome.detail)
     })
 }
 
@@ -379,7 +379,9 @@ mod tests {
             cancelled,
             success,
             result: result.map(String::from),
+            detail: "код 1".into(),
         };
+        assert!(parse_elevated_result(&out(false, false, None)).unwrap_err().contains("(код 1)"));
         assert!(parse_elevated_result(&out(true, false, None))
             .unwrap_err()
             .contains("отменён"));

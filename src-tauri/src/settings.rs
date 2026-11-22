@@ -193,6 +193,10 @@ pub struct Settings {
     /// возвращает их, а не стирает настройку пользователя насовсем.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub saved_proxy_env: Option<std::collections::HashMap<String, String>>,
+    /// Переменные прокси сняты кнопкой «Остановить мост»: вернуть их, когда
+    /// мост снова запустится (кнопкой, автозапуском или после перезагрузки).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub env_paused: bool,
     /// Сайты, которые ходят через прокси (раздел «Сайты»): мост читает их из
     /// bridge-sites.json на лету, без перезапуска.
     #[serde(default)]
@@ -874,6 +878,13 @@ pub fn set_profiles(profiles: Vec<AppProfile>) -> Result<Settings, String> {
                 p
             })
             .collect();
+        Ok(())
+    })
+}
+
+pub fn set_env_paused(v: bool) -> Result<Settings, String> {
+    with_settings(|s| {
+        s.env_paused = v;
         Ok(())
     })
 }
