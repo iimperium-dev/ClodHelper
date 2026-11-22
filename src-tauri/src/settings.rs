@@ -206,6 +206,9 @@ pub struct UpdateAttempt {
     pub version: String,
     pub at: u64,
     pub how: String,
+    /// Папка запуска установщика: туда тихая установка пишет код выхода.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dir: Option<String>,
 }
 
 /// Сколько установок версии `version` подряд не завершилось и когда была

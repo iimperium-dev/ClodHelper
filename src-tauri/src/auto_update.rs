@@ -436,8 +436,13 @@ fn rollout_number_for(s: &Settings) -> u8 {
 // ---------------------------------------------------------------- отметка установки
 
 /// Записать «ставлю версию X» перед запуском установщика.
-pub fn mark_attempt(version: &str, how: &str) {
-    let a = UpdateAttempt { version: version.to_string(), at: now_secs(), how: how.to_string() };
+pub fn mark_attempt(version: &str, how: &str, dir: Option<&std::path::Path>) {
+    let a = UpdateAttempt {
+        version: version.to_string(),
+        at: now_secs(),
+        how: how.to_string(),
+        dir: dir.map(|d| d.to_string_lossy().into_owned()),
+    };
     if let Err(e) = settings::with_settings_strict(|s| {
         s.update_attempt = Some(a);
         Ok(())
@@ -487,7 +492,7 @@ pub enum Settled {
     Nothing,
     Pending { wait_secs: u64 },
     Succeeded { version: String, how: String },
-    Failed { version: String, how: String, count: u32 },
+    Failed { version: String, how: String, count: u32, dir: Option<String> },
 }
 
 /// Разобрать отметку установки по текущей версии и записать итог в `s`.
@@ -515,7 +520,7 @@ pub fn settle_on_start(s: &mut Settings, current: &str, now: u64) -> Settled {
                 // Снова обычное уведомление с кнопкой: забыть, что о версии уже сообщали.
                 s.update_notified = None;
             }
-            Settled::Failed { version: a.version, how: a.how, count }
+            Settled::Failed { version: a.version, how: a.how, count, dir: a.dir }
         }
     }
 }
@@ -577,16 +582,40 @@ async fn settle_once(app: &AppHandle) -> Settled {
             tracing::info!("обновление до {version} установлено ({how})");
             let _ = app.emit("notices:changed", crate::notices::unread());
         }
-        Settled::Failed { version, how, count } => {
-            tracing::warn!("установка {version} не завершилась ({how}), неудач подряд: {count}");
+        Settled::Failed { version, how, count, dir } => {
+            let code = installer_exit_code(dir.as_deref());
+            let detail = failure_detail(how, code.as_deref());
+            tracing::warn!("установка {version} не завершилась ({detail}), неудач подряд: {count}");
             crate::telemetry::set_pending_how(None);
             if first_report(version) {
-                crate::telemetry::report_update(&format!("установка {version} не завершилась"));
+                crate::telemetry::report_update(&format!("установка {version} не завершилась ({detail})"));
             }
             let _ = app.emit("notices:changed", crate::notices::unread());
         }
     }
     out
+}
+
+/// Код выхода тихого установщика из exit.txt в папке запуска (только цифры).
+fn installer_exit_code(dir: Option<&str>) -> Option<String> {
+    let s = std::fs::read_to_string(std::path::Path::new(dir?).join("exit.txt")).ok()?;
+    let s = s.trim();
+    (s.len() <= 12 && s.trim_start_matches('-').bytes().all(|b| b.is_ascii_digit()) && s.bytes().any(|b| b.is_ascii_digit())).then(|| s.to_string())
+}
+
+/// Подробность для отчёта: способ установки и код выхода установщика.
+/// NSIS: 1 - отменено или не удалось, 2 - прервано скриптом. Нет файла - либо
+/// установщик ещё не закончил, либо его закрыли, либо установка была с окном.
+fn failure_detail(how: &str, code: Option<&str>) -> String {
+    let how = match how {
+        "auto" => "тихо",
+        "manual" => "вручную",
+        _ => "иначе",
+    };
+    match code {
+        Some(c) => format!("{how}, код установщика {c}"),
+        None => format!("{how}, кода нет"),
+    }
 }
 
 /// При запуске: удалась ли установка, начатая прошлой копией программы.
@@ -995,7 +1024,25 @@ mod tests {
     }
 
     fn attempt(version: &str, at: u64, how: &str) -> UpdateAttempt {
-        UpdateAttempt { version: version.into(), at, how: how.into() }
+        UpdateAttempt { version: version.into(), at, how: how.into(), dir: None }
+    }
+
+    #[test]
+    fn failed_install_report_has_how_and_installer_code() {
+        let dir = std::env::temp_dir().join(format!("clod-exit-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let d = dir.to_string_lossy().into_owned();
+        assert_eq!(installer_exit_code(Some(&d)), None, "файла нет");
+        std::fs::write(dir.join("exit.txt"), "2 \r\n").unwrap();
+        assert_eq!(installer_exit_code(Some(&d)).as_deref(), Some("2"));
+        std::fs::write(dir.join("exit.txt"), "-1073741510\r\n").unwrap();
+        assert_eq!(installer_exit_code(Some(&d)).as_deref(), Some("-1073741510"));
+        std::fs::write(dir.join("exit.txt"), "ECHO is off.\r\n").unwrap();
+        assert_eq!(installer_exit_code(Some(&d)), None, "мусор не отправляем");
+        assert_eq!(installer_exit_code(None), None);
+        assert_eq!(failure_detail("auto", Some("2")), "тихо, код установщика 2");
+        assert_eq!(failure_detail("manual", None), "вручную, кода нет");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1012,7 +1059,7 @@ mod tests {
         let now = 1_800_000_000;
         let mut s = Settings { update_attempt: Some(attempt("0.9.0", now - 1000, "auto")), update_notified: Some("0.9.0".into()), ..Settings::default() };
         let r = settle_on_start(&mut s, "0.8.18", now);
-        assert_eq!(r, Settled::Failed { version: "0.9.0".into(), how: "auto".into(), count: 1 });
+        assert_eq!(r, Settled::Failed { version: "0.9.0".into(), how: "auto".into(), count: 1, dir: None });
         assert!(s.update_attempt.is_none(), "отметка снята");
         assert_eq!(s.update_failures, Some(UpdateFailures { version: "0.9.0".into(), count: 1, last_at: now }));
         assert_eq!(s.update_notified.as_deref(), Some("0.9.0"), "до трёх неудач тост не повторяем");
