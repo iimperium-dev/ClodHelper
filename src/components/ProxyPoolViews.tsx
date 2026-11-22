@@ -5,6 +5,7 @@ import { CountryFlag } from "./CountryFlag";
 import { CopyIp } from "../pages/Proxies";
 import type { ProxyLive } from "../lib/status";
 import { cn } from "../lib/cn";
+import { isAuthReason } from "../lib/proxyCause";
 
 /* ───────────────────────── Модель строки ───────────────────────── */
 
@@ -55,6 +56,8 @@ export interface PoolActions {
   startEdit: (i: number, url: string) => void;
   saveTag: (url: string) => void;
   cancelEdit: () => void;
+  /** Вставить новый логин и пароль для прокси. */
+  replace: (url: string) => void;
   /** Панель резервов под прокси (раскрытие - по `open`). */
   backupsPanel: (row: PoolRow) => ReactNode;
 }
@@ -107,6 +110,7 @@ function Problem({ row, a }: { row: PoolRow; a: PoolActions }) {
     );
   }
   if (!(row.live === "down" || row.live === "unstable") || !row.reason) return null;
+  const auth = isAuthReason(row.reason);
   const full =
     (row.live === "down" ? "Не работает: " : "Сбоит: ") +
     row.reason.charAt(0).toLowerCase() +
@@ -114,10 +118,24 @@ function Problem({ row, a }: { row: PoolRow; a: PoolActions }) {
     (row.coverHost ? ` - подменяет резерв ${row.coverHost}` : "");
   const short = row.live === "down" ? (row.coverHost ? "Не отвечает, работает резерв" : "Не отвечает") : "Сбоит";
   return (
-    <div title={full} className="mt-1 truncate text-[11px] leading-snug text-vb-silver-dim">
-      {short}
-      {row.open && <span className="text-vb-silver-faint"> - {row.reason.charAt(0).toLowerCase() + row.reason.slice(1)}</span>}
-    </div>
+    <>
+      <div title={full} className="mt-1 truncate text-[11px] leading-snug text-vb-silver-dim">
+        {short}
+        {row.open && <span className="text-vb-silver-faint"> - {row.reason.charAt(0).toLowerCase() + row.reason.slice(1)}</span>}
+      </div>
+      {row.open && auth && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            a.replace(row.url);
+          }}
+          className="mt-1 text-[11px] text-vb-silver underline decoration-vb-silver-faint/60 underline-offset-2 transition-colors hover:text-vb-fg"
+        >
+          Заменить пароль
+        </button>
+      )}
+    </>
   );
 }
 

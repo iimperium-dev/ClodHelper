@@ -423,6 +423,48 @@ pub fn set_proxy_backups(parent: String, backups: Vec<String>) -> Result<Setting
     })
 }
 
+/// Заменить прокси (пула или резерв) на новый на том же месте: новый
+/// логин или пароль не должен терять имя, резервы и назначения.
+pub fn replace_proxy(old: &str, new: String) -> Result<Settings, String> {
+    with_settings(|s| swap_proxy(s, old, new))
+}
+
+fn swap_proxy(s: &mut Settings, old: &str, new: String) -> Result<(), String> {
+    if old == new {
+        return Ok(());
+    }
+    if bridge_upstreams(s).contains(&new) {
+        return Err("Этот прокси уже есть в списке".into());
+    }
+    let mut pool = effective_proxies(s);
+    if let Some(i) = pool.iter().position(|u| u == old) {
+        pool[i] = new.clone();
+        s.proxy_url = pool.first().cloned();
+        s.proxies = pool;
+        if let Some(list) = s.proxy_backups.remove(old) {
+            s.proxy_backups.insert(new.clone(), list);
+        }
+    } else {
+        if !s.proxy_backups.values().any(|l| l.iter().any(|b| b == old)) {
+            return Err("Этого прокси уже нет в списке".into());
+        }
+        // Общий резерв у нескольких прокси - меняем везде.
+        for l in s.proxy_backups.values_mut() {
+            for b in l.iter_mut().filter(|b| *b == old) {
+                *b = new.clone();
+            }
+        }
+    }
+    // Ключ и срок купленного прокси едут за записью.
+    if let Some(meta) = s.shop_proxies.remove(old) {
+        s.shop_proxies.insert(new.clone(), meta);
+    }
+    if let Some(label) = s.proxy_labels.remove(old) {
+        s.proxy_labels.insert(new, label);
+    }
+    Ok(())
+}
+
 /// Имена и данные магазина - только у прокси пула и их резервов.
 fn retain_labels(s: &mut Settings) {
     let keep = bridge_upstreams(s);
@@ -1146,6 +1188,30 @@ mod tests {
         assert_eq!(upsert_pool(&mut full, &[item("http://q:w@10.0.0.3:80", None)], false).unwrap(), vec![2]);
         assert_eq!(full.proxies.len(), before.len());
         assert_eq!(full.proxies[2], "http://q:w@10.0.0.3:80");
+    }
+
+    #[test]
+    fn replaced_proxy_keeps_its_place_name_backups_and_assignments() {
+        let mut s = Settings::default();
+        s.proxies = vec!["a".into(), "b".into()];
+        s.proxy_url = Some("a".into());
+        s.proxy_backups.insert("a".into(), vec!["x".into()]);
+        s.proxy_labels.insert("a".into(), "Основной".into());
+        s.proxy_assignments.insert("anthropic".into(), 0);
+        s.shop_proxies.insert("a".into(), ShopMeta { key: "k".into(), ..Default::default() });
+        swap_proxy(&mut s, "a", "a-new".into()).unwrap();
+        assert_eq!(s.shop_proxies.get("a-new").map(|m| m.key.as_str()), Some("k"), "ключ магазина едет за записью");
+        assert_eq!(s.proxies, vec!["a-new", "b"]);
+        assert_eq!(s.proxy_url.as_deref(), Some("a-new"));
+        assert_eq!(s.proxy_backups.get("a-new"), Some(&vec!["x".to_string()]));
+        assert_eq!(s.proxy_labels.get("a-new").map(String::as_str), Some("Основной"));
+        assert_eq!(s.proxy_assignments.get("anthropic"), Some(&0));
+        // Резерв меняется в своём списке.
+        swap_proxy(&mut s, "x", "x-new".into()).unwrap();
+        assert_eq!(s.proxy_backups.get("a-new"), Some(&vec!["x-new".to_string()]));
+        // Нельзя заменить на уже существующий, и нельзя заменить чужой.
+        assert!(swap_proxy(&mut s, "b", "a-new".into()).is_err());
+        assert!(swap_proxy(&mut s, "zzz", "q".into()).is_err());
     }
 
     #[test]

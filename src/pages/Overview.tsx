@@ -17,6 +17,9 @@ import { Sparkline } from "../components/Sparkline";
 import { UpdateBanner } from "../components/UpdateBanner";
 import { PromoBanner } from "../components/PromoBanner";
 import { BridgeFileNotice } from "../components/BridgeFileNotice";
+import { VpnNotice } from "../components/VpnNotice";
+import { hostPort, loadGeoCache } from "./Proxies";
+import { ACTION_LABEL, causeOf, isAuthReason, setProxyIntent, type CauseAction } from "../lib/proxyCause";
 import {
   bridgeTaskRegister,
   bridgeUpdate,
@@ -194,12 +197,22 @@ export function Overview({ onOpenProxies }: Props) {
 
   const loading = status === null;
   const running = status?.running ?? false;
-  // Прокси с проблемами: каждый - отдельной строкой с последствиями.
-  const issues = proxies.map((p, i) => ({ p, i })).filter(({ p }) => p.state === "down" || p.state === "unstable");
-  const issueKey = issues.map(({ i, p }) => `${i}:${p.state}`).join(",");
-  // Подпись под заголовком: что с прокси - одной фразой.
+  // Страна прокси - из кэша «Прокси» (проверка гео идёт там).
+  const [geo] = useState(loadGeoCache);
+  const inRussia = (p: ProxyState) => geo[hostPort(p.url)]?.country_code?.toUpperCase() === "RU";
   // Кто за каким прокси закреплён - нужно только при проблемах.
   const [pins, setPins] = useState<Pins | null>(null);
+  // Claude ходит через закреплённый за ним прокси, иначе - через основной.
+  const carriesClaude = (i: number) => (pins?.assign.anthropic ?? 0) === i;
+  // Прокси с проблемами: каждый - отдельной строкой с последствиями.
+  // Прокси в России работает, но Claude через него не откроется.
+  const issues = proxies
+    .map((p, i) => ({ p, i, ru: p.backupOf === undefined && p.state !== "down" && inRussia(p) && carriesClaude(i) }))
+    .filter(({ p, ru }) => p.state === "down" || p.state === "unstable" || ru);
+  const issueKey = proxies
+    .map((p, i) => (p.state === "down" || p.state === "unstable" || inRussia(p) ? `${i}:${p.state}` : ""))
+    .filter(Boolean)
+    .join(",");
   useEffect(() => {
     if (!issueKey) return;
     void Promise.all([
@@ -209,6 +222,10 @@ export function Overview({ onOpenProxies }: Props) {
       proxyLabelsGet().catch(() => ({})),
     ]).then(([assign, sites, apps, labels]) => setPins({ assign, sites, apps, labels }));
   }, [issueKey]);
+  // Раскрытая строка проблемы (URL прокси): причина и одна кнопка.
+  const [openIssue, setOpenIssue] = useState<string | null>(null);
+  const [causeBusy, setCauseBusy] = useState<string | null>(null);
+  const poolSize = proxies.filter((p) => p.backupOf === undefined).length;
   const bridgeOutdated = running && (versions?.outdated ?? false);
 
   const oldBridge =
@@ -255,6 +272,28 @@ export function Overview({ onOpenProxies }: Props) {
       setActionError(String(e));
     } finally {
       setBusy(null);
+    }
+  };
+
+  /** Кнопка под причиной поломки. */
+  const runCause = async (action: CauseAction, url: string) => {
+    if (action === "replace" || action === "addSpare") {
+      setProxyIntent(action === "replace" ? { kind: "replace", url } : { kind: "add" });
+      onOpenProxies();
+      return;
+    }
+    setCauseBusy(url);
+    setActionError(null);
+    try {
+      if (action === "restart") {
+        await shimRestart();
+        await refresh();
+      }
+      await refreshPoolPing();
+    } catch (e) {
+      setActionError(String(e));
+    } finally {
+      setCauseBusy(null);
     }
   };
 
@@ -386,6 +425,15 @@ export function Overview({ onOpenProxies }: Props) {
       {/* Антивирус удалил мост: восстановлен сам / инструкция */}
       <BridgeFileNotice className="mt-4" />
 
+      {/* VPN рядом: подсказка, только когда есть что чинить */}
+      {running && (
+        <VpnNotice
+          className="mt-4"
+          problems={issues.some(({ p, ru }) => !ru && !isAuthReason(p.reason)) || (testResult !== null && !testResult.ok)}
+          hosts={[...new Set(proxies.map((p) => p.host).filter(Boolean))]}
+        />
+      )}
+
       {/* ── Выход в интернет: единственное место с IP ── */}
       {running && (
         <motion.section variants={fadeInUp} className="surface-card mt-5">
@@ -449,19 +497,25 @@ export function Overview({ onOpenProxies }: Props) {
             </p>
           )}
           {/* Прокси с проблемами: одна тихая строка на прокси. Вторая строка -
-              только если что-то правда задето (выход, сервисы, сайты). */}
+              только если что-то правда задето (выход, сервисы, сайты). По клику -
+              причина простыми словами и одна кнопка, что с этим сделать. */}
           {issues.length > 0 && (
             <ul className="border-t border-vb-border/70 py-1">
-              {issues.map(({ p, i }) => {
+              {issues.map(({ p, i, ru }) => {
                 const name = pins?.labels[p.url];
-                const impact = impactOf(p, i, exitIndex, allMode, pins, proxies);
+                const impact = ru
+                  ? { text: "Claude через него не откроется", hurts: true }
+                  : impactOf(p, i, exitIndex, allMode, pins, proxies);
                 const hurts = impact?.hurts ?? false;
+                const open = openIssue === p.url;
+                const cause = causeOf(p, { inRussia: ru, canAddSpare: poolSize < 5 });
+                const busyHere = causeBusy === p.url;
                 return (
-                  <li key={p.url || i}>
+                  <li key={p.url || i} data-testid="proxy-issue">
                     <button
                       type="button"
-                      onClick={onOpenProxies}
-                      title={p.reason ?? undefined}
+                      onClick={() => setOpenIssue(open ? null : p.url)}
+                      aria-expanded={open}
                       className="group flex w-full items-start gap-3 px-4 py-2 text-left transition-colors hover:bg-white/[0.02]"
                     >
                       <span
@@ -478,9 +532,14 @@ export function Overview({ onOpenProxies }: Props) {
                           </span>
                           <span className="ml-auto shrink-0 text-vb-silver-faint">
                             {p.backupOf !== undefined ? "резерв " : ""}
-                            {p.state === "down" ? "не отвечает" : "сбоит"}
+                            {ru ? "в России" : p.state === "down" ? "не отвечает" : "сбоит"}
                           </span>
-                          <ChevronRight className="h-3.5 w-3.5 shrink-0 self-center text-vb-silver-faint/60 transition-transform group-hover:translate-x-0.5" />
+                          <ChevronDown
+                            className={cn(
+                              "h-3.5 w-3.5 shrink-0 self-center text-vb-silver-faint/60 transition-transform",
+                              open && "rotate-180",
+                            )}
+                          />
                         </span>
                         {impact && (
                           <span
@@ -494,6 +553,42 @@ export function Overview({ onOpenProxies }: Props) {
                         )}
                       </span>
                     </button>
+                    <AnimatePresence initial={false}>
+                      {open && (
+                        <motion.div
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: "auto" }}
+                          exit={{ opacity: 0, height: 0 }}
+                          transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+                          className="overflow-hidden"
+                        >
+                          <div className="pb-3 pl-[34px] pr-4">
+                            <p data-testid="proxy-cause" className="text-[12px] leading-snug text-vb-silver">
+                              {cause.text}
+                            </p>
+                            <div className="mt-2 flex flex-wrap items-center gap-2">
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => void runCause(cause.action, p.url)}
+                                disabled={busyHere || busy !== null}
+                              >
+                                {busyHere && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                                {ACTION_LABEL[cause.action]}
+                              </Button>
+                              <button
+                                type="button"
+                                onClick={onOpenProxies}
+                                className="flex items-center gap-0.5 rounded-md px-1.5 py-1 text-[12px] text-vb-silver-faint transition-colors hover:text-vb-silver"
+                              >
+                                Все прокси
+                                <ChevronRight className="h-3 w-3" />
+                              </button>
+                            </div>
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                   </li>
                 );
               })}

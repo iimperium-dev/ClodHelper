@@ -350,6 +350,16 @@ export interface BridgeHealth {
 // ─── Прокси-пул ──────────────────────────────────────────────────
 
 /** Проверка одного прокси из пула: TCP-пинг и настоящий запрос через него. */
+/** VPN рядом с мостом. */
+export interface VpnStatus {
+  /** Включён туннель, который забирает весь трафик. */
+  active: boolean;
+  /** Как называется VPN («WireGuard»); null - не узнали. */
+  name: string | null;
+  /** Запущен SOTA VPN: он временами стирает настройки прокси. */
+  sota: boolean;
+}
+
 export interface ProxyPing {
   url: string;
   host: string;

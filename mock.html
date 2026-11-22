@@ -25,6 +25,10 @@
   ?shopproxy - в пуле прокси из магазина со сроком, ?shopproxy=expired - срок прошёл, прокси не отвечает.
   __shopAdds, __shopRemembered, __renewed - что окно отправило в магазинные команды.
   window.__shopLink() - ссылка пришла в уже запущенную программу; __shopClaims - запрошенные ключи.
+  ?cause=auth|silent|closed|5xx|bridge - второй прокси не работает по этой причине (на «Обзоре» -
+  раскрытие с причиной и кнопкой); ?ru - основной прокси в России (флаг из кэша гео).
+  ?vpn=wg|tun - включён VPN WireGuard / безымянный туннель; ?vpn=sota - SOTA VPN стёр
+  прокси-переменные. window.__replaced - вызовы proxy_replace.
   Используется тестами tests/ui (Playwright).
 -->
 <script>
@@ -58,7 +62,10 @@
   const health = {
     status: "ok", version: "1.8.0", uptime_sec: 28000, listen: "127.0.0.1:8889", mode: "smart",
     active: 3, total: 700, via_upstream: 412, via_direct: 288, errors: 6,
-    upstreams: [{ url: "http://185.68.187.138:8000", healthy: params.get("down") !== "all", ok: 900, fail: params.get("down") === "all" ? 60 : 6, fail_streak: params.get("down") === "all" ? 9 : 0, latency_ms: 66 }],
+    upstreams: [
+      { url: "http://185.68.187.138:8000", healthy: params.get("down") !== "all", ok: 900, fail: params.get("down") === "all" ? 60 : 6, fail_streak: params.get("down") === "all" ? 9 : 0, latency_ms: 66 },
+      ...(params.get("cause") === "bridge" ? [{ url: "socks5://u:p@93.1.2.3:1080", healthy: false, ok: 10, fail: 40, fail_streak: 7, latency_ms: 0 }] : []),
+    ],
     last_errors: [
       { t: 26000, msg: "назначенный прокси http://185.68.187.138:8000 не отвечает (коннект: Network is unreachable (os error 51))" },
       { t: 26010, msg: "назначенный прокси x не отвечает (принял соединение, но молчит на CONNECT)" },
@@ -82,6 +89,27 @@
         ],
       }
     : null;
+  // ?cause - почему не работает второй прокси (строки - как у proxies_ping и моста).
+  const CAUSES = {
+    auth: { ms: 131, alive: false, error: "Прокси не принял логин или пароль" },
+    silent: { ms: 131, alive: false, error: "Порт открыт, но прокси молчит. Скорее всего, ваш провайдер блокирует IP этого сервера: попросите у хостинга новый IP" },
+    closed: { ms: null, alive: null, error: "Прокси не отвечает - порт закрыт или сервер выключен" },
+    "5xx": { ms: 131, alive: false, error: "Прокси ответил ошибкой 502" },
+  };
+  const cause = params.get("cause");
+  // ?ru - основной прокси в России: флаг страны берётся из кэша гео «Прокси».
+  if (params.has("ru")) {
+    try {
+      localStorage.setItem("clod-proxy-geo-v2", JSON.stringify({
+        "185.68.187.138:8000": { reachable: true, latency_ms: 74, status_code: 200, error: null, ip: "185.68.187.138", country_code: "RU", country_name: "Russia", isp: "Rostelecom" },
+      }));
+    } catch {}
+  }
+  const VPN = {
+    wg: { active: true, name: "WireGuard", sota: false },
+    tun: { active: true, name: null, sota: false },
+    sota: { active: false, name: null, sota: true },
+  };
   let layout = null;
   let leak = params.get("tg") === "blocked"
     ? { enabled: true, services: "claude,telegram", auto_restore: true, verified: true }
@@ -125,12 +153,19 @@
     bridge_task_status: { registered: true, state: "Running" },
     bridge_exe_legacy: false,
     bridge_versions: { installed: "1.8.0", bundled: "1.8.0", outdated: false },
-    global_proxy_env: { present: true, points_to_bridge: true, values: [] },
+    global_proxy_env: params.get("vpn") === "sota"
+      ? { present: false, points_to_bridge: false, values: [] }
+      : { present: true, points_to_bridge: true, values: [] },
     proxies_ping: [
       { url: "http://u:p@185.68.187.138:8000", host: "185.68.187.138", port: 8000, ms: 74 },
       { url: "socks5://u:p@93.1.2.3:1080", host: "93.1.2.3", port: 1080, ms: ["2", "all"].includes(params.get("down")) ? null : 131 },
       ...(params.has("down") ? [{ url: "http://u:p@193.8.114.42:8080", host: "193.8.114.42", port: 8080, ms: null }] : []),
-    ].map((x, i) => (params.get("down") === "all" && i === 0 ? { ...x, ms: null } : x)),
+    ]
+      .map((x, i) => (params.get("down") === "all" && i === 0 ? { ...x, ms: null } : x))
+      .map((x, i) => (i === 1 && CAUSES[cause] ? { ...x, ...CAUSES[cause] } : x))
+      // ?cause=bridge - своей проверки второго прокси ещё нет, судим по мосту.
+      .filter((_, i) => !(cause === "bridge" && i === 1)),
+    vpn_status: VPN[params.get("vpn")] || { active: false, name: null, sota: false },
     apps_list: apps,
     apps_traffic: [
       { id: "claude-desktop", running: true, via_bridge: 6, direct: 0, proxy_extension: null },
@@ -346,6 +381,19 @@
         const services = leak.enabled && leak.services.includes("telegram") ? "claude,telegram" : "claude";
         leak = { enabled: true, services, auto_restore: true, verified: true };
         return structuredClone(R.claude_proxy_status);
+      }
+      // Замена прокси на тот же с новым паролем: место в пуле, имя - за ним.
+      if (cmd === "proxy_replace") {
+        await wait(300);
+        (window.__replaced ||= []).push({ old: args.old, new: args.new });
+        R.proxies_get = R.proxies_get.map((u) => (u === args.old ? args.new : u));
+        R.proxies_ping = R.proxies_ping.map((p) =>
+          p.url === args.old ? { url: args.new, host: p.host, port: p.port, ms: 120, alive: true, error: null } : p);
+        if (R.proxy_labels_get[args.old]) {
+          R.proxy_labels_get[args.new] = R.proxy_labels_get[args.old];
+          delete R.proxy_labels_get[args.old];
+        }
+        return structuredClone(R.proxies_get);
       }
       if (cmd === "set_global_proxy_env") return (R.global_proxy_env = { present: true, points_to_bridge: true, values: [] });
       if (cmd === "clear_global_proxy_env") return (R.global_proxy_env = { present: false, points_to_bridge: false, values: [] });

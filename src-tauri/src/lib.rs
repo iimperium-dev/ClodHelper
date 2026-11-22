@@ -46,6 +46,7 @@ mod update_notify;
 mod update_splash;
 mod updater;
 mod vscode_config;
+mod vpn;
 #[cfg(target_os = "windows")]
 mod win;
 
@@ -265,6 +266,8 @@ pub fn run() {
             commands::google_ads_get,
             commands::google_ads_set,
             commands::proxies_ping,
+            commands::proxy_replace,
+            commands::vpn_status,
             commands::proxy_speedtest,
             // Окна (трей-попап)
             commands::show_main_window,

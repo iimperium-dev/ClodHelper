@@ -58,6 +58,7 @@ windows-sys = { version = "0.61", features = [
   "Win32_Graphics_Gdi",
   "Win32_Media_Audio",
   "Win32_NetworkManagement_IpHelper",
+  "Win32_NetworkManagement_Ndis",
   "Win32_Security_Credentials",
   "Win32_Security_Cryptography",
   "Win32_Networking_WinInet",

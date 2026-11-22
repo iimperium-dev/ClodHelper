@@ -32,6 +32,7 @@ import type {
   ProxyCheckResult,
   ProxyConfig,
   ProxyPing,
+  VpnStatus,
   ProxySpeed,
   PythonInfo,
   ShimStatus,
@@ -405,6 +406,16 @@ export function proxySpeedtest(url: string): Promise<ProxySpeed> {
 /** Лёгкий TCP-пинг всего пула (параллельно). */
 export async function proxiesPing(): Promise<ProxyPing[]> {
   return invoke<ProxyPing[]>("proxies_ping");
+}
+
+/** Заменить прокси на новый (новый логин или пароль) на том же месте. */
+export async function proxyReplace(old: string, next: string): Promise<string[]> {
+  return invoke<string[]>("proxy_replace", { old, new: next });
+}
+
+/** Включён ли VPN рядом с мостом. */
+export async function vpnStatus(): Promise<VpnStatus> {
+  return invoke<VpnStatus>("vpn_status");
 }
 
 /** Блокируется ли телеметрия Claude (Sentry, Datadog). */
