@@ -269,11 +269,16 @@ pub fn run() {
             shop::shop_link_take,
             shop::shop_claim,
             shop::shop_add,
+            shop::shop_remember,
+            shop::shop_meta_get,
+            shop::shop_renew,
         ])
         .setup(|app| {
             let handles = setup_tray(app.handle())?;
 
             setup_deep_link(app.handle());
+            // Срок прокси из магазина: сверка раз в сутки.
+            shop::spawn_expiry_check();
 
             // Трей-монитор: живая иконка (зелёная/жёлтая/красная точка),
             // tooltip со счётчиками и системные уведомления о переходах

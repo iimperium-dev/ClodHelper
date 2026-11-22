@@ -14,8 +14,13 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
+use crate::settings::{self, ShopMeta, UpsertItem};
+
 /// Сервер магазина.
 pub const SHOP_BASE: &str = "https://shop.clodhelper.com";
+/// Кабинет покупателя на сайте: продление по ключу (ключ - после «#», на
+/// сервер сайта не уходит).
+pub const RENEW_BASE: &str = "https://clodhelper.com/buy/account/";
 /// Событие главному окну: пришла ссылка, ключ ждёт в `shop_link_take`.
 pub const LINK_EVENT: &str = "shop:link";
 /// Сколько прокси берём из одного ответа (пул программы - до 5).
@@ -176,8 +181,18 @@ pub async fn shop_claim(key: String) -> Result<Claim, String> {
     if let Some(c) = fake_claim() {
         return Ok(c);
     }
+    let (status, body) = fetch(&key).await?;
+    if status != 200 {
+        tracing::warn!("shop: ответ магазина {status}");
+        return Err(status_error(status));
+    }
+    parse_claim(&body)
+}
+
+/// GET /v1/claim/<key>: код ответа и тело. Ошибка - только «нет связи».
+async fn fetch(key: &str) -> Result<(u16, String), String> {
     let url = format!("{}/v1/claim/{key}", base());
-    let (status, body) = crate::telemetry::with_fallback(|c| {
+    crate::telemetry::with_fallback(|c| {
         let url = url.clone();
         async move {
             let r = c.get(url).header("Accept", "application/json").send().await?;
@@ -190,12 +205,7 @@ pub async fn shop_claim(key: String) -> Result<Claim, String> {
         // Текст ошибки reqwest содержит адрес с ключом - его не показываем.
         tracing::warn!("shop: магазин недоступен");
         "Нет связи с магазином. Проверьте интернет и попробуйте ещё раз".to_string()
-    })?;
-    if status != 200 {
-        tracing::warn!("shop: ответ магазина {status}");
-        return Err(status_error(status));
-    }
-    parse_claim(&body)
+    })
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -203,23 +213,163 @@ pub struct AddItem {
     pub url: String,
     #[serde(default)]
     pub label: Option<String>,
+    /// Ключ покупки: хранится у прокси для сверки срока и «Продлить».
+    #[serde(default)]
+    pub key: Option<String>,
+    #[serde(default)]
+    pub expires_at: Option<String>,
+}
+
+fn meta_of(it: &AddItem) -> Option<ShopMeta> {
+    let key = it.key.as_deref().filter(|k| valid_key(k))?;
+    Some(ShopMeta {
+        key: key.to_string(),
+        expires_at: it.expires_at.clone(),
+        expired: false,
+        checked_at: Some(unix_now()),
+    })
 }
 
 /// «Добавить» в окне покупки: прокси в пул (тот же адрес - обновить на
-/// месте, см. `settings::upsert_pool`), затем мост с новым пулом. Ответ -
-/// пул после записи.
+/// месте, см. `settings::upsert_pool`), затем мост с новым пулом.
+/// `make_primary` - первый купленный становится основным. Ответ - пул после
+/// записи.
 #[tauri::command]
-pub async fn shop_add(items: Vec<AddItem>) -> Result<Vec<String>, String> {
+pub async fn shop_add(items: Vec<AddItem>, make_primary: bool) -> Result<Vec<String>, String> {
     if items.is_empty() {
         return Err("Нечего добавлять".into());
     }
     for it in &items {
         crate::proxy::parse(&it.url)?;
     }
-    let pairs: Vec<(String, Option<String>)> = items.into_iter().map(|i| (i.url.trim().to_string(), i.label)).collect();
-    let saved = crate::settings::with_settings(|s| crate::settings::upsert_pool(s, &pairs).map(|_| ()))?;
+    let list: Vec<UpsertItem> = items
+        .iter()
+        .map(|i| UpsertItem { url: i.url.trim().to_string(), label: i.label.clone(), meta: meta_of(i) })
+        .collect();
+    let saved = settings::with_settings(|s| settings::upsert_pool(s, &list, make_primary).map(|_| ()))?;
     crate::commands::restart_with_pool(saved.proxy_url.clone().unwrap_or_default()).await?;
-    Ok(crate::settings::effective_proxies(&crate::settings::load()))
+    Ok(settings::effective_proxies(&settings::load()))
+}
+
+/// Мастер: купленный прокси подставлен в поле. Ключ и срок запоминаются
+/// заранее - мастер сам запишет прокси в пул; не дойдёт - запись уберётся
+/// при следующей смене пула.
+#[tauri::command]
+pub fn shop_remember(item: AddItem) -> Result<(), String> {
+    crate::proxy::parse(&item.url)?;
+    let Some(meta) = meta_of(&item) else { return Ok(()) };
+    let url = item.url.trim().to_string();
+    settings::with_settings(|s| {
+        if let Some(l) = item.label.as_deref().map(str::trim).filter(|l| !l.is_empty()) {
+            s.proxy_labels.entry(url.clone()).or_insert_with(|| l.to_string());
+        }
+        s.shop_proxies.insert(url, meta);
+        Ok(())
+    })
+    .map(|_| ())
+}
+
+/// Что окну знать о прокси из магазина (без ключа).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ShopInfo {
+    pub expires_at: Option<String>,
+    pub expired: bool,
+}
+
+/// Прокси из магазина: URL → срок. Ключ сюда не попадает.
+#[tauri::command]
+pub fn shop_meta_get() -> std::collections::HashMap<String, ShopInfo> {
+    settings::load()
+        .shop_proxies
+        .into_iter()
+        .map(|(u, m)| (u, ShopInfo { expires_at: m.expires_at, expired: m.expired }))
+        .collect()
+}
+
+/// Страница продления в кабинете покупателя.
+pub fn renew_url(key: &str) -> String {
+    format!("{RENEW_BASE}#key={key}")
+}
+
+/// «Продлить»: кабинет покупателя в браузере. Ключ берётся из настроек и
+/// окну не отдаётся.
+#[tauri::command]
+pub fn shop_renew(app: AppHandle, url: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let s = settings::load();
+    let meta = s.shop_proxies.get(&url).ok_or("Этот прокси куплен не в магазине Clod Helper")?;
+    app.opener()
+        .open_url(renew_url(&meta.key), None::<&str>)
+        .map_err(|_| "Не получилось открыть браузер".to_string())
+}
+
+// ---------------------------------------------------------------- сверка срока
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Раз в сутки на ключ.
+const CHECK_EVERY: u64 = 24 * 3600;
+
+/// Ключи, срок которых пора сверить с магазином.
+pub fn keys_due(s: &settings::Settings, now: u64) -> Vec<String> {
+    let mut keys: Vec<String> = s
+        .shop_proxies
+        .values()
+        .filter(|m| m.checked_at.is_none_or(|t| now.saturating_sub(t) >= CHECK_EVERY))
+        .map(|m| m.key.clone())
+        .collect();
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
+/// Ответ магазина по ключу - в данные прокси с этим ключом. `None` - нет
+/// связи или непонятный ответ: попробуем позже.
+pub fn apply_check(s: &mut settings::Settings, key: &str, status: u16, body: &str, now: u64) {
+    let claim = (status == 200).then(|| parse_claim(body).ok()).flatten();
+    if status == 200 && claim.is_none() {
+        return;
+    }
+    for (url, m) in s.shop_proxies.iter_mut().filter(|(_, m)| m.key == key) {
+        m.checked_at = Some(now);
+        match status {
+            200 => {
+                let c = claim.as_ref().expect("200 с разобранным ответом");
+                let addr = settings::proxy_addr_key(url);
+                if let Some(p) = c.proxies.iter().find(|p| settings::proxy_addr_key(&p.url) == addr) {
+                    m.expires_at = p.expires_at.clone();
+                    m.expired = false;
+                }
+            }
+            410 => m.expired = true,
+            // 404 и прочее: срок не трогаем, спросим через сутки.
+            _ => {}
+        }
+    }
+}
+
+/// Сверка срока прокси из магазина: раз в час смотрим, каким ключам пора
+/// (раз в сутки на ключ).
+pub fn spawn_expiry_check() {
+    tauri::async_runtime::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_secs(90)).await;
+        loop {
+            let due = keys_due(&settings::load(), unix_now());
+            for key in due {
+                let Ok((status, body)) = fetch(&key).await else { continue };
+                let _ = settings::with_settings_strict(|s| {
+                    apply_check(s, &key, status, &body, unix_now());
+                    Ok(())
+                });
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+        }
+    });
 }
 
 #[cfg(test)]
@@ -329,6 +479,69 @@ mod tests {
             let m = status_error(code);
             assert!(!m.contains('—') && !m.contains('–'), "{m}");
         }
+    }
+
+    fn shop_settings() -> settings::Settings {
+        let mut s = settings::Settings::default();
+        let url = "http://buyer:pw@45.142.7.19:8000".to_string();
+        s.proxies = vec![url.clone()];
+        s.shop_proxies.insert(
+            url,
+            ShopMeta { key: KEY.into(), expires_at: Some("2026-12-15T00:00:00Z".into()), expired: false, checked_at: Some(1_000) },
+        );
+        s
+    }
+
+    #[test]
+    fn expiry_is_checked_once_a_day_per_key() {
+        let s = shop_settings();
+        assert!(keys_due(&s, 1_000 + 3600).is_empty());
+        assert_eq!(keys_due(&s, 1_000 + CHECK_EVERY), vec![KEY.to_string()]);
+        let mut never = s.clone();
+        never.shop_proxies.values_mut().for_each(|m| m.checked_at = None);
+        assert_eq!(keys_due(&never, 0), vec![KEY.to_string()]);
+    }
+
+    #[test]
+    fn expiry_check_updates_term_and_expired_flag() {
+        let url = "http://buyer:pw@45.142.7.19:8000";
+        // Продлили: новый срок.
+        let mut s = shop_settings();
+        let body = r#"{"proxies":[{"url":"http://buyer:pw@45.142.7.19:8000","expires_at":"2027-01-15T00:00:00Z"}]}"#;
+        apply_check(&mut s, KEY, 200, body, 5_000);
+        let m = &s.shop_proxies[url];
+        assert_eq!(m.expires_at.as_deref(), Some("2027-01-15T00:00:00Z"));
+        assert_eq!(m.checked_at, Some(5_000));
+        // Срок кончился.
+        apply_check(&mut s, KEY, 410, "", 6_000);
+        assert!(s.shop_proxies[url].expired);
+        // Непонятный ответ - ничего не трогаем, спросим через час.
+        let mut s = shop_settings();
+        apply_check(&mut s, KEY, 200, "not json", 7_000);
+        assert_eq!(s.shop_proxies[url].checked_at, Some(1_000));
+        // Чужой ключ - не наш прокси.
+        apply_check(&mut s, &"A".repeat(43), 410, "", 8_000);
+        assert!(!s.shop_proxies[url].expired);
+    }
+
+    #[test]
+    fn renew_link_carries_key_after_hash() {
+        assert_eq!(renew_url(KEY), format!("https://clodhelper.com/buy/account/#key={KEY}"));
+    }
+
+    #[test]
+    fn meta_only_for_valid_key() {
+        let it = |key: Option<&str>| AddItem {
+            url: "http://a:b@1.2.3.4:8000".into(),
+            label: None,
+            key: key.map(Into::into),
+            expires_at: Some("2026-12-15T00:00:00Z".into()),
+        };
+        assert!(meta_of(&it(None)).is_none());
+        assert!(meta_of(&it(Some("bad"))).is_none());
+        let m = meta_of(&it(Some(KEY))).unwrap();
+        assert_eq!(m.key, KEY);
+        assert_eq!(m.expires_at.as_deref(), Some("2026-12-15T00:00:00Z"));
     }
 
     #[tokio::test]

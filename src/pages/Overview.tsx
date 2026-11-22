@@ -28,7 +28,9 @@ import {
   proxyAssignmentsGet,
   proxyLabelsGet,
   sitesGet,
+  shopMetaGet,
 } from "../lib/api";
+import { isExpired } from "../lib/shopClaim";
 import { formatUptime, isUsable, useStatus, type ProxyState } from "../lib/status";
 import type { AppProfileStatus, PrivacyReport, ShimTestResult, SiteEntry } from "../lib/types";
 import { fadeInUp, staggerContainer } from "../lib/motion";
@@ -101,7 +103,11 @@ function agoLabel(uptimeSec: number, t: number): string {
 }
 
 /** Техническую строку моста - в короткую человеческую причину. */
-function humanError(msg: string): string {
+function humanError(msg: string, expiredHosts: string[] = []): string {
+  // Прокси из магазина с прошедшим сроком: 407 и молчание - из-за срока.
+  if (expiredHosts.some((h) => msg.includes(h)) && /логин\/пароль|407|не отвечает|молчит/.test(msg)) {
+    return "Срок купленного прокси закончился";
+  }
   if (/unreachable|No route|os error 51|os error 65/i.test(msg)) return "Не было интернета на Mac";
   if (/логин\/пароль|407/.test(msg)) return "Прокси не принял логин или пароль";
   if (/молчит на CONNECT|нет ответа на TCP|не отвечает/.test(msg)) return "Прокси не отвечал";
@@ -115,10 +121,11 @@ function humanError(msg: string): string {
 function errorGroups(
   errors: { t: number; msg: string }[],
   uptimeSec: number,
+  expiredHosts: string[] = [],
 ): { text: string; count: number; ago: string; fresh: boolean }[] {
   const map = new Map<string, { text: string; count: number; t: number }>();
   for (const e of errors) {
-    const text = humanError(e.msg);
+    const text = humanError(e.msg, expiredHosts);
     const g = map.get(text);
     if (g) {
       g.count += 1;
@@ -168,6 +175,19 @@ export function Overview({ onOpenProxies }: Props) {
   const [updatingBridge, setUpdatingBridge] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [errorsOpen, setErrorsOpen] = useState(false);
+  // Хосты прокси из магазина с прошедшим сроком - для причин сбоев.
+  const [expiredHosts, setExpiredHosts] = useState<string[]>([]);
+  useEffect(() => {
+    void shopMetaGet()
+      .then((m) =>
+        setExpiredHosts(
+          Object.entries(m)
+            .filter(([, info]) => isExpired(info))
+            .map(([url]) => url.slice(url.lastIndexOf("@") + 1)),
+        ),
+      )
+      .catch(() => {});
+  }, []);
 
   const loading = status === null;
   const running = status?.running ?? false;
@@ -483,7 +503,7 @@ export function Overview({ onOpenProxies }: Props) {
           {(() => {
             const total = health.via_upstream + health.via_direct;
             const share = total > 0 ? (health.via_upstream / total) * 100 : 0;
-            const groups = errorGroups(health.last_errors ?? [], health.uptime_sec);
+            const groups = errorGroups(health.last_errors ?? [], health.uptime_sec, expiredHosts);
             const lastAgo = groups[0]?.ago;
             return (
               <>

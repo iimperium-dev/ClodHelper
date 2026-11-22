@@ -60,3 +60,49 @@ export function expiryText(iso?: string | null): string | null {
   const s = d.toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
   return `до ${s.replace(/\s*г\.?$/, "")}`;
 }
+
+/** Событие окна: в поле прокси вставили ключ магазина - App запросит покупку. */
+export const SHOP_KEY_EVENT = "clod:shop-key";
+
+/** Попросить App открыть окно покупки по ключу (как по ссылке). */
+export function openShopKey(key: string) {
+  window.dispatchEvent(new CustomEvent<string>(SHOP_KEY_EVENT, { detail: key }));
+}
+
+/** Ключ: base64url 32 байт без «=» - 43 знака, последний несёт 4 бита. */
+const KEY_RE = /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/;
+
+/**
+ * Ключ магазина из строки в поле прокси: сам ключ или ссылка
+ * clodhelper://add?key=... / кабинет .../#key=... Иначе null.
+ */
+export function shopKeyFrom(raw: string): string | null {
+  const t = raw.trim();
+  if (KEY_RE.test(t)) return t;
+  const m = /^(?:clodhelper:\/\/add\/?\?key=|https:\/\/clodhelper\.com\/buy\/account\/#key=)([A-Za-z0-9_-]{43})$/i.exec(t);
+  return m && KEY_RE.test(m[1]) ? m[1] : null;
+}
+
+/** Срок прокси из магазина (без ключа), как отдаёт shop_meta_get. */
+export interface ShopInfo {
+  expires_at?: string | null;
+  expired: boolean;
+}
+
+/** «до 15 декабря» (год - только если не текущий), null - срока нет. */
+export function expiryShort(iso?: string | null, now = new Date()): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const opts: Intl.DateTimeFormatOptions =
+    d.getFullYear() === now.getFullYear() ? { day: "numeric", month: "long" } : { day: "numeric", month: "long", year: "numeric" };
+  return `до ${d.toLocaleDateString("ru-RU", opts).replace(/\s*г\.?$/, "")}`;
+}
+
+/** Срок прошёл: магазин так сказал или дата уже позади. */
+export function isExpired(info?: ShopInfo | null, now = Date.now()): boolean {
+  if (!info) return false;
+  if (info.expired) return true;
+  const t = info.expires_at ? new Date(info.expires_at).getTime() : NaN;
+  return !Number.isNaN(t) && t <= now;
+}

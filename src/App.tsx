@@ -18,6 +18,7 @@ import { UpdateDialog } from "./components/UpdateDialog";
 import { WhatsNewModal } from "./components/WhatsNewModal";
 import { AutoUpdateOffer } from "./components/AutoUpdateOffer";
 import { ShopClaimDialog, type ShopClaimState } from "./components/ShopClaimDialog";
+import { SHOP_KEY_EVENT } from "./lib/shopClaim";
 import { listen } from "@tauri-apps/api/event";
 import { openPrivacyNext } from "./components/PrivacyCard";
 import { StatusProvider } from "./lib/status";
@@ -188,7 +189,7 @@ function App() {
     shopKey.current = key;
     setShop({ kind: "loading" });
     shopClaim(key).then(
-      (claim) => shopKey.current === key && setShop({ kind: "ready", claim }),
+      (claim) => shopKey.current === key && setShop({ kind: "ready", claim, key }),
       (e) => shopKey.current === key && setShop({ kind: "error", message: String(e) }),
     );
   }, []);
@@ -204,7 +205,13 @@ function App() {
         .catch(() => {});
     take();
     const un = listen("shop:link", take);
-    return () => void un.then((f) => f()).catch(() => {});
+    // Ключ вставили в поле прокси (страница «Прокси», мастер).
+    const onKey = (e: Event) => loadClaim((e as CustomEvent<string>).detail);
+    window.addEventListener(SHOP_KEY_EVENT, onKey);
+    return () => {
+      window.removeEventListener(SHOP_KEY_EVENT, onKey);
+      void un.then((f) => f()).catch(() => {});
+    };
   }, [loadClaim]);
 
   // «Показано» ставится, только когда человек правда мог это увидеть: окно

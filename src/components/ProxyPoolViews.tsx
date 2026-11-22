@@ -34,6 +34,8 @@ export interface PoolRow {
   open: boolean;
   /** Ждёт подтверждения удаления: текст вопроса. */
   confirm?: string;
+  /** Куплен в магазине Clod Helper: срок («до 15 декабря») и истёк ли он. */
+  shop?: { until: string | null; expired: boolean };
 }
 
 export interface PoolActions {
@@ -45,6 +47,8 @@ export interface PoolActions {
   remove: (i: number) => void;
   cancelDelete: () => void;
   makePrimary: (i: number) => void;
+  /** «Продлить» прокси из магазина: кабинет покупателя в браузере. */
+  renew: (url: string) => void;
   editing: number | null;
   tagInput: string;
   setTagInput: (v: string) => void;
@@ -91,7 +95,17 @@ const statusTitle = (r: PoolRow) =>
 
 /** Причина «не работает / сбоит» - одной тихой строкой под именем; полный
     текст - в подсказке и в раскрытой строке. Цвет говорит точка слева. */
-function Problem({ row }: { row: PoolRow }) {
+function Problem({ row, a }: { row: PoolRow; a: PoolActions }) {
+  // Срок прокси из магазина прошёл, и он не отвечает - дело в сроке, а не в
+  // логине и пароле.
+  if (row.shop?.expired && row.live === "down" && !row.coverHost) {
+    return (
+      <div className="mt-1 flex min-w-0 items-center gap-2 text-[11px] leading-snug">
+        <span className="truncate text-vb-loss">Срок закончился</span>
+        <RenewBtn row={row} a={a} />
+      </div>
+    );
+  }
   if (!(row.live === "down" || row.live === "unstable") || !row.reason) return null;
   const full =
     (row.live === "down" ? "Не работает: " : "Сбоит: ") +
@@ -103,6 +117,40 @@ function Problem({ row }: { row: PoolRow }) {
     <div title={full} className="mt-1 truncate text-[11px] leading-snug text-vb-silver-dim">
       {short}
       {row.open && <span className="text-vb-silver-faint"> - {row.reason.charAt(0).toLowerCase() + row.reason.slice(1)}</span>}
+    </div>
+  );
+}
+
+function RenewBtn({ row, a }: { row: PoolRow; a: PoolActions }) {
+  return (
+    <button
+      type="button"
+      onClick={() => a.renew(row.url)}
+      className="shrink-0 rounded font-medium text-vb-emerald transition-colors hover:text-vb-emerald-bright"
+    >
+      Продлить
+    </button>
+  );
+}
+
+/** «Из магазина · до 15 декабря» - строкой под именем. */
+function ShopLine({ row, a }: { row: PoolRow; a: PoolActions }) {
+  if (!row.shop || (row.shop.expired && row.live === "down" && !row.coverHost)) return null;
+  return (
+    <div className="mt-1 flex min-w-0 items-center gap-1.5 whitespace-nowrap text-[11px] leading-none text-vb-silver-faint">
+      <span>Из магазина</span>
+      {row.shop.until && (
+        <>
+          <span aria-hidden="true">·</span>
+          <span className={cn(row.shop.expired && "text-vb-warn")}>{row.shop.expired ? "срок закончился" : row.shop.until}</span>
+        </>
+      )}
+      {row.shop.expired && (
+        <>
+          <span aria-hidden="true">·</span>
+          <RenewBtn row={row} a={a} />
+        </>
+      )}
     </div>
   );
 }
@@ -377,7 +425,8 @@ function RowA({ row, a }: { row: PoolRow; a: PoolActions }) {
         </span>
         <div className="min-w-0 flex-1">
           <NameField row={row} a={a} />
-          <Problem row={row} />
+          <Problem row={row} a={a} />
+          <ShopLine row={row} a={a} />
           <div className="mt-1 flex min-w-0 items-center gap-1.5 whitespace-nowrap text-[11px] leading-none text-vb-silver-faint">
             <Where row={row} />
             {row.backups > 0 && (
@@ -444,6 +493,21 @@ function RowA({ row, a }: { row: PoolRow; a: PoolActions }) {
         </div>
         <ChevronDown aria-hidden className={cn("h-3.5 w-3.5 shrink-0 text-vb-silver-faint transition-transform duration-200", row.open && "rotate-180")} />
       </div>
+      {/* Раскрытая строка: «Сделать основным» словами, не только звёздочкой
+          при наведении. */}
+      {row.open && !row.primary && (
+        <div className="flex justify-end px-4 pb-1">
+          <button
+            type="button"
+            onClick={() => a.makePrimary(row.i)}
+            disabled={a.busy !== null}
+            className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] text-vb-silver-dim transition-colors hover:bg-vb-surface-2 hover:text-vb-fg disabled:opacity-40"
+          >
+            <Star className="h-3 w-3" aria-hidden />
+            Сделать основным
+          </button>
+        </div>
+      )}
       <ConfirmStrip row={row} a={a} />
       <Backups row={row} a={a} />
     </div>

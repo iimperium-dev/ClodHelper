@@ -1,7 +1,8 @@
 import { useMemo, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertCircle, ArrowUpDown, Check, ClipboardPaste, KeyRound, Link2, X } from "lucide-react";
+import { AlertCircle, ArrowUpDown, Check, ClipboardPaste, KeyRound, Link2, ShoppingBag, X } from "lucide-react";
 import { isParseReject, parseProxyInput, type ParsedProxy } from "../lib/proxyParse";
+import { shopKeyFrom } from "../lib/shopClaim";
 import { cn } from "../lib/cn";
 
 /** Состояние поля «прокси в любом формате»: ввод, разбор, «поменять местами». */
@@ -12,8 +13,11 @@ export function useProxyInput() {
   const error = isParseReject(result) ? result.error : null;
   const base: ParsedProxy | null = isParseReject(result) ? null : result;
   const parsed: ParsedProxy | null = base && swapped && base.alt ? base.alt : base;
+  // Ключ из магазина (или ссылка с ним): вместо разбора - окно покупки.
+  const shopKey = useMemo(() => shopKeyFrom(value), [value]);
   return {
     value,
+    shopKey,
     setValue: (v: string) => {
       setRaw(v);
       setSwapped(false);
@@ -44,18 +48,22 @@ export function ProxyInputField({
   autoFocus,
   onEnter,
   compact,
+  shopKeys,
 }: {
   input: ProxyInputState;
+  /** Узнавать ключ из магазина (пул: да, резервы: нет). */
+  shopKeys?: boolean;
   autoFocus?: boolean;
   onEnter?: () => void;
   /** Внутри строки прокси - поменьше. */
   compact?: boolean;
 }) {
   const { value, parsed, ambiguous, error } = input;
+  const shopKey = shopKeys ? input.shopKey : null;
   const ref = useRef<HTMLInputElement>(null);
   const needsReview = ambiguous || parsed?.confidence === "low";
   const has = value.trim().length > 0;
-  const state: "idle" | "ok" | "review" | "bad" = !has ? "idle" : parsed ? (needsReview ? "review" : "ok") : "bad";
+  const state: "idle" | "ok" | "review" | "bad" = !has ? "idle" : shopKey ? "ok" : parsed ? (needsReview ? "review" : "ok") : "bad";
   const scheme = parsed ? (parsed.url.split("://")[0] === "socks5" ? "SOCKS5" : "HTTP") : "";
 
   const paste = async () => {
@@ -111,9 +119,9 @@ export function ProxyInputField({
           value={value}
           onChange={(e) => input.setValue(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && parsed) onEnter?.();
+            if (e.key === "Enter" && (parsed || shopKey)) onEnter?.();
           }}
-          placeholder="Вставьте прокси в любом формате"
+          placeholder={shopKeys ? "Прокси в любом формате или ключ из магазина" : "Вставьте прокси в любом формате"}
           aria-label="Адрес прокси"
           className={cn(
             "min-w-0 flex-1 bg-transparent font-mono text-vb-fg outline-none placeholder:font-sans placeholder:text-vb-silver-faint",
@@ -158,7 +166,15 @@ export function ProxyInputField({
             transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
             className="mt-2.5"
           >
-            {parsed ? (
+            {shopKey ? (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <Pill k={0} accent>
+                  <ShoppingBag className="h-3 w-3" />
+                  Ключ из магазина
+                </Pill>
+                <span className="text-[12px] text-vb-silver-dim">Программа получит прокси по этому ключу</span>
+              </div>
+            ) : parsed ? (
               <>
                 {needsReview && (
                   <p className="mb-2 flex items-center gap-1.5 text-[12px] text-vb-warn">

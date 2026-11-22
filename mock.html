@@ -22,6 +22,8 @@
   ?reportfail - отправка отчёта падает; window.__privacy(), __reports, __uiErrors - для тестов.
   ?deeplink - программа открыта ссылкой clodhelper://add?key=... (купленный прокси, новый адрес);
   ?deeplink=update - тот же адрес уже в пуле, ?deeplink=fail - магазин не ответил.
+  ?shopproxy - в пуле прокси из магазина со сроком, ?shopproxy=expired - срок прошёл, прокси не отвечает.
+  __shopAdds, __shopRemembered, __renewed - что окно отправило в магазинные команды.
   window.__shopLink() - ссылка пришла в уже запущенную программу; __shopClaims - запрошенные ключи.
   Используется тестами tests/ui (Playwright).
 -->
@@ -174,6 +176,16 @@
     R.update_check = null;
     R.update_latest = null;
   }
+  // Прокси из магазина (срок; ключ - только в Rust). ?shopproxy - третий прокси
+  // куплен, ?shopproxy=expired - срок прошёл и прокси не отвечает.
+  const shopMeta = {};
+  if (params.has("shopproxy")) {
+    const url = "http://buyer:s3cret@45.142.7.19:8000";
+    const expired = params.get("shopproxy") === "expired";
+    R.proxies_get = [...R.proxies_get, url];
+    R.proxies_ping = [...R.proxies_ping, { url, host: "45.142.7.19", port: 8000, ms: expired ? null : 88, ...(expired ? { error: "Прокси не принял логин или пароль (407)" } : {}) }];
+    shopMeta[url] = expired ? { expires_at: "2026-11-01T00:00:00Z", expired: true } : { expires_at: "2026-12-15T00:00:00Z", expired: false };
+  }
   // Тесты подменяют ответы: page.addInitScript(() => { window.__mockOverrides = {...} }).
   Object.assign(R, window.__mockOverrides || {});
   if (params.has("fresh")) {
@@ -259,11 +271,25 @@
           if (it.label && labels[it.url] === undefined) labels[it.url] = it.label;
         }
         if (pool.length > 5) throw "В программе помещается 5 прокси";
+        // «Сделать основным»: купленный - на место 0; закреплённое за
+        // основным остаётся за основным, остальное едет со своим прокси.
+        const first = pool.findIndex((u) => key(u) === key(args.items[0].url));
+        if (args.makePrimary && first > 0) {
+          pool.splice(0, 0, ...pool.splice(first, 1));
+          for (const [svc, idx] of Object.entries(R.proxy_assignments_get)) {
+            if (idx !== 0) R.proxy_assignments_get[svc] = idx === first ? 0 : idx < first ? idx + 1 : idx;
+          }
+        }
+        for (const it of args.items) if (it.key) shopMeta[it.url] = { expires_at: it.expires_at ?? null, expired: false };
         R.proxies_get = pool;
         R.proxy_labels_get = labels;
         (window.__poolWrites ||= []).push([...pool]);
+        (window.__shopAdds ||= []).push({ makePrimary: args.makePrimary, keys: args.items.map((i) => i.key) });
         return structuredClone(pool);
       }
+      if (cmd === "shop_remember") { (window.__shopRemembered ||= []).push(args.item); return null; }
+      if (cmd === "shop_meta_get") return structuredClone(shopMeta);
+      if (cmd === "shop_renew") { (window.__renewed ||= []).push(args.url); return null; }
       if (cmd === "proxies_set") {
         await wait(params.has("still") ? 20 : 400);
         R.proxies_get = [...args.urls];

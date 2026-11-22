@@ -123,3 +123,126 @@ test("ссылка в мастере: прокси подставляется в
   await expect(page.getByRole("button", { name: "Дальше" })).toBeEnabled();
   expect(await poolWrites(page)).toEqual([]);
 });
+
+const KEY = "q83vEjRWeJCrze8SNFZ4kKvN7xI0VniQq83vEjRWeJA";
+type Extra = {
+  __shopAdds?: { makePrimary: boolean; keys: string[] }[];
+  __shopRemembered?: { url: string; key: string; expires_at: string }[];
+  __renewed?: string[];
+  __R: { proxy_assignments_get: Record<string, number> };
+};
+const extra = (page: Page) => page.evaluate(() => window as unknown as Extra).then(() => page.evaluate(() => {
+  const w = window as unknown as Extra;
+  return { adds: w.__shopAdds ?? [], remembered: w.__shopRemembered ?? [], renewed: w.__renewed ?? [], assignments: w.__R.proxy_assignments_get };
+}));
+
+async function openProxies(page: Page, query = "") {
+  await page.goto(`/mock.html?still&platform=win${query}`);
+  await expect(page.getByText("Мост активен").first()).toBeVisible({ timeout: 20_000 });
+  await page.getByRole("tab", { name: "Прокси" }).click();
+  await expect(page.getByRole("heading", { name: "Прокси" })).toBeVisible();
+}
+
+test("ключ из магазина в поле «Прокси»: то же окно, ключ и срок уходят в пул", async ({ page }) => {
+  const errors = collectErrors(page);
+  await openProxies(page);
+  await page.getByRole("button", { name: "Добавить" }).click();
+  await page.getByLabel("Адрес прокси").fill(KEY);
+  await expect(page.getByText("Ключ из магазина")).toBeVisible();
+  await expect(page.getByText("Не получилось разобрать")).toBeHidden();
+  await page.getByRole("button", { name: "Добавить", exact: true }).last().click();
+
+  const d = dialog(page);
+  await expect(d).toBeVisible();
+  expect(await page.evaluate(() => (window as unknown as Win).__shopClaims)).toEqual([KEY]);
+  // Основной работает - галочка есть, но выключена.
+  const primary = d.getByRole("checkbox", { name: /Сделать основным/ });
+  await expect(primary).not.toBeChecked();
+  await d.getByRole("button", { name: "Добавить" }).click();
+  await expect(page.getByRole("dialog", { name: "Прокси добавлен" })).toBeVisible();
+  const x = await extra(page);
+  expect(x.adds).toEqual([{ makePrimary: false, keys: [KEY] }]);
+  await page.getByRole("button", { name: "Готово" }).click();
+  // Страница перечитала пул: купленный прокси с отметкой и сроком.
+  await expect(page.getByText("Из магазина")).toBeVisible();
+  await expect(page.getByText(/^до 22 декабря/)).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("ключ в резервах не распознаётся как покупка", async ({ page }) => {
+  await openProxies(page);
+  const row = page.locator("[aria-expanded]").filter({ hasText: "Claude main" });
+  await row.focus();
+  await page.keyboard.press("Enter");
+  await page.getByRole("button", { name: "Добавить резервный прокси" }).click();
+  await page.getByLabel("Адрес прокси").fill(KEY);
+  await expect(page.getByText("Не получилось разобрать")).toBeVisible();
+  await expect(page.getByText("Ключ из магазина")).toBeHidden();
+});
+
+test("основной не работает: «Сделать основным» включена, Claude переходит на купленный", async ({ page }) => {
+  await page.goto("/mock.html?still&platform=win&deeplink&down=all");
+  const d = dialog(page);
+  await expect(d).toBeVisible({ timeout: 20_000 });
+  const primary = d.getByRole("checkbox", { name: /Сделать основным/ });
+  await expect(primary).toBeChecked();
+  await expect(d.getByText("Основной прокси сейчас не отвечает", { exact: false })).toBeVisible();
+  await d.getByRole("button", { name: "Добавить" }).click();
+  await expect(page.getByRole("dialog", { name: "Прокси добавлен" })).toBeVisible();
+  const writes = await poolWrites(page);
+  expect(writes.at(-1)?.[0]).toBe("http://buyer:s3cret@45.142.7.19:8000");
+  const x = await extra(page);
+  expect(x.adds[0].makePrimary).toBe(true);
+  expect(x.assignments.anthropic).toBe(0);
+});
+
+test("галочку можно снять: основной не меняется", async ({ page }) => {
+  await page.goto("/mock.html?still&platform=win&deeplink&down=all");
+  const d = dialog(page);
+  await expect(d).toBeVisible({ timeout: 20_000 });
+  await d.getByRole("checkbox", { name: /Сделать основным/ }).uncheck();
+  await d.getByRole("button", { name: "Добавить" }).click();
+  await expect(page.getByRole("dialog", { name: "Прокси добавлен" })).toBeVisible();
+  expect((await poolWrites(page)).at(-1)?.[0]).toBe("http://u:p@185.68.187.138:8000");
+});
+
+test("ключ в мастере: «Ключ из магазина», окно, прокси в поле, ключ запомнен", async ({ page }) => {
+  const errors = collectErrors(page);
+  await page.goto("/mock.html?still&fresh&platform=win");
+  await expect(page.getByRole("heading", { name: "Вставьте прокси" })).toBeVisible({ timeout: 20_000 });
+  await page.getByLabel("Строка прокси").fill(`clodhelper://add?key=${KEY}`);
+  await expect(page.getByText("Ключ из магазина")).toBeVisible();
+  await page.getByRole("button", { name: "Дальше" }).click();
+  const d = dialog(page);
+  await expect(d).toBeVisible();
+  await expect(d.getByRole("checkbox")).toHaveCount(0);
+  await d.getByRole("button", { name: "Добавить" }).click();
+  await expect(page.getByLabel("Строка прокси")).toHaveValue("http://buyer:s3cret@45.142.7.19:8000");
+  const x = await extra(page);
+  expect(x.remembered).toEqual([
+    { url: "http://buyer:s3cret@45.142.7.19:8000", label: "Нидерланды", key: KEY, expires_at: "2026-12-22T00:00:00Z" },
+  ]);
+  expect(await poolWrites(page)).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test("страница «Прокси»: срок прокси из магазина и «Сделать основным» словами", async ({ page }) => {
+  await openProxies(page, "&shopproxy");
+  await expect(page.getByText("Из магазина")).toBeVisible();
+  await expect(page.getByText("до 15 декабря")).toBeVisible();
+  // Раскрыть строку (щелчок по имени - переименование, поэтому с клавиатуры).
+  const row = page.locator("[aria-expanded]").filter({ hasText: "45.142.7.19" });
+  await row.focus();
+  await page.keyboard.press("Enter");
+  await expect(row).toHaveAttribute("aria-expanded", "true");
+  await page.getByRole("button", { name: "Сделать основным", exact: true }).filter({ hasText: "Сделать основным" }).click();
+  await expect.poll(async () => (await poolWrites(page)).at(-1)?.[0]).toBe("http://buyer:s3cret@45.142.7.19:8000");
+});
+
+test("срок прошёл и прокси не отвечает: «Срок закончился» и «Продлить», без логина-пароля", async ({ page }) => {
+  await openProxies(page, "&shopproxy=expired");
+  await expect(page.getByText("Срок закончился")).toBeVisible();
+  await expect(page.getByText(/логин или пароль/)).toHaveCount(0);
+  await page.getByRole("button", { name: "Продлить", exact: true }).click();
+  expect((await extra(page)).renewed).toEqual(["http://buyer:s3cret@45.142.7.19:8000"]);
+});

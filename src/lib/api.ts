@@ -651,6 +651,29 @@ export async function shopClaim(key: string): Promise<import("./shopClaim").Clai
  * «Добавить» в окне покупки: тот же адрес в пуле - запись обновляется на
  * месте (имя, резервы и назначения остаются), иначе прокси в конец пула.
  */
-export async function shopAdd(items: { url: string; label?: string | null }[]): Promise<string[]> {
-  return invoke<string[]>("shop_add", { items });
+/** Купленный прокси для пула: ключ и срок хранятся у прокси (ключ - только в Rust). */
+export interface ShopAddItem {
+  url: string;
+  label?: string | null;
+  key?: string | null;
+  expires_at?: string | null;
+}
+
+export async function shopAdd(items: ShopAddItem[], makePrimary: boolean): Promise<string[]> {
+  return invoke<string[]>("shop_add", { items, makePrimary });
+}
+
+/** Мастер: ключ и срок купленного прокси - заранее, до записи пула мастером. */
+export async function shopRemember(item: ShopAddItem): Promise<void> {
+  return invoke<void>("shop_remember", { item });
+}
+
+/** Прокси из магазина: URL - срок (без ключа). */
+export async function shopMetaGet(): Promise<Record<string, import("./shopClaim").ShopInfo>> {
+  return invoke<Record<string, import("./shopClaim").ShopInfo>>("shop_meta_get");
+}
+
+/** «Продлить»: кабинет покупателя в браузере (ключ подставит Rust). */
+export async function shopRenew(url: string): Promise<void> {
+  return invoke<void>("shop_renew", { url });
 }

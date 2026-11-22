@@ -4,7 +4,7 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Check, Loader2, ShoppingBag } from "lucide-react";
 import { Button } from "./Button";
 import { CountryFlag } from "./CountryFlag";
-import { checkProxy, proxiesGet, shopAdd } from "../lib/api";
+import { checkProxy, proxiesGet, shopAdd, shopRemember, type ShopAddItem } from "../lib/api";
 import { useStatus } from "../lib/status";
 import { loadGeoCache, saveGeoCache } from "../pages/Proxies";
 import {
@@ -22,7 +22,7 @@ import type { ProxyCheckResult } from "../lib/types";
 export type ShopClaimState =
   | { kind: "loading" }
   | { kind: "error"; message: string }
-  | { kind: "ready"; claim: Claim };
+  | { kind: "ready"; claim: Claim; key: string };
 
 interface Props {
   state: ShopClaimState | null;
@@ -49,10 +49,12 @@ type ProxyCheck = { state: "checking" } | { state: "done"; result: ProxyCheckRes
 */
 export function ShopClaimDialog({ state, wizard, onWizardFill, onRetry, onClose, onOpenProxies }: Props) {
   const reduce = useReducedMotion();
-  const { refresh, refreshPoolPing } = useStatus();
+  const { refresh, refreshPoolPing, proxies } = useStatus();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pool, setPool] = useState<string[] | null>(null);
+  // «Сделать основным»: null - человек не трогал, решает состояние основного.
+  const [primaryPick, setPrimaryPick] = useState<boolean | null>(null);
   // После «Добавить»: результат проверки каждого купленного прокси.
   const [checks, setChecks] = useState<ProxyCheck[] | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -66,6 +68,7 @@ export function ShopClaimDialog({ state, wizard, onWizardFill, onRetry, onClose,
     setBusy(false);
     setError(null);
     setChecks(null);
+    setPrimaryPick(null);
     if (claim && !wizard) void proxiesGet().then(setPool, () => setPool(null));
   }, [claim, wizard]);
 
@@ -97,10 +100,25 @@ export function ShopClaimDialog({ state, wizard, onWizardFill, onRetry, onClose,
 
   const urls = claim ? claim.proxies.map((p) => normalizeUrl(p.url)) : [];
   const inPool = (url: string) => !!pool?.some((u) => hostPortOf(u) === hostPortOf(url));
+  const items: ShopAddItem[] =
+    state?.kind === "ready"
+      ? state.claim.proxies.map((p, i) => ({ url: urls[i], label: p.label, key: state.key, expires_at: p.expires_at }))
+      : [];
+
+  // Галочка нужна, когда основной есть и это не сам купленный прокси.
+  const primaryUrl = pool?.[0];
+  const showPrimary =
+    !wizard && !!primaryUrl && urls.length > 0 && hostPortOf(primaryUrl) !== hostPortOf(urls[0]);
+  // По умолчанию включена, если основной сейчас не работает: иначе покупка
+  // во время сбоя не починила бы Claude.
+  const primaryDown = proxies.find((p) => p.url === primaryUrl)?.state === "down";
+  const makePrimary = showPrimary && (primaryPick ?? primaryDown);
 
   const add = async () => {
     if (!claim || busy) return;
     if (wizard) {
+      // Ключ и срок - заранее: прокси в пул запишет сам мастер.
+      await shopRemember(items[0]).catch(() => {});
       onWizardFill(urls[0]);
       return;
     }
@@ -108,7 +126,7 @@ export function ShopClaimDialog({ state, wizard, onWizardFill, onRetry, onClose,
     setError(null);
     try {
       // Тот же адрес - обновить на месте, имя из магазина - если своего нет.
-      await shopAdd(claim.proxies.map((p, i) => ({ url: urls[i], label: p.label })));
+      await shopAdd(items, makePrimary);
       window.dispatchEvent(new Event(POOL_CHANGED_EVENT));
       // Сразу проверяем, как после ручного добавления.
       setChecks(urls.map(() => ({ state: "checking" })));
@@ -236,6 +254,25 @@ export function ShopClaimDialog({ state, wizard, onWizardFill, onRetry, onClose,
                   })}
                 </ul>
 
+                {showPrimary && !added && (
+                  <label className="mt-3 flex cursor-pointer items-start gap-2.5 rounded-lg px-1 py-1 text-[13px] text-vb-silver">
+                    <input
+                      type="checkbox"
+                      checked={makePrimary}
+                      onChange={(e) => setPrimaryPick(e.target.checked)}
+                      disabled={busy}
+                      className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--color-vb-emerald)]"
+                    />
+                    <span>
+                      Сделать основным
+                      <span className="block text-[12px] leading-snug text-vb-silver-dim">
+                        {primaryDown
+                          ? "Основной прокси сейчас не отвечает. Claude и всё, что шло через него, перейдёт на купленный"
+                          : "Claude и всё, что шло через основной, перейдёт на купленный"}
+                      </span>
+                    </span>
+                  </label>
+                )}
                 {wizard && many && (
                   <p className="mt-3 text-[12px] leading-snug text-vb-silver-dim">
                     В мастер подставится первый. Остальные добавьте потом на странице «Прокси».
