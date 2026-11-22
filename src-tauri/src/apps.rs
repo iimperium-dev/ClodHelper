@@ -746,7 +746,7 @@ pub fn relaunch(p: &AppProfile) -> Result<(), String> {
 
 /// PID главного процесса программы: имя образа и, если известен, путь к exe.
 #[cfg(target_os = "windows")]
-fn main_pids(image: &str, exe: Option<&str>) -> Vec<u32> {
+pub(crate) fn main_pids(image: &str, exe: Option<&str>) -> Vec<u32> {
     use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
     let mut sys = System::new();
     sys.refresh_processes_specifics(
@@ -789,11 +789,29 @@ pub fn launch(p: &AppProfile) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     crate::win::allow_foreground();
     if p.id == crate::claude_desktop::PROFILE_ID {
-        return crate::claude_desktop::launch();
+        return launch_claude_desktop(p);
     }
     match p.kind {
         LaunchKind::ExeFlag | LaunchKind::Custom => launch_exe(p, &[]),
         LaunchKind::Msix => launch_msix(p),
+    }
+}
+
+/// Claude Desktop уже открыт: лаунчер такой запуск отвергает (Electron отдал
+/// бы его открытому окну без прокси), и человек видел просьбу закрыть Claude
+/// через трей. Теперь: ходит мимо моста - перезапускаем через мост, иначе
+/// просто выводим окно вперёд (прокси задан политикой Claude).
+fn launch_claude_desktop(p: &AppProfile) -> Result<(), String> {
+    if !crate::claude_desktop::running() {
+        return crate::claude_desktop::launch();
+    }
+    let around = crate::traffic::snapshot(std::slice::from_ref(p))
+        .first()
+        .is_some_and(|t| t.direct > 0);
+    if around {
+        relaunch(p)
+    } else {
+        crate::claude_desktop::focus()
     }
 }
 

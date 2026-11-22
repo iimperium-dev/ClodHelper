@@ -41,7 +41,7 @@ pub async fn detect_cursor() -> Result<CursorInfo, String> {
 
 #[tauri::command]
 pub async fn launch_claude_desktop() -> Result<(), String> {
-    tokio::task::spawn_blocking(crate::claude_desktop::launch)
+    tokio::task::spawn_blocking(|| crate::apps::launch(&crate::claude_desktop::preset()))
         .await
         .map_err(|e| format!("Внутренняя ошибка: {e}"))?
 }

@@ -217,6 +217,48 @@ pub fn launch() -> Result<(), String> {
     run_script(&launch_args()).map(|_| ())
 }
 
+/// Открыт ли Claude Desktop: главный процесс именно этой установки
+/// (claude.exe Claude Code в терминалах не считается).
+pub fn running() -> bool {
+    let Some(i) = detect() else { return false };
+    #[cfg(target_os = "windows")]
+    {
+        !crate::apps::main_pids("claude.exe", Some(&i.exe_path)).is_empty()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let app = i.exe_path.trim_end_matches('/');
+        Command::new("/usr/bin/pgrep")
+            .args(["-f", &format!("{app}/Contents/MacOS/Claude")])
+            .output()
+            .is_ok_and(|o| o.status.success())
+    }
+}
+
+/// Вывести уже открытый Claude Desktop вперёд. Повторный запуск Electron
+/// отдаёт открытому окну и сразу выходит, прокси при этом не меняется.
+pub fn focus() -> Result<(), String> {
+    let i = detect().ok_or_else(|| "Claude Desktop не найден".to_string())?;
+    #[cfg(target_os = "windows")]
+    let mut cmd = match &i.app_id {
+        Some(id) => {
+            let mut c = Command::new("explorer.exe");
+            c.arg(format!("shell:AppsFolder\\{id}"));
+            c
+        }
+        None => Command::new(&i.exe_path),
+    };
+    #[cfg(not(target_os = "windows"))]
+    let mut cmd = {
+        let mut c = Command::new("/usr/bin/open");
+        c.arg(&i.exe_path);
+        c
+    };
+    cmd.spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Не удалось открыть Claude Desktop: {e}"))
+}
+
 /// Install a stable launcher outside WindowsApps. A .lnk never pins a Store
 /// package version; the script also works when the execution alias is disabled.
 pub fn install_launcher() -> Result<PathBuf, String> {
