@@ -171,6 +171,16 @@ pub fn detect_fresh() -> Result<Option<Installation>, String> {
     Ok(None)
 }
 
+/// Проверка без кэша, с записью в кэш: мастер ждёт установку Claude Desktop,
+/// и после находки остальной код не должен минуту видеть старое «нет».
+pub fn detect_now() -> Option<Installation> {
+    let installation = detect_fresh().ok().flatten();
+    if let Ok(mut guard) = INSTALL_CACHE.lock() {
+        *guard = Some((Instant::now(), installation.clone()));
+    }
+    installation
+}
+
 pub fn detect() -> Option<Installation> {
     let mut guard = INSTALL_CACHE.lock().ok()?;
     if let Some((time, installation)) = guard.as_ref() {

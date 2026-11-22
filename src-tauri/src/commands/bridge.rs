@@ -249,6 +249,13 @@ pub async fn notices_banners() -> Vec<crate::notices::BannerView> {
     .unwrap_or_default()
 }
 
+/// Баннеры для мастера: до согласия на статистику - один запрос только о
+/// них (версия и система), после - из обычного кэша.
+#[tauri::command]
+pub async fn notices_setup_banners() -> Vec<crate::notices::BannerView> {
+    crate::notices::setup_banners().await
+}
+
 /// Фото и видео баннера: скачать в кэш (с проверкой суммы) и вернуть пути.
 #[tauri::command]
 pub async fn banner_media(keys: Vec<String>) -> std::collections::HashMap<String, String> {

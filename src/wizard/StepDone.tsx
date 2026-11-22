@@ -1,9 +1,11 @@
+import { useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
-import { AppWindow, ArrowRight, Check, Globe, Monitor, Power } from "lucide-react";
+import { AppWindow, ArrowRight, Check, Globe, Loader2, Monitor, Power } from "lucide-react";
+import { appsLaunch, appsRelaunch } from "../lib/api";
 import { Button } from "../components/Button";
 import { PrivacySwitches } from "../components/PrivacySwitches";
 import { WizardFooter, WizardTitle } from "../components/WizardShell";
-import type { PrivacyKey, WizardInstallResult } from "../lib/types";
+import type { PrivacyKey, WizardClaude, WizardInstallResult } from "../lib/types";
 import { cn } from "../lib/cn";
 import { osName } from "../lib/platform";
 
@@ -72,9 +74,7 @@ export function StepDone({ result, privacy, onPrivacy, onFinish }: Props) {
             Терминал пока идёт напрямую. Включить его можно в «Приложениях», в настройках Claude Desktop (шестерёнка)
           </Row>
         )}
-        <Row icon={<AppWindow className="h-4 w-4 text-vb-silver-dim" aria-hidden />}>
-          Claude Desktop подключается в разделе «Приложения»
-        </Row>
+        <ClaudeRow claude={result.claude} running={result.claude_running} />
       </ul>
 
       <div className="mt-2 border-t border-vb-border/60 pt-3">
@@ -121,12 +121,78 @@ function RouteLine({ ok, reduce, delay }: { ok: boolean; reduce: boolean; delay:
   );
 }
 
-function Row({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
+function Row({ icon, children, action }: { icon: React.ReactNode; children: React.ReactNode; action?: React.ReactNode }) {
   return (
     <li className="flex items-start gap-2.5 px-1 py-1 text-[13px] leading-snug text-vb-silver">
       <span className="mt-px shrink-0">{icon}</span>
-      <span>{children}</span>
+      <span className="min-w-0 flex-1">{children}</span>
+      {action && <span className="-my-1 shrink-0">{action}</span>}
     </li>
+  );
+}
+
+const CLAUDE_ID = "claude-desktop";
+
+/*
+  Claude Desktop - честно: подключён, не вышло или его нет. Был открыт во
+  время подключения - старое окно ходит мимо моста, пока его не перезапустить:
+  кнопка «Перезапустить Claude». Не был открыт - «Открыть Claude», он сразу
+  пойдёт через мост.
+*/
+function ClaudeRow({ claude, running }: { claude: WizardClaude; running: boolean }) {
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  if (claude === "absent") {
+    return (
+      <Row icon={<AppWindow className="h-4 w-4 text-vb-silver-dim" aria-hidden />}>
+        Claude Desktop нет на компьютере. Поставите позже - подключите в «Приложениях»
+      </Row>
+    );
+  }
+  if (claude === "err") {
+    return (
+      <Row icon={<AppWindow className="h-4 w-4 text-vb-warn" aria-hidden />}>
+        Claude Desktop пока идёт напрямую. Подключите его в «Приложениях»
+      </Row>
+    );
+  }
+  const run = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await (running ? appsRelaunch(CLAUDE_ID) : appsLaunch(CLAUDE_ID));
+      setDone(true);
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Row
+      icon={<AppWindow className={cn("h-4 w-4", running && !done ? "text-vb-warn" : "text-vb-emerald")} aria-hidden />}
+      action={
+        done ? (
+          <span className="flex items-center gap-1 py-1.5 text-[12px] text-vb-emerald">
+            <Check className="h-3.5 w-3.5" aria-hidden />
+            {running ? "Перезапущен" : "Открыт"}
+          </span>
+        ) : (
+          <Button size="sm" variant="secondary" onClick={() => void run()} disabled={busy}>
+            {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />}
+            {running ? "Перезапустить Claude" : "Открыть Claude"}
+          </Button>
+        )
+      }
+    >
+      {running && !done
+        ? "Claude Desktop подключён, нужен перезапуск"
+        : done
+          ? "Claude Desktop подключён и идёт через мост"
+          : "Claude Desktop подключён и откроется уже через мост"}
+      {err && <span className="mt-0.5 block text-[12px] text-vb-loss">{err}</span>}
+    </Row>
   );
 }
 

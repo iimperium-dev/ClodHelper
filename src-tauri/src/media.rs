@@ -55,7 +55,8 @@ pub async fn ensure(key: &str) -> Result<PathBuf, String> {
     if path.is_file() {
         return Ok(path);
     }
-    let data = crate::telemetry::get_bytes(&format!("/v1/media/{key}"), MAX_BYTES, TIMEOUT).await?;
+    let setup = crate::notices::is_setup_media(key);
+    let data = crate::telemetry::get_bytes(&format!("/v1/media/{key}"), MAX_BYTES, TIMEOUT, setup).await?;
     if !matches_key(key, &data) {
         return Err("файл повреждён".into());
     }

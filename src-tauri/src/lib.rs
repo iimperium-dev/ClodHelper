@@ -164,6 +164,7 @@ pub fn run() {
             commands::telemetry_report,
             commands::notice_event,
             commands::notices_banners,
+            commands::notices_setup_banners,
             commands::notices_banner_dismiss,
             commands::banner_media,
             commands::play_chime,
@@ -226,6 +227,9 @@ pub fn run() {
             commands::bridge_set_route_mode,
             commands::bridge_update,
             commands::wizard_install,
+            commands::wizard_apps,
+            commands::wizard_open_store,
+            commands::wizard_connect_claude,
             // Прокси-пул
             commands::proxies_get,
             commands::proxies_set,

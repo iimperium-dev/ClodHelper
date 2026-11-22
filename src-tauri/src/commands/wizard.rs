@@ -29,6 +29,87 @@ pub struct WizardInstallResult {
     /// Включилось ли системное проксирование (env). false - не фатально,
     /// режим включается в «Приложениях» → Claude Desktop → ⚙.
     pub env_on: bool,
+    /// Claude Desktop: "ok" - подключён к мосту, "err" - не вышло (отказ в
+    /// окне системы, чужая политика), "absent" - не установлен.
+    pub claude: &'static str,
+    /// Claude Desktop был открыт во время подключения: настройка прокси
+    /// подхватится только после перезапуска.
+    pub claude_running: bool,
+}
+
+/// Какие приложения уже стоят: мастер предлагает поставить недостающие и
+/// опрашивает это раз в несколько секунд, пока идёт установка.
+#[derive(Debug, Serialize)]
+pub struct WizardApps {
+    pub claude: bool,
+    pub codex: bool,
+}
+
+/// Свежая проверка без кэша: человек только что поставил приложение.
+#[tauri::command]
+pub async fn wizard_apps() -> WizardApps {
+    tokio::task::spawn_blocking(|| WizardApps {
+        claude: crate::claude_desktop::detect_now().is_some(),
+        codex: apps::codex_installed(),
+    })
+    .await
+    .unwrap_or(WizardApps { claude: false, codex: false })
+}
+
+/// Где поставить приложение. Windows - страница в Microsoft Store (ID
+/// сверены с каталогом Store: пакеты AnthropicPBC.Claude и OpenAI.Codex,
+/// их же ищет детект), macOS - страница загрузки на сайте разработчика.
+fn store_url(id: &str) -> Option<&'static str> {
+    #[cfg(target_os = "windows")]
+    let url = match id {
+        "claude" => "ms-windows-store://pdp/?ProductId=9P6K58THS811",
+        "codex" => "ms-windows-store://pdp/?ProductId=9PLM9XGG6VKS",
+        _ => return None,
+    };
+    #[cfg(not(target_os = "windows"))]
+    let url = match id {
+        "claude" => "https://claude.com/download",
+        "codex" => "https://openai.com/codex/",
+        _ => return None,
+    };
+    Some(url)
+}
+
+/// Открыть страницу установки приложения. Адреса - только свои, из кода:
+/// схема ms-windows-store открывается отсюда, а не из интерфейса.
+#[tauri::command]
+pub fn wizard_open_store(app: String) -> Result<(), String> {
+    let url = store_url(&app).ok_or("Неизвестное приложение")?;
+    tauri_plugin_opener::open_url(url, None::<&str>).map_err(|e| format!("Не удалось открыть магазин: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn store_urls_are_known_and_fixed() {
+        for id in ["claude", "codex"] {
+            let url = store_url(id).unwrap();
+            if cfg!(target_os = "windows") {
+                assert!(url.starts_with("ms-windows-store://pdp/?ProductId=9"));
+            } else {
+                assert!(url.starts_with("https://"));
+            }
+        }
+        assert!(store_url("https://evil.example").is_none());
+    }
+}
+
+/// Подключить Claude Desktop к мосту. Уже подключён - ничего не спрашиваем.
+/// Windows спросит разрешение администратора, macOS - пароль, один раз.
+pub(crate) async fn connect_claude(app: &AppHandle) -> bool {
+    let configured = tokio::task::spawn_blocking(crate::claude_policy::status)
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+        .is_some_and(|s| s.configured);
+    configured || claude_proxy_enable(app.clone()).await.is_ok()
 }
 
 /// Установка для нового мастера: мост из ресурсов → настройки + задача
@@ -117,27 +198,24 @@ pub async fn wizard_install(
     let _ = tokio::task::spawn_blocking(settings::load_with_presets).await;
     step("presets", "ok");
 
-    // 5) Claude Desktop (macOS): штатный прокси Claude - одна системная
-    //    просьба пароля прямо в мастере, а не поиск кнопки потом. Отмена или
-    //    конфликт не фатальны: в «Приложениях» будет «Подключить».
-    #[cfg(not(target_os = "windows"))]
-    {
-        let has_claude = tokio::task::spawn_blocking(|| crate::claude_desktop::detect().is_some())
-            .await
-            .unwrap_or(false);
-        if has_claude {
-            step("claude", "start");
-            let configured = tokio::task::spawn_blocking(crate::claude_policy::status)
-                .await
-                .ok()
-                .and_then(|r| r.ok())
-                .is_some_and(|s| s.configured);
-            let ok = configured || claude_proxy_enable(app.clone()).await.is_ok();
-            step("claude", if ok { "ok" } else { "err" });
-        } else {
-            step("claude", "skip");
-        }
-    }
+    // 5) Claude Desktop: штатный прокси Claude - одна системная просьба
+    //    (Windows - окно разрешения, macOS - пароль) прямо в мастере, а не
+    //    поиск кнопки потом. Отмена или конфликт не фатальны: в «Приложениях»
+    //    будет «Подключить». Нет Claude Desktop - следующий шаг мастера
+    //    предложит его поставить.
+    let has_claude = tokio::task::spawn_blocking(|| crate::claude_desktop::detect_now().is_some())
+        .await
+        .unwrap_or(false);
+    let (claude, claude_running) = if has_claude {
+        step("claude", "start");
+        let ok = connect_claude(&app).await;
+        step("claude", if ok { "ok" } else { "err" });
+        let running = tokio::task::spawn_blocking(crate::claude_desktop::running).await.unwrap_or(false);
+        (if ok { "ok" } else { "err" }, running)
+    } else {
+        step("claude", "skip");
+        ("absent", false)
+    };
 
     // Telegram мастер не трогает: подключается по выбору пользователя кнопкой
     // в «Приложениях». Раньше мастер сам включал Telegram защиту от утечек
@@ -150,5 +228,30 @@ pub async fn wizard_install(
     let test = shim::test().await;
     step("test", if test.ok { "ok" } else { "err" });
 
-    Ok(WizardInstallResult { test, env_on })
+    Ok(WizardInstallResult { test, env_on, claude, claude_running })
+}
+
+/// Подключение Claude Desktop из шага «Приложения».
+#[derive(Debug, Serialize)]
+pub struct WizardClaudeConnect {
+    /// false - отказ в окне системы или ошибка (можно позже в «Приложениях»).
+    pub ok: bool,
+    /// Открыт (магазин часто сам запускает приложение после установки):
+    /// прокси подхватится после перезапуска.
+    pub running: bool,
+}
+
+/// Мастер: Claude Desktop только что поставили - подключить к мосту.
+/// Err - Claude Desktop так и не нашёлся.
+#[tauri::command]
+pub async fn wizard_connect_claude(app: AppHandle) -> Result<WizardClaudeConnect, String> {
+    let found = tokio::task::spawn_blocking(|| crate::claude_desktop::detect_now().is_some())
+        .await
+        .unwrap_or(false);
+    if !found {
+        return Err("Claude Desktop не найден".into());
+    }
+    let ok = connect_claude(&app).await;
+    let running = tokio::task::spawn_blocking(crate::claude_desktop::running).await.unwrap_or(false);
+    Ok(WizardClaudeConnect { ok, running })
 }

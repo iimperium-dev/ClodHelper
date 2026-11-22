@@ -39,6 +39,8 @@ import type {
   ShimTestResult,
   ShortcutTarget,
   WizardInstallResult,
+  WizardApps,
+  WizardAppId,
   SiteEntry,
   SitesStatus,
   SeenHosts,
@@ -91,6 +93,21 @@ export async function runInstall(params: {
 /** Установка нового мастера одним вызовом (прогресс - событие "wizard:step"). */
 export async function wizardInstall(proxyUrl: string): Promise<WizardInstallResult> {
   return invoke<WizardInstallResult>("wizard_install", { proxyUrl });
+}
+
+/** Мастер: стоят ли Claude Desktop и Codex (свежая проверка, без кэша). */
+export function wizardApps(): Promise<WizardApps> {
+  return invoke<WizardApps>("wizard_apps");
+}
+
+/** Мастер: страница установки приложения (Windows - Microsoft Store, Mac - сайт). */
+export function wizardOpenStore(app: WizardAppId): Promise<void> {
+  return invoke<void>("wizard_open_store", { app });
+}
+
+/** Мастер: подключить только что поставленный Claude Desktop. ok false - не вышло. */
+export function wizardConnectClaude(): Promise<{ ok: boolean; running: boolean }> {
+  return invoke<{ ok: boolean; running: boolean }>("wizard_connect_claude");
 }
 
 // ─── Shim control ────────────────────────────────────────────────
@@ -546,6 +563,11 @@ export function noticesMarkRead(ids: string[]): Promise<NoticeItem[]> {
 /** Действующие баннеры, свежие первыми. Какой показать - решает PromoBanner. */
 export function noticesBanners(): Promise<BannerView[]> {
   return invoke<BannerView[]>("notices_banners");
+}
+
+/** Баннеры мастера: до согласия - один запрос только о них (версия и система). */
+export function noticesSetupBanners(): Promise<BannerView[]> {
+  return invoke<BannerView[]>("notices_setup_banners");
 }
 
 /** Фото и видео баннера: скачать в кэш программы и получить адреса для показа. */

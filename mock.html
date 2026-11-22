@@ -13,6 +13,10 @@
   ?still - без анимаций (для снимков), ?platform=win - интерфейс Windows,
   ?fresh - первый запуск: моста ещё нет, открывается мастер (?wizfail -
   установка падает на проверке, ?wizslow - фазы идут медленно).
+  Мастер и приложения: ?noclaude / ?nocodex - их нет, шаг «Приложения» предложит
+  поставить; window.__install("claude"|"codex") - установка закончилась (?autoinstall -
+  сама через 2 с после «Установить»); window.__opened - открытые магазины;
+  ?claudeerr - Claude Desktop не подключился; ?claudeopen - был открыт (кнопка «Перезапустить»).
   ?whatsnew - окно «Что нового» после обновления; ?autooffer - затем
   предложение включить автообновление (установка до этой функции).
   ?noticebanner - обычная установка, автообновление уже отвечено, переключатели ещё не показывали
@@ -264,6 +268,9 @@
   window.__reports = [];
   window.__uiErrors = [];
   window.__R = R; // тесты меняют ответы на лету (например, растущие ошибки прокси)
+  // Мастер: стоят ли Claude Desktop и Codex.
+  const wizApps = { claude: !params.has("noclaude"), codex: !params.has("nocodex") };
+  window.__install = (id) => { wizApps[id] = true; };
   let cbId = 1;
   // События Tauri: listen() регистрирует колбэк, window.__emit(имя, данные)
   // доставляет его (как emit из Rust) - для хода установки мастера и т.п.
@@ -525,8 +532,25 @@
         return null;
       }
       if (cmd === "notice_event") {
-        (window.__noticeEvents ||= []).push({ id: args.id, ev: args.ev });
+        // Как бэкенд: до показа переключателей и без статистики событие не уходит.
+        const sent = noticeSeen && privacy.usage_stats;
+        (sent ? (window.__noticeEvents ||= []) : (window.__noticeEventsHeld ||= [])).push({ id: args.id, ev: args.ev });
         return null;
+      }
+      // Баннеры мастера: до согласия бэкенд один раз спрашивает сервер только о них.
+      if (cmd === "notices_setup_banners") {
+        (window.__setupAsked ||= []).push({ noticeSeen });
+        return structuredClone(R.notices_banners.filter((x) => x.when === "setup"));
+      }
+      if (cmd === "wizard_apps") return { ...wizApps };
+      if (cmd === "wizard_open_store") {
+        (window.__opened ||= []).push(args.app);
+        if (params.has("autoinstall")) setTimeout(() => window.__install(args.app), 2000);
+        return null;
+      }
+      if (cmd === "wizard_connect_claude") {
+        await wait(params.has("still") ? 60 : 900);
+        return { ok: !params.has("claudeerr"), running: params.has("claudeopen") };
       }
       if (cmd === "telemetry_ui_error") {
         window.__uiErrors.push({ msg: args.msg, stack: args.stack });
@@ -539,17 +563,26 @@
       // Мастер: фазы установки событиями "wizard:step", как wizard_install.
       if (cmd === "wizard_install") {
         const step = params.has("wizslow") ? 900 : params.has("still") ? 40 : 420;
-        const phases = ["bridge", "task", "env", "presets", ...(win ? [] : ["claude"]), "test"];
+        const phases = ["bridge", "task", "env", "presets", "claude", "test"];
         for (const ph of phases) {
+          if (ph === "claude" && !wizApps.claude) {
+            window.__emit("wizard:step", "claude:skip");
+            continue;
+          }
           window.__emit("wizard:step", ph + ":start");
           await wait(step);
           if (ph === "test" && params.has("wizfail")) {
             window.__emit("wizard:step", "test:err");
             throw "Прокси не ответил за 10 секунд (185.68.187.138:8000)";
           }
+          if (ph === "claude" && params.has("claudeerr")) {
+            window.__emit("wizard:step", "claude:err");
+            continue;
+          }
           window.__emit("wizard:step", ph + ":ok");
         }
-        return { test: structuredClone(R.shim_test), env_on: true };
+        const claude = !wizApps.claude ? "absent" : params.has("claudeerr") ? "err" : "ok";
+        return { test: structuredClone(R.shim_test), env_on: true, claude, claude_running: claude === "ok" && params.has("claudeopen") };
       }
       if (cmd in R) return structuredClone(R[cmd]);
       if (cmd in SITES) return structuredClone(SITES[cmd]);

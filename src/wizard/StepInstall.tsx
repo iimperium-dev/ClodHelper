@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { AlertTriangle, ArrowLeft, Check, Loader2, RotateCw } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Check, Loader2, Minus, RotateCw } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { Button } from "../components/Button";
 import { WizardFooter, WizardTitle } from "../components/WizardShell";
@@ -20,13 +20,23 @@ const PHASES: { id: string; label: string }[] = [
   { id: "task", label: "Включаю автозапуск" },
   { id: "env", label: "Направляю терминал и VS Code через мост" },
   { id: "presets", label: "Готовлю профили приложений" },
-  // macOS: Claude просит пароль Mac один раз. Telegram мастер не трогает -
-  // он подключается по выбору в «Приложениях».
-  ...(isMac ? [{ id: "claude", label: "Подключаю Claude Desktop - macOS спросит пароль" }] : []),
+  // Claude Desktop: одна просьба системы (Windows - окно разрешения, macOS -
+  // пароль). Нет Claude Desktop - фаза пропускается, следующий шаг предложит
+  // его поставить. Telegram мастер не трогает - он подключается по выбору в
+  // «Приложениях».
+  {
+    id: "claude",
+    label: isMac
+      ? "Подключаю Claude Desktop - macOS спросит пароль"
+      : "Подключаю Claude Desktop - Windows спросит разрешение",
+  },
   { id: "test", label: "Проверяю соединение настоящим запросом" },
 ];
 
-type PhaseState = "pending" | "run" | "ok" | "err";
+/** Фазы, ошибка которых не останавливает установку. */
+const SOFT = new Set(["env", "claude"]);
+
+type PhaseState = "pending" | "run" | "ok" | "err" | "skip";
 
 /*
   Шаг 2: установка стартует сама, без кнопки. Всё делает одна Rust-команда
@@ -62,8 +72,8 @@ export function StepInstall({ proxyUrl, onBack, onDone }: Props) {
       const state = e.payload.slice(idx + 1);
       setStates((s) => ({
         ...s,
-        // skip - приложения нет, шаг не нужен: показываем как выполненный.
-        [phase]: state === "start" ? "run" : state === "ok" || state === "skip" ? "ok" : "err",
+        // skip - приложения нет, шаг не нужен: тихая строка «не установлен».
+        [phase]: state === "start" ? "run" : state === "ok" ? "ok" : state === "skip" ? "skip" : "err",
       }));
     });
     if (!started.current) {
@@ -75,7 +85,10 @@ export function StepInstall({ proxyUrl, onBack, onDone }: Props) {
     };
   }, [run]);
 
-  const done = PHASES.filter((p) => states[p.id] === "ok" || (p.id === "env" && states[p.id] === "err")).length;
+  // Нефатальные ошибки (env, Claude Desktop) и пропуск тоже двигают полосу.
+  const done = PHASES.filter(
+    (p) => states[p.id] === "ok" || states[p.id] === "skip" || (SOFT.has(p.id) && states[p.id] === "err"),
+  ).length;
   const pct = Math.round((done / PHASES.length) * 100);
 
   return (
@@ -113,8 +126,9 @@ export function StepInstall({ proxyUrl, onBack, onDone }: Props) {
       <ol className="mt-4" aria-label="Что настраивается">
         {PHASES.map(({ id, label }, i) => {
           const st: PhaseState = states[id] ?? "pending";
-          // env - единственная нефатальная фаза: err здесь = «включите позже».
-          const softErr = id === "env" && st === "err";
+          // env и Claude Desktop - нефатальные фазы: err здесь = «включите позже».
+          const softErr = SOFT.has(id) && st === "err";
+          const skipped = st === "skip";
           const last = i === PHASES.length - 1;
           return (
             <li key={id} className="relative flex gap-3 pb-3 last:pb-0">
@@ -122,7 +136,7 @@ export function StepInstall({ proxyUrl, onBack, onDone }: Props) {
                 <span aria-hidden className="absolute left-[9px] top-6 bottom-0 w-px bg-vb-border">
                   <span
                     className="block h-full w-full origin-top bg-vb-emerald-dim transition-transform duration-300"
-                    style={{ transform: `scaleY(${st === "ok" || softErr ? 1 : 0})` }}
+                    style={{ transform: `scaleY(${st === "ok" || softErr || skipped ? 1 : 0})` }}
                   />
                 </span>
               )}
@@ -138,6 +152,8 @@ export function StepInstall({ proxyUrl, onBack, onDone }: Props) {
                   >
                     <Check className="h-3 w-3 text-vb-emerald" strokeWidth={3} aria-hidden />
                   </motion.span>
+                ) : skipped ? (
+                  <Minus className="h-3.5 w-3.5 text-vb-silver-faint" aria-hidden />
                 ) : st === "err" ? (
                   <AlertTriangle className={cn("h-4 w-4", softErr ? "text-vb-warn" : "text-vb-loss")} aria-hidden />
                 ) : (
@@ -148,17 +164,23 @@ export function StepInstall({ proxyUrl, onBack, onDone }: Props) {
                 <span
                   className={cn(
                     "block text-[13px] leading-[19px] transition-colors duration-200",
-                    st === "pending" ? "text-vb-silver-faint" : st === "run" ? "text-vb-fg" : "text-vb-silver",
+                    st === "pending" || skipped
+                      ? "text-vb-silver-faint"
+                      : st === "run"
+                        ? "text-vb-fg"
+                        : "text-vb-silver",
                   )}
                 >
-                  {label}
+                  {skipped && id === "claude" ? "Claude Desktop не установлен" : label}
                   <span className="sr-only">
                     {st === "run" ? " - идёт" : st === "ok" ? " - готово" : st === "err" ? " - ошибка" : ""}
                   </span>
                 </span>
                 {softErr && (
                   <span className="mt-0.5 block text-[12px] text-vb-warn">
-                    Не включилось, можно позже: «Приложения», Claude Desktop, шестерёнка
+                    {id === "claude"
+                      ? "Не подключился, можно позже: «Приложения», Claude Desktop, «Подключить»"
+                      : "Не включилось, можно позже: «Приложения», Claude Desktop, шестерёнка"}
                   </span>
                 )}
               </span>

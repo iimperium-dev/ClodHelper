@@ -46,13 +46,27 @@ export interface ProxyCheckResult {
 }
 
 /** Новый мастер: 3 шага (прокси → установка → готово). */
-export type WizardStep = "proxy" | "install" | "done";
+export type WizardStep = "proxy" | "install" | "apps" | "done";
 
-/** Результат wizard_install: честная проверка + состояние env. */
+/** Claude Desktop в мастере: подключён, не вышло, не установлен. */
+export type WizardClaude = "ok" | "err" | "absent";
+
+/** Результат wizard_install: честная проверка + состояние env и Claude Desktop. */
 export interface WizardInstallResult {
   test: ShimTestResult;
   env_on: boolean;
+  claude: WizardClaude;
+  /** Claude Desktop был открыт: прокси подхватится после перезапуска. */
+  claude_running: boolean;
 }
+
+/** Какие приложения стоят (wizard_apps). */
+export interface WizardApps {
+  claude: boolean;
+  codex: boolean;
+}
+
+export type WizardAppId = keyof WizardApps;
 
 // ─── Dashboard / Shim ────────────────────────────────────────────
 

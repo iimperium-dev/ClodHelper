@@ -385,6 +385,18 @@ pub fn find_codex_app_id() -> Option<String> {
         .map(|p| format!("{}!App", p.family()))
 }
 
+/// Стоит ли ChatGPT Codex: мастер предлагает его поставить, если нет.
+pub fn codex_installed() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        find_codex_app_id().is_some()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        find_codex_app().is_some()
+    }
+}
+
 /// Проверить, установлен ли профиль на этом ПК прямо сейчас.
 fn profile_installed(p: &AppProfile) -> (bool, Option<String>) {
     if p.id == crate::claude_desktop::PROFILE_ID {
