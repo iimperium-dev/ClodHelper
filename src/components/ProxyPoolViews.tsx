@@ -5,6 +5,7 @@ import { CountryFlag } from "./CountryFlag";
 import { CopyIp } from "../pages/Proxies";
 import type { ProxyLive } from "../lib/status";
 import { cn } from "../lib/cn";
+import { isAuthReason } from "../lib/proxyCause";
 
 /* ───────────────────────── Модель строки ───────────────────────── */
 
@@ -51,6 +52,8 @@ export interface PoolActions {
   startEdit: (i: number, url: string) => void;
   saveTag: (url: string) => void;
   cancelEdit: () => void;
+  /** Вставить новый логин и пароль для прокси. */
+  replace: (url: string) => void;
   /** Панель резервов под прокси (раскрытие - по `open`). */
   backupsPanel: (row: PoolRow) => ReactNode;
 }
@@ -91,8 +94,9 @@ const statusTitle = (r: PoolRow) =>
 
 /** Причина «не работает / сбоит» - одной тихой строкой под именем; полный
     текст - в подсказке и в раскрытой строке. Цвет говорит точка слева. */
-function Problem({ row }: { row: PoolRow }) {
+function Problem({ row, a }: { row: PoolRow; a: PoolActions }) {
   if (!(row.live === "down" || row.live === "unstable") || !row.reason) return null;
+  const auth = isAuthReason(row.reason);
   const full =
     (row.live === "down" ? "Не работает: " : "Сбоит: ") +
     row.reason.charAt(0).toLowerCase() +
@@ -100,10 +104,24 @@ function Problem({ row }: { row: PoolRow }) {
     (row.coverHost ? ` - подменяет резерв ${row.coverHost}` : "");
   const short = row.live === "down" ? (row.coverHost ? "Не отвечает, работает резерв" : "Не отвечает") : "Сбоит";
   return (
-    <div title={full} className="mt-1 truncate text-[11px] leading-snug text-vb-silver-dim">
-      {short}
-      {row.open && <span className="text-vb-silver-faint"> - {row.reason.charAt(0).toLowerCase() + row.reason.slice(1)}</span>}
-    </div>
+    <>
+      <div title={full} className="mt-1 truncate text-[11px] leading-snug text-vb-silver-dim">
+        {short}
+        {row.open && <span className="text-vb-silver-faint"> - {row.reason.charAt(0).toLowerCase() + row.reason.slice(1)}</span>}
+      </div>
+      {row.open && auth && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            a.replace(row.url);
+          }}
+          className="mt-1 text-[11px] text-vb-silver underline decoration-vb-silver-faint/60 underline-offset-2 transition-colors hover:text-vb-fg"
+        >
+          Заменить пароль
+        </button>
+      )}
+    </>
   );
 }
 
@@ -377,7 +395,7 @@ function RowA({ row, a }: { row: PoolRow; a: PoolActions }) {
         </span>
         <div className="min-w-0 flex-1">
           <NameField row={row} a={a} />
-          <Problem row={row} />
+          <Problem row={row} a={a} />
           <div className="mt-1 flex min-w-0 items-center gap-1.5 whitespace-nowrap text-[11px] leading-none text-vb-silver-faint">
             <Where row={row} />
             {row.backups > 0 && (

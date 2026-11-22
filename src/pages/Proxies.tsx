@@ -19,8 +19,10 @@ import {
   proxyAssignmentsGet,
   proxyLabelsGet,
   proxyLabelSet,
+  proxyReplace,
   proxySpeedtest,
 } from "../lib/api";
+import { takeProxyIntent } from "../lib/proxyCause";
 import { ProxyInputField, useProxyInput } from "../components/ProxyInput";
 import { ProxyBackups } from "../components/ProxyBackups";
 import { BridgeFileNotice } from "../components/BridgeFileNotice";
@@ -274,8 +276,18 @@ export function Proxies() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const [adding, setAdding] = useState(false);
+  // Пришли с «Обзора» с готовым действием: заменить пароль или добавить прокси.
+  const [intent] = useState(takeProxyIntent);
+  const [adding, setAdding] = useState(intent?.kind === "add");
   const addInput = useProxyInput();
+  // Замена прокси (новый логин или пароль): URL заменяемого.
+  const [replacing, setReplacing] = useState<string | null>(intent?.kind === "replace" ? intent.url : null);
+  const replaceInput = useProxyInput();
+  useEffect(() => {
+    if (intent?.kind === "replace") replaceInput.setValue(intent.url);
+    // Один раз при открытии раздела.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // Резервы прокси (URL прокси → резервы) и раскрытые строки пула.
   const [backups, setBackups] = useState<Record<string, string[]>>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -414,6 +426,33 @@ export function Proxies() {
     }
   };
 
+  /** Заменить прокси на тот же с новым логином или паролем: имя, резервы и
+      назначения остаются за ним. */
+  const handleReplace = async () => {
+    const parsed = replaceInput.parsed;
+    if (!parsed || !replacing) return;
+    if (parsed.url === replacing) {
+      setReplacing(null);
+      replaceInput.reset();
+      return;
+    }
+    setBusy("replace");
+    setError(null);
+    try {
+      setPool(await proxyReplace(replacing, parsed.url));
+      await refresh();
+      await refreshPoolPing();
+      setLabels(await proxyLabelsGet().catch(() => ({})));
+      setBackups((await proxyBackupsGet().catch(() => null)) ?? {});
+      setReplacing(null);
+      replaceInput.reset();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   /** Сохранить резервы прокси: мост перезапускается с новым списком. */
   const saveBackups = async (parent: string, list: string[]): Promise<boolean> => {
     setBusy(`bk:${parent}`);
@@ -539,6 +578,11 @@ export function Proxies() {
     startEdit: startTagEdit,
     saveTag: (url) => void saveTag(url),
     cancelEdit: () => setEditingTag(null),
+    replace: (url) => {
+      setReplacing(url);
+      replaceInput.setValue(url);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    },
     backupsPanel: (row) => (
       <ProxyBackups
         parent={row.url}
@@ -616,6 +660,50 @@ export function Proxies() {
                 >
                   {busy === "add" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
                   {busy === "add" ? "Добавляю…" : "Добавить"}
+                </Button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Замена прокси: тот же сервер с новым логином или паролем ── */}
+      <AnimatePresence>
+        {replacing && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+            className="overflow-hidden"
+          >
+            <div className="surface-card mt-4 p-4" data-testid="proxy-replace">
+              <div className="text-[13px] font-semibold text-vb-fg">Новый логин и пароль</div>
+              <p className="mb-3 mt-0.5 text-[12px] text-vb-silver-faint">
+                Для <span className="font-mono">{hostOnly(replacing)}</span>. Вставьте строку прокси от продавца целиком.
+                Имя, резервы и закреплённые программы останутся.
+              </p>
+              <ProxyInputField input={replaceInput} autoFocus onEnter={() => void handleReplace()} />
+              <div className="mt-4 flex items-center justify-end gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setReplacing(null);
+                    replaceInput.reset();
+                  }}
+                  disabled={busy === "replace"}
+                >
+                  Отмена
+                </Button>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={handleReplace}
+                  disabled={!replaceInput.parsed || busy !== null}
+                >
+                  {busy === "replace" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  {busy === "replace" ? "Сохраняю…" : "Сохранить"}
                 </Button>
               </div>
             </div>
