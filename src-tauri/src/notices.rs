@@ -37,6 +37,236 @@ pub struct Notice {
     pub min_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_version: Option<String>,
+    /// Есть - это баннер на «Обзоре», а не обычное объявление.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub banner: Option<Banner>,
+}
+
+/// Оформление баннера на «Обзоре». Текст и заголовок - из самой записи.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Banner {
+    /// Цвет акцента: emerald, blue, violet, amber, rose, neutral.
+    #[serde(default = "default_accent")]
+    pub accent: String,
+    /// Короткая метка над заголовком («Партнёр», «Новое»).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eyebrow: Option<String>,
+    /// До двух кнопок, первая - главная.
+    #[serde(default)]
+    pub buttons: Vec<BannerButton>,
+    /// Можно закрыть крестиком (закрытый не возвращается).
+    #[serde(default = "yes")]
+    pub dismissible: bool,
+    /// Заодно положить в колокольчик и показать в углу экрана.
+    #[serde(default)]
+    pub bell: bool,
+    /// Фото и видео: первое - обложка, все - в окне просмотра.
+    #[serde(default)]
+    pub media: Vec<MediaItem>,
+    /// Показывать первое медиа обложкой в баннере.
+    #[serde(default)]
+    pub cover: bool,
+    /// Когда показывать: "always" - на «Обзоре» всегда, "proxy_down" - на
+    /// «Обзоре», только пока не работает ни один прокси, "setup" - в мастере
+    /// первой настройки, рядом с полем прокси.
+    #[serde(default = "default_when")]
+    pub when: String,
+    /// Для "proxy_down": сколько минут прокси должен не работать (0 - сразу).
+    #[serde(default)]
+    pub after_min: u32,
+}
+
+fn default_when() -> String {
+    "always".into()
+}
+
+const WHENS: [&str; 3] = ["always", "proxy_down", "setup"];
+
+/// Фото или видео баннера: ключ файла на сервере и размер в пикселях.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MediaItem {
+    pub key: String,
+    pub kind: String,
+    pub w: u32,
+    pub h: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poster: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BannerButton {
+    pub label: String,
+    pub url: String,
+}
+
+fn default_accent() -> String {
+    "emerald".into()
+}
+
+fn yes() -> bool {
+    true
+}
+
+const ACCENTS: [&str; 6] = ["emerald", "blue", "violet", "amber", "rose", "neutral"];
+
+/// Привести баннер к безопасному виду: только https, короткие подписи,
+/// известный цвет. Без кнопок и без текста баннер тоже допустим.
+fn clean_banner(mut b: Banner) -> Banner {
+    if !ACCENTS.contains(&b.accent.as_str()) {
+        b.accent = default_accent();
+    }
+    b.eyebrow = b.eyebrow.map(|e| e.trim().chars().take(24).collect::<String>()).filter(|e| !e.is_empty());
+    b.buttons = b
+        .buttons
+        .into_iter()
+        .filter(|x| x.url.starts_with("https://"))
+        .map(|x| BannerButton { label: x.label.trim().chars().take(24).collect(), url: x.url })
+        .filter(|x| !x.label.is_empty())
+        .take(2)
+        .collect();
+    // Медиа: только наши ключи, вид - по ключу, разумный размер.
+    b.media = b
+        .media
+        .into_iter()
+        .filter_map(|mut m| {
+            let kind = crate::media::kind_of(&m.key).filter(|_| crate::media::valid_key(&m.key))?;
+            if m.w == 0 || m.h == 0 || m.w > 10_000 || m.h > 10_000 {
+                return None;
+            }
+            m.kind = kind.to_string();
+            m.poster = m.poster.filter(|p| kind == "video" && crate::media::valid_key(p) && crate::media::kind_of(p) == Some("image"));
+            Some(m)
+        })
+        .take(8)
+        .collect();
+    b.cover = b.cover && !b.media.is_empty();
+    // Баннер по ситуации или в мастере - не объявление: в колокольчик не идёт.
+    if b.when != "always" {
+        b.bell = false;
+    }
+    b.after_min = b.after_min.min(24 * 60);
+    b
+}
+
+/// Баннер для «Обзора» (для UI).
+#[derive(Debug, Clone, Serialize)]
+pub struct BannerView {
+    pub id: String,
+    pub title: String,
+    pub body: String,
+    #[serde(flatten)]
+    pub banner: Banner,
+}
+
+/// Все файлы медиа всех баннеров в кэше: остальное из папки медиа можно удалить.
+pub fn media_keys(s: &crate::settings::Settings) -> Vec<String> {
+    let mut v: Vec<String> = cached(s)
+        .into_iter()
+        .chain(setup_cache())
+        .filter_map(|n| n.banner)
+        .flat_map(|b| b.media.into_iter().flat_map(|m| std::iter::once(m.key).chain(m.poster)))
+        .collect();
+    v.sort();
+    v.dedup();
+    v
+}
+
+/// Показывать ли запись в колокольчике и всплывающим окном.
+pub fn in_bell(n: &Notice) -> bool {
+    n.banner.as_ref().is_none_or(|b| b.bell)
+}
+
+/// Действующие баннеры, свежие первыми: все, что человек не закрыл.
+/// Какой из них показать, решает интерфейс: он знает, работает ли прокси и
+/// открыт ли мастер. Баннер с незнакомым условием (от новой админки) не
+/// показывается совсем.
+pub fn active_banners(s: &crate::settings::Settings) -> Vec<BannerView> {
+    banner_views(cached(s), &s.notices_read)
+}
+
+fn banner_views(list: Vec<Notice>, read: &[String]) -> Vec<BannerView> {
+    list.into_iter()
+        .filter_map(|n| {
+            let b = n.banner?;
+            if !WHENS.contains(&b.when.as_str()) {
+                return None;
+            }
+            if b.dismissible && read.contains(&format!("banner:{}", n.id)) {
+                return None;
+            }
+            Some(BannerView { id: n.id, title: n.title, body: n.body, banner: b })
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------- мастер
+
+/// Баннеры «в мастере», полученные до согласия на статистику. Только в
+/// памяти этого запуска: в настройки не пишутся.
+static SETUP_CACHE: std::sync::Mutex<Vec<Notice>> = std::sync::Mutex::new(Vec::new());
+/// Сервер в мастере спрашиваем один раз за запуск, даже если не ответил.
+static SETUP_ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn setup_cache() -> Vec<Notice> {
+    SETUP_CACHE.lock().map(|g| g.clone()).unwrap_or_default()
+}
+
+/// Ключ медиа принадлежит баннеру мастера: его можно скачать и до согласия
+/// (обычная загрузка файла по ключу, как загрузка обновления).
+pub fn is_setup_media(key: &str) -> bool {
+    setup_cache()
+        .iter()
+        .filter_map(|n| n.banner.as_ref())
+        .flat_map(|b| b.media.iter())
+        .any(|m| m.key == key || m.poster.as_deref() == Some(key))
+}
+
+/// Запрос баннеров мастера: только версия и система, как проверка
+/// обновлений. Без au и без чего-либо ещё об установке. place=setup - чтобы
+/// сервер мог отдать только баннеры мастера (сервер, который его не знает,
+/// отдаёт всё, и лишнее отбрасывается здесь).
+fn setup_query(current: &str) -> String {
+    let os = if cfg!(target_os = "windows") { "windows" } else { "macos" };
+    format!("/v1/notices?v={current}&os={os}&place=setup")
+}
+
+/// Только баннеры с условием «в мастере».
+fn only_setup(list: Vec<Notice>) -> Vec<Notice> {
+    list.into_iter().filter(|n| n.banner.as_ref().is_some_and(|b| b.when == "setup")).collect()
+}
+
+/// Баннеры для мастера. Человек ещё не видел переключателей - один раз за
+/// запуск спрашиваем сервер только о баннерах мастера (версия и система).
+/// Уже отвечал - обычный путь: сервер спрашивается только при включённой
+/// статистике, а здесь берётся то, что в кэше.
+pub async fn setup_banners() -> Vec<BannerView> {
+    let current = env!("CARGO_PKG_VERSION");
+    let seen = tokio::task::spawn_blocking(|| crate::settings::load_checked().map(|s| s.privacy_notice_seen))
+        .await
+        .ok()
+        .and_then(|r| r.ok());
+    // Настройки не прочитались - неизвестно, отвечал ли человек: не спрашиваем.
+    if seen == Some(false) && !SETUP_ASKED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        match crate::telemetry::get_anon(&setup_query(current)).await {
+            Ok(Some(t)) => match parse_server(&t, current) {
+                Ok(list) => {
+                    if let Ok(mut g) = SETUP_CACHE.lock() {
+                        *g = only_setup(list);
+                    }
+                }
+                Err(e) => tracing::info!("баннеры мастера: {e}"),
+            },
+            Ok(None) => {}
+            Err(e) => tracing::info!("баннеры мастера: {e}"),
+        }
+    }
+    tokio::task::spawn_blocking(|| {
+        let s = crate::settings::load();
+        let extra = if s.privacy_notice_seen { Vec::new() } else { setup_cache() };
+        banner_views(only_setup(merge(vec![cached(&s), extra])), &s.notices_read)
+    })
+    .await
+    .unwrap_or_default()
 }
 
 #[derive(Deserialize)]
@@ -95,6 +325,7 @@ fn parse(text: &str, current: &str) -> Result<Vec<Notice>, String> {
                 .link_label
                 .map(|l| l.trim().chars().take(40).collect::<String>())
                 .filter(|l| !l.is_empty() && n.link.is_some());
+            n.banner = n.banner.map(clean_banner);
             n
         })
         .collect();
@@ -103,9 +334,10 @@ fn parse(text: &str, current: &str) -> Result<Vec<Notice>, String> {
     Ok(v)
 }
 
-/// Сервер рассылок спрашиваем не чаще раза в час (по фокусу окна запрос шёл
-/// бы раз в минуту). GitHub - как раньше.
-const SERVER_MIN_GAP: std::time::Duration = std::time::Duration::from_secs(3600);
+/// Сервер рассылок спрашиваем не чаще раза в 10 минут (по фокусу окна запрос
+/// шёл бы раз в минуту). GitHub - как раньше. Баннер, включённый в админке, должен появиться при следующем открытии
+/// окна, а не через час: 10 минут (ответ сервера и так кэшируется 5 минут).
+const SERVER_MIN_GAP: std::time::Duration = std::time::Duration::from_secs(600);
 static SERVER_AT: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
 
 fn server_due() -> bool {
@@ -274,7 +506,7 @@ fn date_days_ago(days_ago: u64) -> String {
 /// программу через месяц, не должен получать старые новости всплывающим
 /// окном (в колокольчике они остаются).
 pub fn worth_toast(n: &Notice) -> bool {
-    n.date.as_str() >= date_days_ago(7).as_str()
+    in_bell(n) && n.date.as_str() >= date_days_ago(7).as_str()
 }
 
 /// id элемента «вышло обновление» - свой на каждую версию.
@@ -301,7 +533,7 @@ pub fn list() -> Vec<NoticeItem> {
     }
     // Итог установки обновления: «Обновлено до X» / «Не установилось».
     items.extend(crate::auto_update::bell_items(&s, crate::auto_update::now_secs()));
-    for n in &cached(&s) {
+    for n in cached(&s).iter().filter(|n| in_bell(n)) {
         items.push(NoticeItem {
             id: n.id.clone(),
             kind: "news",
@@ -357,6 +589,7 @@ mod tests {
             platforms: vec![],
             min_version: None,
             max_version: None,
+            banner: None,
         };
         let gh = vec![n("a", "2026-11-01", "из GitHub"), n("b", "2026-11-03", "b")];
         let srv = vec![n("a", "2026-11-01", "с сервера"), n("c", "2026-11-05", "c")];
@@ -386,6 +619,7 @@ mod tests {
             platforms: vec![],
             min_version: None,
             max_version: max.map(str::to_string),
+            banner: None,
         };
         let prev_gh = vec![n("gh-old", None), n("gh-gone", Some("0.1.0"))];
         let prev_srv = vec![n("srv-old", None)];
@@ -426,6 +660,32 @@ mod tests {
     }
 
     #[test]
+    fn setup_query_carries_only_version_and_os() {
+        let q = setup_query("0.9.2");
+        assert!(q.starts_with("/v1/notices?v=0.9.2&os="));
+        assert!(!q.contains("au="), "в мастере - без режима автообновления");
+        let params: Vec<&str> =
+            q.split_once('?').unwrap().1.split('&').map(|p| p.split('=').next().unwrap()).collect();
+        assert_eq!(params, ["v", "os", "place"]);
+    }
+
+    #[test]
+    fn setup_list_keeps_only_setup_banners() {
+        let text = r#"{"notices":[
+            {"id":"a","date":"2026-11-20","title":"Обычный","body":"x"},
+            {"id":"b","date":"2026-11-20","title":"Обзор","banner":{"when":"always"}},
+            {"id":"c","date":"2026-11-21","title":"Мастер","banner":{"when":"setup"}},
+            {"id":"d","date":"2026-11-21","title":"Закрытый","banner":{"when":"setup"}}
+        ]}"#;
+        let list = only_setup(parse_server(text, "0.9.2").unwrap());
+        let mut ids: Vec<&str> = list.iter().map(|n| n.id.as_str()).collect();
+        ids.sort();
+        assert_eq!(ids, ["c", "d"]);
+        let views = banner_views(list, &["banner:d".to_string()]);
+        assert_eq!(views.iter().map(|v| v.id.as_str()).collect::<Vec<_>>(), ["c"]);
+    }
+
+    #[test]
     fn server_query_carries_auto_update_flag() {
         assert!(server_notices_query("0.9.1", true).ends_with("&au=1"));
         assert!(server_notices_query("0.9.1", false).ends_with("&au=0"));
@@ -451,6 +711,7 @@ mod tests {
             platforms: vec![],
             min_version: None,
             max_version: None,
+            banner: None,
         };
         let today = date_days_ago(0);
         assert_eq!(today.len(), 10);
@@ -472,5 +733,53 @@ mod tests {
         ids.dedup();
         assert_eq!(before, ids.len(), "id в notices.json должны быть уникальны");
         assert!(parse(text, env!("CARGO_PKG_VERSION")).is_ok());
+    }
+
+    #[test]
+    fn banner_is_cleaned_and_kept_out_of_the_bell() {
+        let text = r#"{"notices":[
+            {"id":"promo","date":"2026-11-21","title":"Скидка","body":"Текст","banner":{
+                "accent":"pink","eyebrow":"  Партнёр-с-очень-длинной-подписью  ",
+                "buttons":[{"label":"Открыть","url":"https://example.com"},{"label":"Плохо","url":"javascript:alert(1)"},
+                           {"label":"  ","url":"https://a.b"},{"label":"Вторая","url":"https://b.c"},{"label":"Третья","url":"https://c.d"}]}},
+            {"id":"both","date":"2026-11-20","title":"И там и там","banner":{"bell":true,"dismissible":false}},
+            {"id":"news","date":"2026-11-19","title":"Обычное"}
+        ]}"#;
+        let v = parse(text, "0.9.2").unwrap();
+        let promo = v.iter().find(|n| n.id == "promo").unwrap();
+        let b = promo.banner.as_ref().unwrap();
+        assert_eq!(b.accent, "emerald", "неизвестный цвет - по умолчанию");
+        assert_eq!(b.eyebrow.as_deref().map(|e| e.chars().count()), Some(24));
+        assert_eq!(b.buttons.iter().map(|x| x.label.as_str()).collect::<Vec<_>>(), ["Открыть", "Вторая"], "только https, без пустых, не больше двух");
+        assert!(b.dismissible, "по умолчанию можно закрыть");
+        assert!(!in_bell(promo));
+        assert!(!worth_toast(promo), "баннер не всплывает в углу");
+        assert!(in_bell(v.iter().find(|n| n.id == "both").unwrap()));
+        assert!(in_bell(v.iter().find(|n| n.id == "news").unwrap()));
+
+        let first = |st: &crate::settings::Settings| active_banners(st).into_iter().next().map(|b| b.id);
+        let mut st = crate::settings::Settings { notices_cache_server: v, ..Default::default() };
+        assert_eq!(first(&st), Some("promo".into()), "самый свежий");
+        st.notices_read.push("banner:promo".into());
+        assert_eq!(first(&st), Some("both".into()), "закрытый не возвращается");
+        st.notices_read.push("banner:both".into());
+        assert_eq!(first(&st), Some("both".into()), "незакрываемый показывается всегда");
+    }
+
+    #[test]
+    fn banner_conditions() {
+        let text = r#"{"notices":[
+            {"id":"future","date":"2026-11-23","title":"Новое условие","banner":{"when":"weekend"}},
+            {"id":"down","date":"2026-11-22","title":"Прокси не работает","banner":{"when":"proxy_down","after_min":999999,"bell":true}},
+            {"id":"setup","date":"2026-11-21","title":"Готовый прокси","banner":{"when":"setup"}},
+            {"id":"old","date":"2026-11-20","title":"Без условия","banner":{}}
+        ]}"#;
+        let v = parse(text, "0.9.2").unwrap();
+        let st = crate::settings::Settings { notices_cache_server: v.clone(), ..Default::default() };
+        let got = active_banners(&st);
+        assert_eq!(got.iter().map(|b| b.id.as_str()).collect::<Vec<_>>(), ["down", "setup", "old"], "незнакомое условие не показываем");
+        assert_eq!(got[0].banner.after_min, 24 * 60, "не дольше суток");
+        assert_eq!(got[2].banner.when, "always", "старый баннер - всегда");
+        assert!(!in_bell(v.iter().find(|n| n.id == "down").unwrap()), "баннер по ситуации не идёт в колокольчик");
     }
 }

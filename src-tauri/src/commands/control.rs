@@ -33,23 +33,35 @@ pub async fn shim_status() -> Result<ShimStatus, String> {
 pub async fn shim_start() -> Result<(), String> {
     // Запуск через .vbs - синхронный shell, обернём в blocking чтобы не
     // блокировать tokio executor.
-    tokio::task::spawn_blocking(shim::start)
-        .await
-        .map_err(|e| format!("Внутренняя ошибка: {e}"))?
+    tokio::task::spawn_blocking(|| {
+        shim::start()?;
+        env_proxy::resume_after_start();
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("Внутренняя ошибка: {e}"))?
 }
 
 #[tauri::command]
 pub async fn shim_stop() -> Result<usize, String> {
-    tokio::task::spawn_blocking(shim::stop)
-        .await
-        .map_err(|e| format!("Внутренняя ошибка: {e}"))?
+    tokio::task::spawn_blocking(|| {
+        let n = shim::stop()?;
+        env_proxy::pause_for_stop();
+        Ok(n)
+    })
+    .await
+    .map_err(|e| format!("Внутренняя ошибка: {e}"))?
 }
 
 #[tauri::command]
 pub async fn shim_restart() -> Result<(), String> {
-    tokio::task::spawn_blocking(shim::restart)
-        .await
-        .map_err(|e| format!("Внутренняя ошибка: {e}"))?
+    tokio::task::spawn_blocking(|| {
+        shim::restart()?;
+        env_proxy::resume_after_start();
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("Внутренняя ошибка: {e}"))?
 }
 
 #[tauri::command]

@@ -5,6 +5,7 @@ import { WizardShell } from "./components/WizardShell";
 import { StepProxy } from "./wizard/StepProxy";
 import { StepInstall } from "./wizard/StepInstall";
 import { StepDone } from "./wizard/StepDone";
+import { StepApps } from "./wizard/StepApps";
 import { Overview } from "./pages/Overview";
 import { Proxies } from "./pages/Proxies";
 import { Apps } from "./pages/Apps";
@@ -17,6 +18,9 @@ import { UpdateSplash } from "./pages/UpdateSplash";
 import { UpdateDialog } from "./components/UpdateDialog";
 import { WhatsNewModal } from "./components/WhatsNewModal";
 import { AutoUpdateOffer } from "./components/AutoUpdateOffer";
+import { ShopClaimDialog, type ShopClaimState } from "./components/ShopClaimDialog";
+import { SHOP_KEY_EVENT } from "./lib/shopClaim";
+import { listen } from "@tauri-apps/api/event";
 import { openPrivacyNext } from "./components/PrivacyCard";
 import { StatusProvider } from "./lib/status";
 import { Button } from "./components/Button";
@@ -30,9 +34,12 @@ import {
   settingsGet,
   shimScriptPath,
   shimStatus,
+  shopClaim,
+  shopLinkTake,
   whatsNewTake,
+  wizardApps,
 } from "./lib/api";
-import type { AppView, PrivacyKey, WizardInstallResult, WizardStep } from "./lib/types";
+import type { AppView, PrivacyKey, WizardApps, WizardInstallResult, WizardStep } from "./lib/types";
 
 /** Окно трей-попапа рендерит тот же bundle с ?view=tray. */
 const IS_TRAY = new URLSearchParams(window.location.search).get("view") === "tray";
@@ -169,9 +176,57 @@ function App() {
   });
   const [wizProxyUrl, setWizProxyUrl] = useState<string | null>(null);
   const [wizResult, setWizResult] = useState<WizardInstallResult | null>(null);
+  // Claude Desktop и Codex: чего нет - шаг «Приложения» предложит поставить.
+  // Проверяется при входе в мастер (сколько шагов в шапке) и ещё раз после
+  // установки моста (человек мог поставить что-то, пока вводил прокси).
+  const [wizApps, setWizApps] = useState<WizardApps | null>(null);
+  const needApps = !!wizApps && (!wizApps.claude || !wizApps.codex);
+  const wizSteps: WizardStep[] = needApps ? ["proxy", "install", "apps", "done"] : ["proxy", "install", "done"];
   // Мастер пропущен кнопкой «Сначала очистка»: программа открыта без прокси,
   // сверху полоса «Прокси ещё не добавлен» с возвратом в мастер.
   const [noProxy, setNoProxy] = useState(false);
+  // Поле мастера заполнили снаружи (купленный прокси) - шаг создаётся заново.
+  const [wizFill, setWizFill] = useState(0);
+
+  // ─── Купленный прокси: ссылка clodhelper://add?key=... ───────
+  // Rust держит ключ, пока окно его не заберёт (холодный старт по ссылке),
+  // и шлёт "shop:link" на каждую новую. Ничего не добавляется без кнопки.
+  const [shop, setShop] = useState<ShopClaimState | null>(null);
+  const shopKey = useRef<string | null>(null);
+  const loadClaim = useCallback((key: string) => {
+    shopKey.current = key;
+    setShop({ kind: "loading" });
+    shopClaim(key).then(
+      (claim) => shopKey.current === key && setShop({ kind: "ready", claim, key }),
+      (e) => shopKey.current === key && setShop({ kind: "error", message: String(e) }),
+    );
+  }, []);
+  const closeShop = useCallback(() => {
+    shopKey.current = null;
+    setShop(null);
+  }, []);
+  useEffect(() => {
+    if (IS_TRAY || IS_TOAST || IS_SPLASH) return;
+    const take = () =>
+      void shopLinkTake()
+        .then((key) => {
+          // Пустой ключ - ссылка на покупку пришла повреждённой.
+          if (key === "") {
+            shopKey.current = null;
+            setShop({ kind: "error", message: "Ссылка повреждена: ключ в ней неполный. Скопируйте ключ из письма целиком и вставьте его в поле прокси.", final: true });
+          } else if (key) loadClaim(key);
+        })
+        .catch(() => {});
+    take();
+    const un = listen("shop:link", take);
+    // Ключ вставили в поле прокси (страница «Прокси», мастер).
+    const onKey = (e: Event) => loadClaim((e as CustomEvent<string>).detail);
+    window.addEventListener(SHOP_KEY_EVENT, onKey);
+    return () => {
+      window.removeEventListener(SHOP_KEY_EVENT, onKey);
+      void un.then((f) => f()).catch(() => {});
+    };
+  }, [loadClaim]);
 
   // «Показано» ставится, только когда человек правда мог это увидеть: окно
   // видимо и в фокусе (не --tray и не тихий перезапуск после установки),
@@ -213,6 +268,17 @@ function App() {
   useOnceShown(wizDone, markWizard);
 
   // Вернулись в мастер, а человек уже отвечал (плашка, настройки): берём его выбор.
+  useEffect(() => {
+    if (view !== "wizard") return;
+    void wizardApps()
+      .then(setWizApps)
+      .catch(() => {});
+  }, [view]);
+  const onWizClaude = useCallback((claude: WizardInstallResult["claude"], running: boolean) => {
+    setWizResult((r) => (r ? { ...r, claude, claude_running: running } : r));
+  }, []);
+  const toWizDone = useCallback(() => setStep("done"), []);
+
   useEffect(() => {
     if (view !== "wizard") return;
     wizMarked.current = false;
@@ -273,6 +339,33 @@ function App() {
     then?.();
   };
 
+  // Первая настройка (мастер или программа без прокси): прокси - в поле
+  // мастера. Пока мастер ставит мост или показывает «Готово», окно ждёт.
+  const shopWizard = view === "wizard" || noProxy;
+  const shopDialog = (
+    <ShopClaimDialog
+      state={view !== null && !(view === "wizard" && step !== "proxy") ? shop : null}
+      wizard={shopWizard}
+      onRetry={() => shopKey.current && loadClaim(shopKey.current)}
+      onClose={closeShop}
+      onWizardFill={(url) => {
+        closeShop();
+        setWizProxyUrl(url);
+        setWizFill((n) => n + 1);
+        setStep("proxy");
+        setView("wizard");
+      }}
+      onOpenProxies={
+        view === "proxies"
+          ? undefined
+          : () => {
+              closeShop();
+              navigate("proxies");
+            }
+      }
+    />
+  );
+
   if (IS_TOAST) return <UpdateToast />;
   if (IS_SPLASH) return <UpdateSplash />;
 
@@ -293,9 +386,10 @@ function App() {
         <div className="flex h-screen w-screen flex-col overflow-hidden">
           <Titlebar bell={false} />
           <div className="min-h-0 flex-1">
-            <WizardShell step={step}>
+            <WizardShell step={step} steps={wizSteps}>
               {step === "proxy" && (
                 <StepProxy
+                  key={wizFill}
                   initialUrl={wizProxyUrl}
                   onSkipToTools={() => {
                     setNoProxy(true);
@@ -314,9 +408,17 @@ function App() {
                   onBack={() => setStep("proxy")}
                   onDone={(r) => {
                     setWizResult(r);
-                    setStep("done");
+                    void wizardApps()
+                      .catch(() => wizApps)
+                      .then((now) => {
+                        if (now) setWizApps(now);
+                        setStep(now && (!now.claude || !now.codex) ? "apps" : "done");
+                      });
                   }}
                 />
+              )}
+              {step === "apps" && wizResult && wizApps && (
+                <StepApps initial={wizApps} onClaude={onWizClaude} onDone={toWizDone} />
               )}
               {step === "done" && wizResult && (
                 <StepDone
@@ -337,6 +439,7 @@ function App() {
             </WizardShell>
           </div>
         </div>
+        {shopDialog}
       </StatusProvider>
     );
   }
@@ -417,6 +520,7 @@ function App() {
         </div>
       </div>
       <UpdateDialog />
+      {shopDialog}
       <WhatsNewModal version={view !== null ? whatsNew : null} onClose={closeWhatsNew} />
       <AutoUpdateOffer
         open={view !== null && whatsNewTaken && !whatsNew && offerAuto}

@@ -24,6 +24,7 @@ import {
   claudeProxyEnable,
   claudeProxyStatus,
   telegramSetup,
+  systemPacStatus,
   telegramStatus,
 } from "../lib/api";
 import type {
@@ -42,6 +43,7 @@ const TRAFFIC_FAST_MS = 1_500;
 const FAST_TICKS = 20;
 
 const CLAUDE_ID = "claude-desktop";
+const LOGIN_HINT = "Если Claude попросит войти, а страница входа в браузере не откроется, включите «Во всех браузерах» на странице «Сайты».";
 const TELEGRAM_ID = "telegram";
 /** Как полностью перезапустить Claude Desktop, чтобы он перечитал прокси. */
 const RESTART_CLAUDE = isMac
@@ -253,9 +255,14 @@ export function Apps() {
           action: {
             label: "Подключить",
             run: () =>
-              after(claudeProxyEnable()).then(
-                (r) => r.policy.notice ?? `Готово, защита от утечек включена. ${RESTART_CLAUDE}`,
-              ),
+              after(claudeProxyEnable()).then(async (r) => {
+                if (r.policy.notice) return r.policy.notice;
+                // Вход в аккаунт Claude открывает страницу в браузере: без
+                // «Во всех браузерах» она из России не откроется.
+                const pac = await systemPacStatus().catch(() => null);
+                const login = pac?.supported && !pac.enabled ? ` ${LOGIN_HINT}` : "";
+                return `Готово, защита от утечек включена. ${RESTART_CLAUDE}${login}`;
+              }),
           },
           menu,
         };

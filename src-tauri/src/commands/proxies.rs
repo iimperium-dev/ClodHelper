@@ -277,6 +277,13 @@ pub async fn proxies_set(urls: Vec<String>) -> Result<Vec<String>, String> {
         .map_err(|e| format!("Внутренняя ошибка: {e}"))?;
         return Ok(Vec::new());
     }
+    restart_with_pool(primary).await?;
+    Ok(settings::effective_proxies(&settings::load()))
+}
+
+/// Пул поменялся: перерегистрация задачи (vbs получает все --upstream) и
+/// перезапуск моста.
+pub(crate) async fn restart_with_pool(primary: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         // Не фатально: без задачи мост перезапустится с одним upstream (легаси).
         if let Err(e) = crate::tasks::register(&primary) {
@@ -285,8 +292,33 @@ pub async fn proxies_set(urls: Vec<String>) -> Result<Vec<String>, String> {
         shim::restart()
     })
     .await
+    .map_err(|e| format!("Внутренняя ошибка: {e}"))?
+}
+
+/// Заменить прокси на новый (обычно - тот же сервер с новым логином или
+/// паролем). Имя, резервы, назначения и сайты остаются за ним. Мост
+/// перезапускается с новым списком.
+#[tauri::command]
+pub async fn proxy_replace(old: String, new: String) -> Result<Vec<String>, String> {
+    proxy::parse(&new)?;
+    let saved = settings::replace_proxy(&old, new)?;
+    let primary = saved.proxy_url.clone().unwrap_or_default();
+    tokio::task::spawn_blocking(move || {
+        crate::tasks::write_rules_file()?;
+        if let Err(e) = crate::tasks::register(&primary) {
+            tracing::warn!("proxy_replace: перерегистрация задачи: {e}");
+        }
+        shim::restart()
+    })
+    .await
     .map_err(|e| format!("Внутренняя ошибка: {e}"))??;
     Ok(settings::effective_proxies(&settings::load()))
+}
+
+/// Включён ли VPN рядом с мостом (и запущен ли SOTA VPN).
+#[tauri::command]
+pub async fn vpn_status() -> crate::vpn::VpnStatus {
+    tokio::task::spawn_blocking(crate::vpn::status).await.unwrap_or_default()
 }
 
 /// Резервы прокси пула: URL прокси → его резервы по порядку.

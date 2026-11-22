@@ -435,10 +435,14 @@ pub fn spawn_watchdog() {
         // не пытался поднять параллельно поднимающийся при логине шим.
         std::thread::sleep(Duration::from_secs(WATCHDOG_INTERVAL_SEC));
         let mut consecutive_revivals: u32 = 0;
+        // Переменные прокси, снятые «Остановить мост», возвращаем, как только
+        // мост снова жив (автозапуск, перезагрузка) - один раз на подъём.
+        let mut env_checked = false;
         loop {
             // Уважаем ручную остановку: «Остановить» значит остановить,
             // а не «поживи 5 секунд».
             if MANUALLY_STOPPED.load(Ordering::Relaxed) {
+                env_checked = false;
                 std::thread::sleep(Duration::from_secs(WATCHDOG_INTERVAL_SEC));
                 continue;
             }
@@ -451,6 +455,10 @@ pub fn spawn_watchdog() {
             if port_alive() || status().running {
                 SEEN_ALIVE.store(true, Ordering::Relaxed);
                 consecutive_revivals = 0;
+                if !env_checked {
+                    env_checked = true;
+                    crate::env_proxy::resume_after_start();
+                }
             } else {
                 let report = should_report_bridge(
                     SEEN_ALIVE.load(Ordering::Relaxed),

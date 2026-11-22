@@ -26,10 +26,17 @@ use crate::updater::{Mode, UpdateInfo};
 const TICK: Duration = Duration::from_secs(5 * 60);
 /// Человек не трогал мышь и клавиатуру не меньше 10 минут.
 pub const MIN_IDLE_SECS: u64 = 10 * 60;
-/// Мост «тихий»: за окно в 5 минут через входы Claude прошло меньше 64 КБ.
+/// Мост «тихий»: за окно в 5 минут через входы Claude прошло меньше 1,5 МБ.
 /// Открытые соединения не считаем: Claude Code держит их, пока запущен.
+/// Порог не меньше мегабайта: Claude Desktop и без работы гонит фон
+/// (удалённое управление, синхронизация) - замер 200-450 КБ за 5 минут.
+/// Живая работа Claude Code шлёт весь контекст в каждом запросе - это
+/// мегабайты в минуту.
 pub const QUIET_WINDOW_SECS: u64 = 5 * 60;
-pub const QUIET_BYTES: u64 = 64 * 1024;
+pub const QUIET_BYTES: u64 = 1536 * 1024;
+/// Человек не трогал компьютер столько - ставим, даже если мост не затих:
+/// ответ модели столько не длится, значит это фон.
+pub const LONG_IDLE_SECS: u64 = 2 * 3600;
 /// Как часто смотрим счётчики моста.
 const SAMPLE_EVERY: Duration = Duration::from_secs(30);
 /// Тихая установка ждёт дольше этого - показываем обычное уведомление с кнопкой.
@@ -248,6 +255,11 @@ pub fn user_idle(idle_secs: Option<u64>) -> bool {
     idle_secs.is_some_and(|s| s >= MIN_IDLE_SECS)
 }
 
+/// Человек давно ушёл (LONG_IDLE_SECS): трафик моста уже не помеха.
+pub fn long_idle(idle_secs: Option<u64>) -> bool {
+    idle_secs.is_some_and(|s| s >= LONG_IDLE_SECS)
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum FailGate {
     Ok,
@@ -339,7 +351,7 @@ pub fn decide(f: &Facts) -> Verdict {
     if !user_idle(f.idle_secs) {
         return Wait("человек за компьютером");
     }
-    if !f.bridge_quiet {
+    if !f.bridge_quiet && !long_idle(f.idle_secs) {
         return Wait("через мост идёт трафик");
     }
     if f.busy {
@@ -424,8 +436,13 @@ fn rollout_number_for(s: &Settings) -> u8 {
 // ---------------------------------------------------------------- отметка установки
 
 /// Записать «ставлю версию X» перед запуском установщика.
-pub fn mark_attempt(version: &str, how: &str) {
-    let a = UpdateAttempt { version: version.to_string(), at: now_secs(), how: how.to_string() };
+pub fn mark_attempt(version: &str, how: &str, dir: Option<&std::path::Path>) {
+    let a = UpdateAttempt {
+        version: version.to_string(),
+        at: now_secs(),
+        how: how.to_string(),
+        dir: dir.map(|d| d.to_string_lossy().into_owned()),
+    };
     if let Err(e) = settings::with_settings_strict(|s| {
         s.update_attempt = Some(a);
         Ok(())
@@ -475,7 +492,7 @@ pub enum Settled {
     Nothing,
     Pending { wait_secs: u64 },
     Succeeded { version: String, how: String },
-    Failed { version: String, how: String, count: u32 },
+    Failed { version: String, how: String, count: u32, dir: Option<String> },
 }
 
 /// Разобрать отметку установки по текущей версии и записать итог в `s`.
@@ -503,7 +520,7 @@ pub fn settle_on_start(s: &mut Settings, current: &str, now: u64) -> Settled {
                 // Снова обычное уведомление с кнопкой: забыть, что о версии уже сообщали.
                 s.update_notified = None;
             }
-            Settled::Failed { version: a.version, how: a.how, count }
+            Settled::Failed { version: a.version, how: a.how, count, dir: a.dir }
         }
     }
 }
@@ -565,16 +582,40 @@ async fn settle_once(app: &AppHandle) -> Settled {
             tracing::info!("обновление до {version} установлено ({how})");
             let _ = app.emit("notices:changed", crate::notices::unread());
         }
-        Settled::Failed { version, how, count } => {
-            tracing::warn!("установка {version} не завершилась ({how}), неудач подряд: {count}");
+        Settled::Failed { version, how, count, dir } => {
+            let code = installer_exit_code(dir.as_deref());
+            let detail = failure_detail(how, code.as_deref());
+            tracing::warn!("установка {version} не завершилась ({detail}), неудач подряд: {count}");
             crate::telemetry::set_pending_how(None);
             if first_report(version) {
-                crate::telemetry::report_update(&format!("установка {version} не завершилась"));
+                crate::telemetry::report_update(&format!("установка {version} не завершилась ({detail})"));
             }
             let _ = app.emit("notices:changed", crate::notices::unread());
         }
     }
     out
+}
+
+/// Код выхода тихого установщика из exit.txt в папке запуска (только цифры).
+fn installer_exit_code(dir: Option<&str>) -> Option<String> {
+    let s = std::fs::read_to_string(std::path::Path::new(dir?).join("exit.txt")).ok()?;
+    let s = s.trim();
+    (s.len() <= 12 && s.trim_start_matches('-').bytes().all(|b| b.is_ascii_digit()) && s.bytes().any(|b| b.is_ascii_digit())).then(|| s.to_string())
+}
+
+/// Подробность для отчёта: способ установки и код выхода установщика.
+/// NSIS: 1 - отменено или не удалось, 2 - прервано скриптом. Нет файла - либо
+/// установщик ещё не закончил, либо его закрыли, либо установка была с окном.
+fn failure_detail(how: &str, code: Option<&str>) -> String {
+    let how = match how {
+        "auto" => "тихо",
+        "manual" => "вручную",
+        _ => "иначе",
+    };
+    match code {
+        Some(c) => format!("{how}, код установщика {c}"),
+        None => format!("{how}, кода нет"),
+    }
 }
 
 /// При запуске: удалась ли установка, начатая прошлой копией программы.
@@ -589,6 +630,23 @@ pub fn on_start(app: &AppHandle) {
 }
 
 // ---------------------------------------------------------------- цикл
+
+/// Последнее решение тихой установки: версия, причина, когда (unix, с).
+/// Для отчёта поддержки: без него не узнать, чего ждёт установка у человека.
+static LAST_WAIT: Mutex<Option<(String, &'static str, u64)>> = Mutex::new(None);
+
+fn note_wait(version: &str, why: &'static str) {
+    if let Ok(mut w) = LAST_WAIT.lock() {
+        *w = Some((version.to_string(), why, now_secs()));
+    }
+}
+
+/// Строка для отчёта: «0.9.2: окно программы открыто (2 мин назад)».
+pub fn last_wait_line() -> Option<String> {
+    let w = LAST_WAIT.lock().ok()?.clone()?;
+    let ago = now_secs().saturating_sub(w.2) / 60;
+    Some(format!("{}: {} ({ago} мин назад)", w.0, w.1))
+}
 
 enum Prefetch {
     Idle,
@@ -716,7 +774,12 @@ async fn tick_inner(app: &AppHandle) {
         installing: crate::updater::is_installing(),
         downloaded: true,
     };
-    match decide(&facts) {
+    let verdict = decide(&facts);
+    note_wait(&info.version, match &verdict {
+        Verdict::Wait(why) => why,
+        Verdict::Install => "ставлю",
+    });
+    match verdict {
         Verdict::Wait(why) => tracing::debug!("тихая установка ждёт: {why}"),
         Verdict::Install => {
             tracing::info!("тихая установка {}", info.version);
@@ -778,6 +841,10 @@ mod tests {
             ("за компьютером", Box::new(|f| f.idle_secs = Some(MIN_IDLE_SECS - 1))),
             ("за компьютером", Box::new(|f| f.idle_secs = None)),
             ("трафик", Box::new(|f| f.bridge_quiet = false)),
+            ("трафик", Box::new(|f| {
+                f.bridge_quiet = false;
+                f.idle_secs = Some(LONG_IDLE_SECS - 1);
+            })),
             ("не разобран", Box::new(|f| f.unsettled = true)),
             ("занята", Box::new(|f| f.busy = true)),
             ("устанавливается", Box::new(|f| f.installing = true)),
@@ -789,6 +856,39 @@ mod tests {
             let w = waits(&f);
             assert!(w.contains(needle), "ожидали «{needle}», получили «{w}»");
         }
+    }
+
+    #[test]
+    fn long_absence_overrides_bridge_traffic_but_nothing_else() {
+        let mut f = good();
+        f.bridge_quiet = false;
+        f.idle_secs = Some(LONG_IDLE_SECS);
+        assert_eq!(decide(&f), Verdict::Install, "2 часа без человека - фон моста не помеха");
+        f.window_hidden = false;
+        assert!(waits(&f).contains("окно"));
+        let mut f = good();
+        f.bridge_quiet = false;
+        f.idle_secs = Some(LONG_IDLE_SECS);
+        f.busy = true;
+        assert!(waits(&f).contains("занята"));
+    }
+
+    #[test]
+    fn background_of_claude_desktop_is_quiet() {
+        // Замер на живой машине: Claude Desktop без работы - до 85 КБ в минуту.
+        let mut w = BridgeWindow::default();
+        let mut bytes = 174_000_000u64;
+        window_step(&mut w, 0, c(bytes, 1890));
+        for k in 1..=20u64 {
+            bytes += 85 * 1024 / 2;
+            window_step(&mut w, k * 30, c(bytes, 1890 + k * 3));
+        }
+        assert!(window_quiet(&w), "фон Claude Desktop - не работа");
+        // Живая работа Claude Code: 1,2 МБ за полминуты.
+        let mut w = BridgeWindow::default();
+        window_step(&mut w, 0, c(0, 0));
+        window_step(&mut w, QUIET_WINDOW_SECS, c(5 * 1024 * 1024, 40));
+        assert!(!window_quiet(&w));
     }
 
     #[test]
@@ -924,7 +1024,25 @@ mod tests {
     }
 
     fn attempt(version: &str, at: u64, how: &str) -> UpdateAttempt {
-        UpdateAttempt { version: version.into(), at, how: how.into() }
+        UpdateAttempt { version: version.into(), at, how: how.into(), dir: None }
+    }
+
+    #[test]
+    fn failed_install_report_has_how_and_installer_code() {
+        let dir = std::env::temp_dir().join(format!("clod-exit-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let d = dir.to_string_lossy().into_owned();
+        assert_eq!(installer_exit_code(Some(&d)), None, "файла нет");
+        std::fs::write(dir.join("exit.txt"), "2 \r\n").unwrap();
+        assert_eq!(installer_exit_code(Some(&d)).as_deref(), Some("2"));
+        std::fs::write(dir.join("exit.txt"), "-1073741510\r\n").unwrap();
+        assert_eq!(installer_exit_code(Some(&d)).as_deref(), Some("-1073741510"));
+        std::fs::write(dir.join("exit.txt"), "ECHO is off.\r\n").unwrap();
+        assert_eq!(installer_exit_code(Some(&d)), None, "мусор не отправляем");
+        assert_eq!(installer_exit_code(None), None);
+        assert_eq!(failure_detail("auto", Some("2")), "тихо, код установщика 2");
+        assert_eq!(failure_detail("manual", None), "вручную, кода нет");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -941,7 +1059,7 @@ mod tests {
         let now = 1_800_000_000;
         let mut s = Settings { update_attempt: Some(attempt("0.9.0", now - 1000, "auto")), update_notified: Some("0.9.0".into()), ..Settings::default() };
         let r = settle_on_start(&mut s, "0.8.18", now);
-        assert_eq!(r, Settled::Failed { version: "0.9.0".into(), how: "auto".into(), count: 1 });
+        assert_eq!(r, Settled::Failed { version: "0.9.0".into(), how: "auto".into(), count: 1, dir: None });
         assert!(s.update_attempt.is_none(), "отметка снята");
         assert_eq!(s.update_failures, Some(UpdateFailures { version: "0.9.0".into(), count: 1, last_at: now }));
         assert_eq!(s.update_notified.as_deref(), Some("0.9.0"), "до трёх неудач тост не повторяем");

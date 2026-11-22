@@ -1,8 +1,9 @@
 //! Статистика и отчёты о сбоях. Без идентификаторов, имени компьютера и IP.
 //!
 //! Три канала к своему серверу:
-//! - `/v1/ping` - раз в сутки: версия, система, включено ли автообновление и
-//!   флаги «первый за день/неделю/месяц» (сервер считает активных людей);
+//! - `/v1/ping` - раз в сутки: версия, система, включено ли автообновление,
+//!   флаги «первый за день/неделю/месяц» (сервер считает активных людей) и
+//!   несколько настроек в `cfg` (только да/нет, см. `PingCfg`);
 //! - `/v1/crash` - сбой (Rust, интерфейс, мост, обновление), только если
 //!   включено в настройках;
 //! - `/v1/report` - отчёт, который человек отправил сам (всегда).
@@ -101,7 +102,7 @@ fn should_try_bridge(e: &reqwest::Error) -> bool {
 }
 
 /// Выполнить запрос напрямую; не удалось соединиться - через мост.
-async fn with_fallback<F, Fut, T>(f: F) -> Result<T, String>
+pub(crate) async fn with_fallback<F, Fut, T>(f: F) -> Result<T, String>
 where
     F: Fn(reqwest::Client) -> Fut,
     Fut: std::future::Future<Output = Result<T, reqwest::Error>>,
@@ -185,12 +186,22 @@ async fn post_to(base: &str, path: &str, body: &Value) -> Result<(), String> {
 
 /// GET к серверу статистики: Ok(None) - 404 или сервер не задан.
 pub async fn get(path_and_query: &str) -> Result<Option<String>, String> {
-    let Some(base) = base() else { return Ok(None) };
+    if base().is_none() {
+        return Ok(None);
+    }
     // До показа переключателей сервер не спрашиваем.
     let seen = tokio::task::spawn_blocking(|| settings::load_checked().is_ok_and(|s| s.privacy_notice_seen)).await;
     if !matches!(seen, Ok(true)) {
         return Err("уведомление о данных ещё не показано".into());
     }
+    get_anon(path_and_query).await
+}
+
+/// GET без проверки согласия - только для запросов, где кроме версии и
+/// системы ничего нет (баннеры мастера, как проверка обновлений). Ничего
+/// не записывает и ничего о человеке не передаёт.
+pub async fn get_anon(path_and_query: &str) -> Result<Option<String>, String> {
+    let Some(base) = base() else { return Ok(None) };
     let url = format!("{base}{path_and_query}");
     with_fallback(|c| {
         let url = url.clone();
@@ -203,6 +214,35 @@ pub async fn get(path_and_query: &str) -> Result<Option<String>, String> {
         }
     })
     .await
+}
+
+/// Файл с сервера статистики (фото и видео баннеров): только при включённой
+/// статистике или для баннера мастера (`setup`), не больше max байт.
+/// Напрямую, нет связи - через мост.
+pub async fn get_bytes(path: &str, max: usize, timeout: Duration, setup: bool) -> Result<Vec<u8>, String> {
+    let base = base().ok_or("сервер не задан")?;
+    let on = setup || tokio::task::spawn_blocking(load_if_stats_on).await.ok().flatten().is_some();
+    if !on {
+        return Err("статистика выключена".into());
+    }
+    let url = format!("{base}{path}");
+    let body = with_fallback_cfg(timeout, &bridge_proxy(), should_try_bridge, |c| {
+        let url = url.clone();
+        async move {
+            let mut r = c.get(url).send().await?.error_for_status()?;
+            let mut out: Vec<u8> = Vec::new();
+            while let Some(chunk) = r.chunk().await? {
+                out.extend_from_slice(&chunk);
+                if out.len() > max {
+                    // Сервер отдал больше обещанного: дальше не читаем.
+                    return Ok(None);
+                }
+            }
+            Ok(Some(out))
+        }
+    })
+    .await?;
+    body.ok_or_else(|| "файл больше допустимого".to_string())
 }
 
 // ---------------------------------------------------------------- даты
@@ -293,6 +333,52 @@ pub struct Ping {
     pub iw: Option<String>,
     pub how: Option<String>,
     pub used: bool,
+    /// Настройки (с 0.9.2). Старое поле `au` остаётся bool: сервер до этой
+    /// версии принимает только его, а лишние поля пропускает.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cfg: Option<PingCfg>,
+}
+
+/// Автообновление: включено, выключено или человека ещё не спрашивали.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AutoUpdateChoice {
+    On,
+    Off,
+    Unset,
+}
+
+/// Настройки в пинге. Политика та же, что у остального пинга: только да/нет
+/// и три значения автообновления. Ни адресов прокси, ни доменов, ни списка
+/// приложений, ни путей.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct PingCfg {
+    /// Автообновление.
+    pub au: AutoUpdateChoice,
+    /// Отчёты о сбоях.
+    pub cr: bool,
+    /// Автозапуск моста (задача Планировщика или агент launchd).
+    pub ab: bool,
+    /// «Во всех браузерах» (системная автонастройка прокси).
+    pub pac: bool,
+    /// Claude Desktop включён через мост.
+    pub cd: bool,
+}
+
+/// Собрать `cfg` по настройкам. `bridge_autostart` - зарегистрирована ли
+/// задача моста (её нет в настройках). Чистая функция.
+pub fn ping_cfg(s: &settings::Settings, bridge_autostart: bool) -> PingCfg {
+    PingCfg {
+        au: match s.auto_update {
+            Some(true) => AutoUpdateChoice::On,
+            Some(false) => AutoUpdateChoice::Off,
+            None => AutoUpdateChoice::Unset,
+        },
+        cr: settings::crash_reports_on(s),
+        ab: bridge_autostart,
+        pac: s.system_pac,
+        cd: s.app_profiles.iter().any(|p| p.id == crate::claude_desktop::PROFILE_ID && p.enabled),
+    }
 }
 
 /// Архитектура в виде, который принимает сервер. Незнакомая - пинг не шлём.
@@ -343,6 +429,7 @@ pub fn plan_ping(st: &TelemetryState, now: &Stamp, version: &str, au: bool) -> P
         iw,
         how,
         used: st.used_day.as_deref() == Some(&now.day),
+        cfg: None,
     }
 }
 
@@ -455,13 +542,18 @@ async fn ping_if_due() {
     if sent_today(&now.day) || base().is_none() || ping_arch().is_none() || !ping_version_ok(env!("CARGO_PKG_VERSION")) {
         return;
     }
-    // Чтение файла - не в потоке async-задачи.
-    let Ok(Some(s)) = tokio::task::spawn_blocking(load_if_stats_on).await else { return };
+    // Чтение файла и реестра (задача моста) - не в потоке async-задачи.
+    let Ok(Some((s, bridge_autostart))) =
+        tokio::task::spawn_blocking(|| load_if_stats_on().map(|s| (s, crate::tasks::status().registered))).await
+    else {
+        return;
+    };
     if s.telemetry.last_day.as_deref() == Some(&now.day) {
         return;
     }
     let planned_how = s.telemetry.pending_how.clone();
-    let p = plan_ping(&s.telemetry, &now, env!("CARGO_PKG_VERSION"), s.auto_update == Some(true));
+    let mut p = plan_ping(&s.telemetry, &now, env!("CARGO_PKG_VERSION"), s.auto_update == Some(true));
+    p.cfg = Some(ping_cfg(&s, bridge_autostart));
     let Ok(body) = serde_json::to_value(&p) else { return };
     if body.to_string().len() > PING_BODY_MAX {
         return;
@@ -713,14 +805,20 @@ fn first_event(id: &str, ev: &str) -> bool {
 }
 
 /// Событие уведомления для статистики рассылок (shown, clicked, dismissed):
-/// только при включённой статистике, один раз, без повторов.
+/// только при включённой статистике и после показа переключателей, один раз,
+/// без повторов. Показ баннера в мастере до согласия никуда не уходит и не
+/// занимает «один раз»: нажатие уже после согласия отправится как обычно.
 pub fn report_notice_event(id: &str, ev: &str) {
     let Some(body) = notice_event_body(id, ev) else { return };
-    if base().is_none() || !first_event(id, ev) {
+    if base().is_none() {
         return;
     }
+    let (id, ev) = (id.to_string(), ev.to_string());
     tauri::async_runtime::spawn(async move {
         let Ok(Some(_)) = tokio::task::spawn_blocking(load_if_stats_on).await else { return };
+        if !first_event(&id, &ev) {
+            return;
+        }
         if let Err(e) = post("/v1/notice-event", &body).await {
             tracing::info!("событие уведомления: {e}");
         }
@@ -1371,5 +1469,54 @@ mod tests {
         assert!(!off.privacy_notice_seen);
         let on = settings::Settings { privacy_notice_seen: true, ..settings::Settings::default() };
         assert!(settings::usage_stats_on(&on) && settings::crash_reports_on(&on) && on.privacy_notice_seen);
+    }
+
+    fn profile(id: &str, enabled: bool) -> crate::apps::AppProfile {
+        serde_json::from_value(json!({ "id": id, "name": "x", "kind": "exe_flag", "enabled": enabled })).unwrap()
+    }
+
+    #[test]
+    fn ping_cfg_reads_settings() {
+        // Старая установка: автообновление не выбрано, отчёты включены по умолчанию.
+        let s = settings::Settings::default();
+        let c = ping_cfg(&s, false);
+        assert_eq!(c, PingCfg { au: AutoUpdateChoice::Unset, cr: true, ab: false, pac: false, cd: false });
+        let s = settings::Settings {
+            auto_update: Some(false),
+            crash_reports: Some(false),
+            system_pac: true,
+            app_profiles: vec![profile("vscode", true), profile(crate::claude_desktop::PROFILE_ID, true)],
+            ..settings::Settings::default()
+        };
+        assert_eq!(ping_cfg(&s, true), PingCfg { au: AutoUpdateChoice::Off, cr: false, ab: true, pac: true, cd: true });
+        // Профиль Claude Desktop есть, но выключен; включён другой - cd = false.
+        let s = settings::Settings {
+            auto_update: Some(true),
+            app_profiles: vec![profile(crate::claude_desktop::PROFILE_ID, false), profile("codex", true)],
+            ..settings::Settings::default()
+        };
+        let c = ping_cfg(&s, false);
+        assert_eq!((c.au, c.cd), (AutoUpdateChoice::On, false));
+    }
+
+    #[test]
+    fn ping_cfg_on_the_wire() {
+        let mut p = plan_ping(&st(), &at(2026, 11, 20), "0.9.2", false);
+        // Без cfg поля нет вовсе (как у старых версий).
+        assert!(serde_json::to_value(&p).unwrap().get("cfg").is_none());
+        p.cfg = Some(PingCfg { au: AutoUpdateChoice::Unset, cr: true, ab: true, pac: false, cd: true });
+        let v = serde_json::to_value(&p).unwrap();
+        // au остаётся bool для серверов до 0.9.2, в cfg - три значения.
+        assert_eq!(v["au"], json!(false));
+        assert_eq!(v["cfg"], json!({ "au": "unset", "cr": true, "ab": true, "pac": false, "cd": true }));
+        // В cfg только да/нет и одно из трёх слов: ни строк с данными, ни чисел.
+        for (k, x) in v["cfg"].as_object().unwrap() {
+            assert!(x.is_boolean() || (k == "au" && ["on", "off", "unset"].contains(&x.as_str().unwrap())), "{k}: {x}");
+        }
+        assert!(serde_json::to_vec(&p).unwrap().len() <= PING_BODY_MAX);
+        for au in [AutoUpdateChoice::On, AutoUpdateChoice::Off] {
+            p.cfg = Some(PingCfg { au, cr: false, ab: false, pac: false, cd: false });
+            assert!(["on", "off"].contains(&serde_json::to_value(&p).unwrap()["cfg"]["au"].as_str().unwrap()));
+        }
     }
 }

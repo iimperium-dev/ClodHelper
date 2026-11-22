@@ -1009,7 +1009,7 @@ fn platform_install(run: &Path, dmg: &Path, info: &UpdateInfo, silent: bool, how
     .render();
     let sh = run.join("swap.sh");
     std::fs::write(&sh, script).map_err(|e| e.to_string())?;
-    crate::auto_update::mark_attempt(&info.version, how);
+    crate::auto_update::mark_attempt(&info.version, how, Some(run));
     let spawned = std::process::Command::new("/usr/bin/nohup")
         .arg("/bin/sh")
         .arg(&sh)
@@ -1042,8 +1042,9 @@ const NSIS_SILENT_ARGS: [&str; 2] = ["/S", "/UPDATE"];
 /// с кириллицей не ломают разбор. %1 - установщик, %2 - exe для запуска.
 /// Установщик NSIS закрывает процессы только по имени clod-helper.exe, cmd.exe
 /// он не трогает. Если установщик не справился, запускается прежняя версия.
+/// Код выхода установщика - в exit.txt рядом: его прочтёт отчёт о неудаче.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-const SILENT_BAT: &str = "@echo off\r\nrem Clod Helper: silent update. %1 = installer, %2 = app exe\r\nstart \"\" /wait \"%~1\" /S /UPDATE\r\nstart \"\" \"%~2\" --tray\r\n";
+const SILENT_BAT: &str = "@echo off\r\nrem Clod Helper: silent update. %1 = installer, %2 = app exe\r\nstart \"\" /wait \"%~1\" /S /UPDATE\r\n>\"%~dp0exit.txt\" echo %ERRORLEVEL%\r\nstart \"\" \"%~2\" --tray\r\n";
 
 /// Полный путь к cmd.exe из %SystemRoot%\System32 (не по PATH: туда мог
 /// попасть чужой cmd.exe). Нет переменной - обычное имя.
@@ -1074,7 +1075,7 @@ fn platform_install(run: &Path, setup: &Path, info: &UpdateInfo, silent: bool, h
         let exe = restart_exe()?;
         let bat = run.join("update.cmd");
         std::fs::write(&bat, SILENT_BAT).map_err(|e| format!("Не удалось записать скрипт обновления: {e}"))?;
-        crate::auto_update::mark_attempt(&info.version, how);
+        crate::auto_update::mark_attempt(&info.version, how, Some(run));
         std::process::Command::new(system_cmd(std::env::var_os("SystemRoot")))
             .raw_arg(silent_cmdline(&bat, setup, &exe))
             .creation_flags(CREATE_NO_WINDOW)
@@ -1083,7 +1084,7 @@ fn platform_install(run: &Path, setup: &Path, info: &UpdateInfo, silent: bool, h
             .stderr(std::process::Stdio::null())
             .spawn()
     } else {
-        crate::auto_update::mark_attempt(&info.version, how);
+        crate::auto_update::mark_attempt(&info.version, how, Some(run));
         std::process::Command::new(setup).args(NSIS_UPDATE_ARGS).spawn()
     };
     let child = match spawned {
@@ -1341,7 +1342,7 @@ mod tests {
         assert_eq!(NSIS_UPDATE_ARGS, ["/S", "/UPDATE", "/R"]);
         // Тихая установка: без /R - окно не открывается.
         assert_eq!(NSIS_SILENT_ARGS, ["/S", "/UPDATE"]);
-        assert!(SILENT_BAT.contains("/wait \"%~1\" /S /UPDATE\r\n"));
+        assert!(SILENT_BAT.contains("/wait \"%~1\" /S /UPDATE\r\n>\"%~dp0exit.txt\" echo %ERRORLEVEL%\r\n"));
         assert!(!SILENT_BAT.contains("/R"));
         assert!(SILENT_BAT.contains("start \"\" \"%~2\" --tray"), "новая версия стартует в трее");
         assert!(SILENT_BAT.is_ascii(), "батник без кириллицы: пути идут аргументами");

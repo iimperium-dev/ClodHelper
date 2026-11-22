@@ -32,12 +32,15 @@ import type {
   ProxyCheckResult,
   ProxyConfig,
   ProxyPing,
+  VpnStatus,
   ProxySpeed,
   PythonInfo,
   ShimStatus,
   ShimTestResult,
   ShortcutTarget,
   WizardInstallResult,
+  WizardApps,
+  WizardAppId,
   SiteEntry,
   SitesStatus,
   SeenHosts,
@@ -45,6 +48,7 @@ import type {
   BrowserProxyExtensions,
   BypassApp,
   NoticeItem,
+  BannerView,
   SitesScope,
 } from "./types";
 
@@ -89,6 +93,21 @@ export async function runInstall(params: {
 /** Установка нового мастера одним вызовом (прогресс - событие "wizard:step"). */
 export async function wizardInstall(proxyUrl: string): Promise<WizardInstallResult> {
   return invoke<WizardInstallResult>("wizard_install", { proxyUrl });
+}
+
+/** Мастер: стоят ли Claude Desktop и Codex (свежая проверка, без кэша). */
+export function wizardApps(): Promise<WizardApps> {
+  return invoke<WizardApps>("wizard_apps");
+}
+
+/** Мастер: страница установки приложения (Windows - Microsoft Store, Mac - сайт). */
+export function wizardOpenStore(app: WizardAppId): Promise<void> {
+  return invoke<void>("wizard_open_store", { app });
+}
+
+/** Мастер: подключить только что поставленный Claude Desktop. ok false - не вышло. */
+export function wizardConnectClaude(): Promise<{ ok: boolean; running: boolean }> {
+  return invoke<{ ok: boolean; running: boolean }>("wizard_connect_claude");
 }
 
 // ─── Shim control ────────────────────────────────────────────────
@@ -406,6 +425,16 @@ export async function proxiesPing(): Promise<ProxyPing[]> {
   return invoke<ProxyPing[]>("proxies_ping");
 }
 
+/** Заменить прокси на новый (новый логин или пароль) на том же месте. */
+export async function proxyReplace(old: string, next: string): Promise<string[]> {
+  return invoke<string[]>("proxy_replace", { old, new: next });
+}
+
+/** Включён ли VPN рядом с мостом. */
+export async function vpnStatus(): Promise<VpnStatus> {
+  return invoke<VpnStatus>("vpn_status");
+}
+
 /** Блокируется ли телеметрия Claude (Sentry, Datadog). */
 export async function claudeTelemetryGet(): Promise<boolean> {
   return invoke<boolean>("claude_telemetry_get");
@@ -531,6 +560,27 @@ export function noticesMarkRead(ids: string[]): Promise<NoticeItem[]> {
 }
 
 /** Событие уведомления для статистики: shown | clicked | dismissed (один раз, только при включённой статистике). */
+/** Действующие баннеры, свежие первыми. Какой показать - решает PromoBanner. */
+export function noticesBanners(): Promise<BannerView[]> {
+  return invoke<BannerView[]>("notices_banners");
+}
+
+/** Баннеры мастера: до согласия - один запрос только о них (версия и система). */
+export function noticesSetupBanners(): Promise<BannerView[]> {
+  return invoke<BannerView[]>("notices_setup_banners");
+}
+
+/** Фото и видео баннера: скачать в кэш программы и получить адреса для показа. */
+export async function bannerMedia(keys: string[]): Promise<Record<string, string>> {
+  const paths = await invoke<Record<string, string>>("banner_media", { keys });
+  const { convertFileSrc } = await import("@tauri-apps/api/core");
+  return Object.fromEntries(Object.entries(paths).map(([k, p]) => [k, convertFileSrc(p)]));
+}
+
+export function noticesBannerDismiss(id: string): Promise<void> {
+  return invoke<void>("notices_banner_dismiss", { id });
+}
+
 export function noticeEvent(id: string, ev: "shown" | "clicked" | "dismissed"): Promise<void> {
   return invoke<void>("notice_event", { id, ev });
 }
@@ -633,4 +683,47 @@ export async function claudeChatsExportProgress(): Promise<ChatsExportProgress> 
 /** Показать файл в Проводнике / Finder. */
 export async function revealInFolder(path: string): Promise<void> {
   return invoke<void>("reveal_in_folder", { path });
+}
+
+// ─── Купленный прокси по ссылке clodhelper://add?key=... ─────────
+
+/** Ключ из последней ссылки (один раз; null - ссылок не было). */
+export async function shopLinkTake(): Promise<string | null> {
+  return invoke<string | null>("shop_link_take");
+}
+
+/** Купленные прокси по ключу: напрямую, без связи - через мост. */
+export async function shopClaim(key: string): Promise<import("./shopClaim").Claim> {
+  return invoke<import("./shopClaim").Claim>("shop_claim", { key });
+}
+
+/**
+ * «Добавить» в окне покупки: тот же адрес в пуле - запись обновляется на
+ * месте (имя, резервы и назначения остаются), иначе прокси в конец пула.
+ */
+/** Купленный прокси для пула: ключ и срок хранятся у прокси (ключ - только в Rust). */
+export interface ShopAddItem {
+  url: string;
+  label?: string | null;
+  key?: string | null;
+  expires_at?: string | null;
+}
+
+export async function shopAdd(items: ShopAddItem[], makePrimary: boolean): Promise<string[]> {
+  return invoke<string[]>("shop_add", { items, makePrimary });
+}
+
+/** Мастер: ключ и срок купленного прокси - заранее, до записи пула мастером. */
+export async function shopRemember(item: ShopAddItem): Promise<void> {
+  return invoke<void>("shop_remember", { item });
+}
+
+/** Прокси из магазина: URL - срок (без ключа). */
+export async function shopMetaGet(): Promise<Record<string, import("./shopClaim").ShopInfo>> {
+  return invoke<Record<string, import("./shopClaim").ShopInfo>>("shop_meta_get");
+}
+
+/** «Продлить»: кабинет покупателя в браузере (ключ подставит Rust). */
+export async function shopRenew(url: string): Promise<void> {
+  return invoke<void>("shop_renew", { url });
 }

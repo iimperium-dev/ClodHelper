@@ -19,8 +19,12 @@ import {
   proxyAssignmentsGet,
   proxyLabelsGet,
   proxyLabelSet,
+  proxyReplace,
   proxySpeedtest,
+  shopMetaGet,
+  shopRenew,
 } from "../lib/api";
+import { takeProxyIntent } from "../lib/proxyCause";
 import { ProxyInputField, useProxyInput } from "../components/ProxyInput";
 import { ProxyBackups } from "../components/ProxyBackups";
 import { BridgeFileNotice } from "../components/BridgeFileNotice";
@@ -31,6 +35,7 @@ import {
   type SpeedEntry,
 } from "../components/ProxyPoolViews";
 import { useStatus } from "../lib/status";
+import { expiryShort, isExpired, openShopKey, POOL_CHANGED_EVENT, type ShopInfo } from "../lib/shopClaim";
 import type { AppProfileStatus, ProxyCheckResult, ServiceGroup } from "../lib/types";
 import { fadeInUp, staggerContainer } from "../lib/motion";
 import { cn } from "../lib/cn";
@@ -270,12 +275,24 @@ export function Proxies() {
 
   const [pool, setPool] = useState<string[] | null>(null);
   const [labels, setLabels] = useState<Record<string, string>>({});
+  // Прокси из магазина: срок (ключ живёт только в Rust).
+  const [shopMeta, setShopMeta] = useState<Record<string, ShopInfo>>({});
   const [assignments, setAssignments] = useState<Record<string, number>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const [adding, setAdding] = useState(false);
+  // Пришли с «Обзора» с готовым действием: заменить пароль или добавить прокси.
+  const [intent] = useState(takeProxyIntent);
+  const [adding, setAdding] = useState(intent?.kind === "add");
   const addInput = useProxyInput();
+  // Замена прокси (новый логин или пароль): URL заменяемого.
+  const [replacing, setReplacing] = useState<string | null>(intent?.kind === "replace" ? intent.url : null);
+  const replaceInput = useProxyInput();
+  useEffect(() => {
+    if (intent?.kind === "replace") replaceInput.setValue(intent.url);
+    // Один раз при открытии раздела.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // Резервы прокси (URL прокси → резервы) и раскрытые строки пула.
   const [backups, setBackups] = useState<Record<string, string[]>>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -319,10 +336,18 @@ export function Proxies() {
     setAssignments(await proxyAssignmentsGet().catch(() => ({})));
     setBackups((await proxyBackupsGet().catch(() => null)) ?? {});
     setApps(await appsList().catch(() => []));
+    setShopMeta((await shopMetaGet().catch(() => null)) ?? {});
   }, []);
 
   useEffect(() => {
     void load();
+  }, [load]);
+
+  // Пул поменяли снаружи (купленный прокси по ссылке) - перечитать.
+  useEffect(() => {
+    const on = () => void load();
+    window.addEventListener(POOL_CHANGED_EVENT, on);
+    return () => window.removeEventListener(POOL_CHANGED_EVENT, on);
   }, [load]);
 
   // Гео автоматом для записей без кэша - флаг виден всегда, не только
@@ -401,6 +426,13 @@ export function Proxies() {
   };
 
   const handleAdd = async () => {
+    // Ключ из магазина - то же окно покупки, что по ссылке со страницы оплаты.
+    if (addInput.shopKey) {
+      openShopKey(addInput.shopKey);
+      addInput.reset();
+      setAdding(false);
+      return;
+    }
     const parsed = addInput.parsed;
     if (!parsed || !pool) return;
     if (pool.includes(parsed.url)) {
@@ -411,6 +443,33 @@ export function Proxies() {
     if (await applyPool([...pool, parsed.url], "add")) {
       addInput.reset();
       setAdding(false);
+    }
+  };
+
+  /** Заменить прокси на тот же с новым логином или паролем: имя, резервы и
+      назначения остаются за ним. */
+  const handleReplace = async () => {
+    const parsed = replaceInput.parsed;
+    if (!parsed || !replacing) return;
+    if (parsed.url === replacing) {
+      setReplacing(null);
+      replaceInput.reset();
+      return;
+    }
+    setBusy("replace");
+    setError(null);
+    try {
+      setPool(await proxyReplace(replacing, parsed.url));
+      await refresh();
+      await refreshPoolPing();
+      setLabels(await proxyLabelsGet().catch(() => ({})));
+      setBackups((await proxyBackupsGet().catch(() => null)) ?? {});
+      setReplacing(null);
+      replaceInput.reset();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -521,6 +580,7 @@ export function Proxies() {
       backups: myBackups.length,
       open: expanded.has(url),
       confirm,
+      shop: shopMeta[url] ? { until: expiryShort(shopMeta[url].expires_at), expired: isExpired(shopMeta[url]) } : undefined,
     };
   });
 
@@ -533,12 +593,18 @@ export function Proxies() {
     remove: (i) => void handleRemove(i),
     cancelDelete: () => setConfirmDel(null),
     makePrimary: (i) => void handleMakePrimary(i),
+    renew: (url) => void shopRenew(url).catch((e) => setError(String(e))),
     editing: editingTag,
     tagInput,
     setTagInput,
     startEdit: startTagEdit,
     saveTag: (url) => void saveTag(url),
     cancelEdit: () => setEditingTag(null),
+    replace: (url) => {
+      setReplacing(url);
+      replaceInput.setValue(url);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    },
     backupsPanel: (row) => (
       <ProxyBackups
         parent={row.url}
@@ -594,7 +660,7 @@ export function Proxies() {
           >
             <div className="surface-card mt-4 p-4">
               <div className="mb-3 text-[13px] font-semibold text-vb-fg">Новый прокси</div>
-              <ProxyInputField input={addInput} autoFocus onEnter={() => void handleAdd()} />
+              <ProxyInputField input={addInput} autoFocus shopKeys onEnter={() => void handleAdd()} />
 
               <div className="mt-4 flex items-center justify-end gap-2">
                 <Button
@@ -612,10 +678,54 @@ export function Proxies() {
                   variant="primary"
                   size="sm"
                   onClick={handleAdd}
-                  disabled={!addInput.parsed || busy !== null}
+                  disabled={(!addInput.parsed && !addInput.shopKey) || busy !== null}
                 >
                   {busy === "add" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
                   {busy === "add" ? "Добавляю…" : "Добавить"}
+                </Button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Замена прокси: тот же сервер с новым логином или паролем ── */}
+      <AnimatePresence>
+        {replacing && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+            className="overflow-hidden"
+          >
+            <div className="surface-card mt-4 p-4" data-testid="proxy-replace">
+              <div className="text-[13px] font-semibold text-vb-fg">Новый логин и пароль</div>
+              <p className="mb-3 mt-0.5 text-[12px] text-vb-silver-faint">
+                Для <span className="font-mono">{hostOnly(replacing)}</span>. Вставьте строку прокси от продавца целиком.
+                Имя, резервы и закреплённые программы останутся.
+              </p>
+              <ProxyInputField input={replaceInput} autoFocus onEnter={() => void handleReplace()} />
+              <div className="mt-4 flex items-center justify-end gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setReplacing(null);
+                    replaceInput.reset();
+                  }}
+                  disabled={busy === "replace"}
+                >
+                  Отмена
+                </Button>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={handleReplace}
+                  disabled={!replaceInput.parsed || busy !== null}
+                >
+                  {busy === "replace" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  {busy === "replace" ? "Сохраняю…" : "Сохранить"}
                 </Button>
               </div>
             </div>

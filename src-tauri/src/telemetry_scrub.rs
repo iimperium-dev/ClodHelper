@@ -19,6 +19,8 @@ struct Rules {
     /// "password":"x", "pass": "x" в JSON.
     json_secret: Regex,
     bearer: Regex,
+    /// Ключ магазина: 43 знака base64url подряд (доступ к кабинету покупателя).
+    shop_key: Regex,
     /// password: x, token: x, api-key: x, x-api-key: x.
     kv_colon: Regex,
     /// Cookie: ..., Set-Cookie: ...
@@ -181,6 +183,7 @@ fn rules() -> &'static Rules {
                 r#"(?i)\b((?:[A-Za-z0-9_-]*(?:key|token|password|passwd|secret)|(?:[A-Za-z0-9_-]*[_-])?(?:pass|pwd)))"#,
                 r#"=[^\s&"',;]+"#,
             )),
+            shop_key: re(r"(^|[^A-Za-z0-9_-])[A-Za-z0-9_-]{43}($|[^A-Za-z0-9_=-])"),
             json_secret: re(concat!(
                 r#"(?i)"((?:[A-Za-z0-9_-]*(?:key|token|password|passwd|secret)|(?:[A-Za-z0-9_-]*[_-])?(?:pass|pwd)))""#,
                 r#"\s*:\s*(?:"(?:[^"\\]|\\.)*"|-?[0-9][0-9.]*|true|false|null)"#,
@@ -351,8 +354,20 @@ pub fn scrub(text: &str) -> String {
     scrub_with(text, &known_secrets())
 }
 
+/// Спрятать ключи магазина (43 знака base64url) - и для журналов на диске.
+pub fn mask_shop_keys(text: &str) -> String {
+    // Границы входят в совпадение, поэтому два ключа через один разделитель
+    // находятся за два прохода.
+    let mut s = text.to_string();
+    for _ in 0..2 {
+        s = rules().shop_key.replace_all(&s, "${1}<key>${2}").into_owned();
+    }
+    s
+}
+
 pub fn scrub_with(text: &str, secrets: &[(String, &'static str)]) -> String {
     let r = rules();
+    let text = &mask_shop_keys(text);
     let mut s = r.proxy_line.replace_all(text, "<proxy>").into_owned();
     s = r.url_auth.replace_all(&s, "${1}://<auth>@").into_owned();
     s = scrub_user_paths(&s);
@@ -638,6 +653,26 @@ mod tests {
     fn url_password_may_contain_slash_and_at() {
         assert_eq!(clean("http://user:p/a@ss@host.com:8080/x"), "http://<auth>@<host>:8080/x");
         assert_eq!(clean("socks5://u:@@/x@1.2.3.4:1080 end"), "socks5://<auth>@<ip>:1080 end");
+    }
+
+    #[test]
+    fn scrubs_shop_keys() {
+        let k = "q83vEjRWeJCrze8SNFZ4kKvN7xI0VniQq83vEjRWeJA";
+        for t in [
+            format!("clodhelper://add?key={k}"),
+            format!("GET /v1/claim/{k} 404"),
+            format!("https://clodhelper.com/buy/account/#key={k}"),
+            format!("{k} {k}"),
+            k.to_string(),
+        ] {
+            let out = scrub_with(&t, &[]);
+            assert!(!out.contains(k), "{out}");
+            assert!(!mask_shop_keys(&t).contains(k), "{t}");
+        }
+        // Короче и длиннее 43 знаков - не ключ.
+        assert_eq!(mask_shop_keys("abc"), "abc");
+        let long = "a".repeat(44);
+        assert_eq!(mask_shop_keys(&long), long);
     }
 
     #[test]

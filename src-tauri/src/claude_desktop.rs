@@ -171,6 +171,16 @@ pub fn detect_fresh() -> Result<Option<Installation>, String> {
     Ok(None)
 }
 
+/// Проверка без кэша, с записью в кэш: мастер ждёт установку Claude Desktop,
+/// и после находки остальной код не должен минуту видеть старое «нет».
+pub fn detect_now() -> Option<Installation> {
+    let installation = detect_fresh().ok().flatten();
+    if let Ok(mut guard) = INSTALL_CACHE.lock() {
+        *guard = Some((Instant::now(), installation.clone()));
+    }
+    installation
+}
+
 pub fn detect() -> Option<Installation> {
     let mut guard = INSTALL_CACHE.lock().ok()?;
     if let Some((time, installation)) = guard.as_ref() {
@@ -215,6 +225,48 @@ pub fn launch() -> Result<(), String> {
     // The launcher checks the bridge and rejects existing Desktop processes:
     // Electron's single-instance handoff would otherwise ignore the proxy flag.
     run_script(&launch_args()).map(|_| ())
+}
+
+/// Открыт ли Claude Desktop: главный процесс именно этой установки
+/// (claude.exe Claude Code в терминалах не считается).
+pub fn running() -> bool {
+    let Some(i) = detect() else { return false };
+    #[cfg(target_os = "windows")]
+    {
+        !crate::apps::main_pids("claude.exe", Some(&i.exe_path)).is_empty()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let app = i.exe_path.trim_end_matches('/');
+        Command::new("/usr/bin/pgrep")
+            .args(["-f", &format!("{app}/Contents/MacOS/Claude")])
+            .output()
+            .is_ok_and(|o| o.status.success())
+    }
+}
+
+/// Вывести уже открытый Claude Desktop вперёд. Повторный запуск Electron
+/// отдаёт открытому окну и сразу выходит, прокси при этом не меняется.
+pub fn focus() -> Result<(), String> {
+    let i = detect().ok_or_else(|| "Claude Desktop не найден".to_string())?;
+    #[cfg(target_os = "windows")]
+    let mut cmd = match &i.app_id {
+        Some(id) => {
+            let mut c = Command::new("explorer.exe");
+            c.arg(format!("shell:AppsFolder\\{id}"));
+            c
+        }
+        None => Command::new(&i.exe_path),
+    };
+    #[cfg(not(target_os = "windows"))]
+    let mut cmd = {
+        let mut c = Command::new("/usr/bin/open");
+        c.arg(&i.exe_path);
+        c
+    };
+    cmd.spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Не удалось открыть Claude Desktop: {e}"))
 }
 
 /// Install a stable launcher outside WindowsApps. A .lnk never pins a Store

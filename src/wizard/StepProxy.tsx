@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangle, ArrowRight, ArrowUpDown, Loader2 } from "lucide-react";
+import { AlertTriangle, ArrowRight, ArrowUpDown, Loader2, ShoppingBag } from "lucide-react";
 import { Button } from "../components/Button";
+import { PromoBanner } from "../components/PromoBanner";
 import { CountryFlag } from "../components/CountryFlag";
 import { WizardFooter, WizardTitle } from "../components/WizardShell";
 import { checkProxy } from "../lib/api";
 import { isParseReject, parseProxyInput, type ParsedProxy } from "../lib/proxyParse";
+import { openShopKey, shopKeyFrom } from "../lib/shopClaim";
 import type { ProxyCheckResult } from "../lib/types";
 import { cn } from "../lib/cn";
 
@@ -38,7 +40,9 @@ export function StepProxy({ initialUrl, onNext, onSkipToTools }: Props) {
   const [input, setInput] = useState(initialUrl ?? "");
   const [swapped, setSwapped] = useState(false);
 
-  const parsedResult = useMemo(() => parseProxyInput(input), [input]);
+  // Ключ из магазина: вместо разбора - окно покупки, прокси вернётся в поле.
+  const shopKey = useMemo(() => shopKeyFrom(input), [input]);
+  const parsedResult = useMemo(() => (shopKey ? null : parseProxyInput(input)), [input, shopKey]);
   const parseError = isParseReject(parsedResult) ? parsedResult.error : null;
   const parsedBase: ParsedProxy | null = isParseReject(parsedResult) ? null : parsedResult;
   const parsed: ParsedProxy | null =
@@ -75,7 +79,10 @@ export function StepProxy({ initialUrl, onNext, onSkipToTools }: Props) {
 
   const geo = check.state === "done" ? check.result : null;
   const isRu = geo?.country_code?.toUpperCase() === "RU";
-  const submit = () => parsed && onNext(parsed.url);
+  const submit = () => {
+    if (shopKey) openShopKey(shopKey);
+    else if (parsed) onNext(parsed.url);
+  };
   const hasInput = !!input.trim();
 
   return (
@@ -103,13 +110,13 @@ export function StepProxy({ initialUrl, onNext, onSkipToTools }: Props) {
           onKeyDown={(e) => {
             if (e.key === "Enter") submit();
           }}
-          aria-invalid={hasInput && !parsed}
+          aria-invalid={hasInput && !parsed && !shopKey}
           aria-describedby="wizard-proxy-result"
-          placeholder="1.2.3.4:8000:логин:пароль"
+          placeholder="1.2.3.4:8000:логин:пароль или ключ из магазина"
           className={cn(
             "w-full rounded-xl border bg-vb-surface px-4 py-3 font-mono text-[14px] text-vb-fg outline-none",
             "placeholder:text-vb-silver-faint transition-colors duration-150",
-            hasInput && !parsed
+            hasInput && !parsed && !shopKey
               ? "border-vb-warn/50 focus:border-vb-warn/70"
               : "border-vb-border hover:border-vb-border-strong focus:border-vb-emerald/60",
           )}
@@ -120,7 +127,15 @@ export function StepProxy({ initialUrl, onNext, onSkipToTools }: Props) {
       {/* Разбор строки - живой ответ под полем, объявляется читалкой. */}
       <div id="wizard-proxy-result" aria-live="polite" className="mt-3 min-h-[20px]">
         {hasInput &&
-          (parsed ? (
+          (shopKey ? (
+            <div className="flex items-center gap-2.5 rounded-xl border border-vb-emerald/30 bg-vb-emerald/[0.05] px-4 py-3">
+              <ShoppingBag className="h-4 w-4 shrink-0 text-vb-emerald" aria-hidden />
+              <div className="min-w-0">
+                <p className="text-[13px] font-medium text-vb-fg">Ключ из магазина</p>
+                <p className="text-[12px] text-vb-silver-dim">По «Дальше» программа получит купленный прокси</p>
+              </div>
+            </div>
+          ) : parsed ? (
             <div
               className={cn(
                 "rounded-xl border px-4 py-3",
@@ -206,6 +221,9 @@ export function StepProxy({ initialUrl, onNext, onSkipToTools }: Props) {
           ))}
       </div>
 
+      {/* Предложение из админки «в мастере» (например, купить готовый прокси). Нет - ничего. */}
+      {!hasInput && <PromoBanner place="setup" className="mt-4" />}
+
       <WizardFooter
         left={
           <>
@@ -230,7 +248,7 @@ export function StepProxy({ initialUrl, onNext, onSkipToTools }: Props) {
           </>
         }
       >
-        <Button onClick={submit} disabled={!parsed}>
+        <Button onClick={submit} disabled={!parsed && !shopKey}>
           Дальше
           <ArrowRight className="h-4 w-4" aria-hidden />
         </Button>

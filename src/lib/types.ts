@@ -46,13 +46,27 @@ export interface ProxyCheckResult {
 }
 
 /** Новый мастер: 3 шага (прокси → установка → готово). */
-export type WizardStep = "proxy" | "install" | "done";
+export type WizardStep = "proxy" | "install" | "apps" | "done";
 
-/** Результат wizard_install: честная проверка + состояние env. */
+/** Claude Desktop в мастере: подключён, не вышло, не установлен. */
+export type WizardClaude = "ok" | "err" | "absent";
+
+/** Результат wizard_install: честная проверка + состояние env и Claude Desktop. */
 export interface WizardInstallResult {
   test: ShimTestResult;
   env_on: boolean;
+  claude: WizardClaude;
+  /** Claude Desktop был открыт: прокси подхватится после перезапуска. */
+  claude_running: boolean;
 }
+
+/** Какие приложения стоят (wizard_apps). */
+export interface WizardApps {
+  claude: boolean;
+  codex: boolean;
+}
+
+export type WizardAppId = keyof WizardApps;
 
 // ─── Dashboard / Shim ────────────────────────────────────────────
 
@@ -350,6 +364,16 @@ export interface BridgeHealth {
 // ─── Прокси-пул ──────────────────────────────────────────────────
 
 /** Проверка одного прокси из пула: TCP-пинг и настоящий запрос через него. */
+/** VPN рядом с мостом. */
+export interface VpnStatus {
+  /** Включён туннель, который забирает весь трафик. */
+  active: boolean;
+  /** Как называется VPN («WireGuard»); null - не узнали. */
+  name: string | null;
+  /** Запущен SOTA VPN: он временами стирает настройки прокси. */
+  sota: boolean;
+}
+
 export interface ProxyPing {
   url: string;
   host: string;
@@ -456,6 +480,34 @@ export interface PrivacyState {
 export type PrivacyKey = "auto_update" | "crash_reports" | "usage_stats";
 
 /** Элемент колокольчика: обновление или рассылка разработчика (notices.rs). */
+/** Баннер на «Обзоре» (объявление из админки с оформлением). */
+export interface BannerView {
+  id: string;
+  title: string;
+  body: string;
+  accent: "emerald" | "blue" | "violet" | "amber" | "rose" | "neutral";
+  eyebrow?: string | null;
+  buttons: { label: string; url: string }[];
+  dismissible: boolean;
+  /** Фото и видео: первое - обложка, все - в окне просмотра. */
+  media: BannerMedia[];
+  /** Первое медиа - обложкой в самом баннере. */
+  cover: boolean;
+  /** Когда показывать: всегда, пока не работает ни один прокси, или в мастере. */
+  when: "always" | "proxy_down" | "setup";
+  /** Для proxy_down: через сколько минут после отказа прокси. */
+  after_min: number;
+}
+
+export interface BannerMedia {
+  key: string;
+  kind: "image" | "video";
+  w: number;
+  h: number;
+  /** Кадр-заставка видео. */
+  poster?: string;
+}
+
 export interface NoticeItem {
   id: string;
   kind: "update" | "news";

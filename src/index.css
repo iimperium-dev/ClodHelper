@@ -290,3 +290,22 @@
 @utility z-tooltip {
   z-index: 600;
 }
+
+/* Перемотка видео в окне просмотра баннера: заполненная часть - цвет акцента. */
+.video-range {
+  appearance: none;
+  border-radius: 9999px;
+  background: linear-gradient(to right, var(--acc, #fff) var(--p, 0%), rgba(255, 255, 255, 0.25) var(--p, 0%));
+}
+.video-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 9999px;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  transition: transform 0.15s;
+}
+.video-range:hover::-webkit-slider-thumb {
+  transform: scale(1.2);
+}

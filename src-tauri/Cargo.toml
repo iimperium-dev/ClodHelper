@@ -1,6 +1,6 @@
 [package]
 name = "clod-helper"
-version = "0.9.1"
+version = "0.9.2"
 description = "Установщик Claude Code и Claude Desktop через прокси"
 authors = ["iimperium"]
 edition = "2021"
@@ -20,7 +20,7 @@ sha2 = "0.10"
 # (@tauri-apps/*): tauri build падает, если они расходятся, а Cargo.lock в git
 # не хранится. Поэтому «~»: без него чистая сборка (CI, новый компьютер)
 # берёт свежий минорный выпуск крейта, и сборка ломается.
-tauri = { version = "~2.12", features = ["tray-icon", "image-png", "macos-private-api"] }
+tauri = { version = "~2.12", features = ["tray-icon", "image-png", "macos-private-api", "protocol-asset"] }
 tauri-plugin-opener = "~2.7.2"
 tauri-plugin-shell = "~2.5"
 tauri-plugin-autostart = "2"
@@ -43,6 +43,8 @@ dirs = "5"
 # Архив локальных чатов Claude (Инструменты → очистка).
 zip = { version = "2", default-features = false, features = ["deflate"] }
 tauri-plugin-dialog = "2.8.3"
+# Ссылки clodhelper://add?key=... со страницы покупки на сайте.
+tauri-plugin-deep-link = "2"
 
 # Windows: быстрые статусы без PowerShell — реестр (политики, правила
 # брандмауэра, пакеты Store), таблица TCP-соединений, иконки exe в PNG.
@@ -56,6 +58,7 @@ windows-sys = { version = "0.61", features = [
   "Win32_Graphics_Gdi",
   "Win32_Media_Audio",
   "Win32_NetworkManagement_IpHelper",
+  "Win32_NetworkManagement_Ndis",
   "Win32_Security_Credentials",
   "Win32_Security_Cryptography",
   "Win32_Networking_WinInet",
@@ -68,7 +71,8 @@ windows-sys = { version = "0.61", features = [
 ] }
 # Одна копия программы: повторный запуск (ярлык, автозапуск) не плодит
 # второй значок в трее, а показывает уже запущенную.
-tauri-plugin-single-instance = "2"
+# deep-link: ссылка, открытая при запущенной программе, приходит в неё.
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 
 # Автозапуск на macOS: SMAppService (13+) — штатные «Объекты входа» с
 # иконкой и именем приложения вместо LaunchAgent «Clod Helper.plist».

@@ -95,6 +95,10 @@ pub struct Settings {
     /// Пользовательские имена (тэги) прокси: URL → имя («Немецкий», «Резерв»).
     #[serde(default)]
     pub proxy_labels: std::collections::HashMap<String, String>,
+    /// Прокси из магазина: URL → ключ покупки и срок. Ключ - доступ к
+    /// кабинету покупателя: в журнал, отчёты и интерфейс не выводится.
+    #[serde(default)]
+    pub shop_proxies: std::collections::HashMap<String, ShopMeta>,
     /// Не выпускать телеметрию Claude (отчёты об ошибках в Sentry, Datadog):
     /// в них имя компьютера и железо. None - включено (по умолчанию).
     #[serde(default)]
@@ -189,6 +193,10 @@ pub struct Settings {
     /// возвращает их, а не стирает настройку пользователя насовсем.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub saved_proxy_env: Option<std::collections::HashMap<String, String>>,
+    /// Переменные прокси сняты кнопкой «Остановить мост»: вернуть их, когда
+    /// мост снова запустится (кнопкой, автозапуском или после перезагрузки).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub env_paused: bool,
     /// Сайты, которые ходят через прокси (раздел «Сайты»): мост читает их из
     /// bridge-sites.json на лету, без перезапуска.
     #[serde(default)]
@@ -202,6 +210,9 @@ pub struct UpdateAttempt {
     pub version: String,
     pub at: u64,
     pub how: String,
+    /// Папка запуска установщика: туда тихая установка пишет код выхода.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dir: Option<String>,
 }
 
 /// Сколько установок версии `version` подряд не завершилось и когда была
@@ -419,10 +430,76 @@ pub fn set_proxy_backups(parent: String, backups: Vec<String>) -> Result<Setting
     })
 }
 
-/// Имена - только у прокси пула и их резервов.
+/// Заменить прокси (пула или резерв) на новый на том же месте: новый
+/// логин или пароль не должен терять имя, резервы и назначения.
+pub fn replace_proxy(old: &str, new: String) -> Result<Settings, String> {
+    with_settings(|s| swap_proxy(s, old, new))
+}
+
+fn swap_proxy(s: &mut Settings, old: &str, new: String) -> Result<(), String> {
+    if old == new {
+        return Ok(());
+    }
+    if bridge_upstreams(s).contains(&new) {
+        return Err("Этот прокси уже есть в списке".into());
+    }
+    let mut pool = effective_proxies(s);
+    if let Some(i) = pool.iter().position(|u| u == old) {
+        pool[i] = new.clone();
+        s.proxy_url = pool.first().cloned();
+        s.proxies = pool;
+        if let Some(list) = s.proxy_backups.remove(old) {
+            s.proxy_backups.insert(new.clone(), list);
+        }
+    } else {
+        if !s.proxy_backups.values().any(|l| l.iter().any(|b| b == old)) {
+            return Err("Этого прокси уже нет в списке".into());
+        }
+        // Общий резерв у нескольких прокси - меняем везде.
+        for l in s.proxy_backups.values_mut() {
+            for b in l.iter_mut().filter(|b| *b == old) {
+                *b = new.clone();
+            }
+        }
+    }
+    // Ключ и срок купленного прокси едут за записью.
+    if let Some(meta) = s.shop_proxies.remove(old) {
+        s.shop_proxies.insert(new.clone(), meta);
+    }
+    if let Some(label) = s.proxy_labels.remove(old) {
+        s.proxy_labels.insert(new, label);
+    }
+    Ok(())
+}
+
+/// Имена и данные магазина - только у прокси пула и их резервов.
 fn retain_labels(s: &mut Settings) {
     let keep = bridge_upstreams(s);
     s.proxy_labels.retain(|u, _| keep.contains(u));
+    s.shop_proxies.retain(|u, _| keep.contains(u));
+}
+
+/// Купленный в магазине прокси: ключ покупки и срок действия.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ShopMeta {
+    pub key: String,
+    /// Срок действия, ISO 8601 (как прислал магазин).
+    #[serde(default)]
+    pub expires_at: Option<String>,
+    /// Магазин ответил «срок закончился» (410).
+    #[serde(default)]
+    pub expired: bool,
+    /// Когда срок последний раз сверяли с магазином (секунды Unix).
+    #[serde(default)]
+    pub checked_at: Option<u64>,
+}
+
+/// Купленный прокси для пула.
+#[derive(Debug, Clone, Default)]
+pub struct UpsertItem {
+    pub url: String,
+    pub label: Option<String>,
+    pub meta: Option<ShopMeta>,
 }
 
 fn settings_path() -> Result<PathBuf, String> {
@@ -583,6 +660,97 @@ fn replace_pool(s: &mut Settings, urls: Vec<String>) {
     retain_labels(s);
 }
 
+/// Адрес прокси без логина и пароля (`host:port`, хост в нижнем регистре):
+/// по нему купленный прокси узнаёт уже добавленный.
+pub fn proxy_addr_key(url: &str) -> Option<String> {
+    let t = url.trim();
+    let full = if t.contains("://") { t.to_string() } else { format!("http://{t}") };
+    let u = url::Url::parse(&full).ok()?;
+    // Порт по умолчанию (:80 у http) url не хранит - берём известный.
+    Some(format!("{}:{}", u.host_str()?.to_ascii_lowercase(), u.port_or_known_default()?))
+}
+
+/// Добавить купленные прокси. Тот же адрес уже в пуле - запись меняется на
+/// месте: логин и пароль новые, а имя, резервы, назначения и сайты остаются
+/// за ней. Новый адрес - в конец пула. Имя из магазина ставится, только если
+/// своего у прокси нет; ключ и срок магазина - всегда.
+///
+/// `make_primary`: первый купленный становится основным, и всё, что было
+/// закреплено за основным (Claude, сайты), переходит на него - иначе покупка
+/// во время сбоя основного ничего бы не починила.
+///
+/// Номера записей в пуле - в ответе (по одному на прокси).
+pub fn upsert_pool(s: &mut Settings, items: &[UpsertItem], make_primary: bool) -> Result<Vec<usize>, String> {
+    let mut pool = effective_proxies(s);
+    let mut at = Vec::with_capacity(items.len());
+    for UpsertItem { url, label, meta } in items {
+        let key = proxy_addr_key(url).ok_or("Магазин прислал прокси, который не получилось разобрать")?;
+        let i = match pool.iter().position(|u| proxy_addr_key(u).as_deref() == Some(key.as_str())) {
+            Some(i) => {
+                let old = std::mem::replace(&mut pool[i], url.clone());
+                if old != *url {
+                    if let Some(b) = s.proxy_backups.remove(&old) {
+                        s.proxy_backups.insert(url.clone(), b);
+                    }
+                    if let Some(l) = s.proxy_labels.remove(&old) {
+                        s.proxy_labels.insert(url.clone(), l);
+                    }
+                    if let Some(m) = s.shop_proxies.remove(&old) {
+                        s.shop_proxies.insert(url.clone(), m);
+                    }
+                }
+                i
+            }
+            None => {
+                pool.push(url.clone());
+                pool.len() - 1
+            }
+        };
+        if let Some(l) = label.as_deref().map(str::trim).filter(|l| !l.is_empty()) {
+            s.proxy_labels.entry(url.clone()).or_insert_with(|| l.to_string());
+        }
+        if let Some(m) = meta {
+            s.shop_proxies.insert(url.clone(), m.clone());
+        }
+        at.push(i);
+    }
+    if pool.len() > 5 {
+        return Err(format!(
+            "В программе помещается 5 прокси, а их уже {}. Удалите лишний на странице «Прокси» и откройте ссылку ещё раз",
+            effective_proxies(s).len()
+        ));
+    }
+    if make_primary {
+        if let Some(&first) = at.first().filter(|&&i| i != 0) {
+            // Купленный - на место 0, записи между ними сдвигаются на одну.
+            let shift = |i: usize| if i == first { 0 } else if i < first { i + 1 } else { i };
+            let url = pool.remove(first);
+            pool.insert(0, url);
+            // Закреплённое за основным остаётся за основным (уже новым).
+            for idx in s.proxy_assignments.values_mut() {
+                if *idx != 0 {
+                    *idx = shift(*idx);
+                }
+            }
+            for site in &mut s.sites {
+                site.proxy = site.proxy.map(|i| if i == 0 { 0 } else { shift(i) });
+            }
+            for i in &mut at {
+                *i = shift(*i);
+            }
+        }
+    }
+    // Прокси пула резервом больше не числится (купленный был чьим-то резервом).
+    for list in s.proxy_backups.values_mut() {
+        list.retain(|b| !pool.contains(b));
+    }
+    s.proxy_backups.retain(|_, list| !list.is_empty());
+    s.proxy_url = pool.first().cloned();
+    s.proxies = pool;
+    retain_labels(s);
+    Ok(at)
+}
+
 /// Задать/убрать имя (тэг) прокси. Пустое имя = убрать.
 /// Блокировать ли телеметрию Claude (по умолчанию - да).
 pub fn claude_telemetry_blocked(s: &Settings) -> bool {
@@ -714,6 +882,13 @@ pub fn set_profiles(profiles: Vec<AppProfile>) -> Result<Settings, String> {
     })
 }
 
+pub fn set_env_paused(v: bool) -> Result<Settings, String> {
+    with_settings(|s| {
+        s.env_paused = v;
+        Ok(())
+    })
+}
+
 /// Снимок чужих env-переменных до перезаписи (None = снять снимок).
 pub fn set_saved_proxy_env(
     value: Option<std::collections::HashMap<String, String>>,
@@ -753,7 +928,9 @@ where
         // Отметки о прочтении - только для живых id: файл рассылок может
         // похудеть, а список прочитанного не должен расти вечно.
         let alive: Vec<String> = github.iter().chain(server.iter()).map(|n| n.id.clone()).collect();
-        s.notices_read.retain(|id| id.starts_with("update-") || alive.contains(id));
+        // «banner:<id>» - закрытый баннер: живёт, пока жива запись.
+        s.notices_read
+            .retain(|id| id.starts_with("update-") || alive.contains(id) || id.strip_prefix("banner:").is_some_and(|b| alive.iter().any(|a| a == b)));
         s.notices_toasted.retain(|id| alive.contains(id));
         s.notices_cache = github;
         s.notices_cache_server = server;
@@ -951,6 +1128,104 @@ mod tests {
         assert_eq!(bridge_upstreams(&s), vec!["a", "a2", "x"]);
         assert!(!s.proxy_backups.contains_key("b"));
         assert!(!s.proxy_labels.contains_key("y"), "имя ушедшего резерва убрано");
+    }
+
+    fn item(url: &str, label: Option<&str>) -> UpsertItem {
+        UpsertItem { url: url.into(), label: label.map(Into::into), meta: None }
+    }
+
+    #[test]
+    fn bought_proxy_keeps_shop_meta_and_can_become_primary() {
+        let mut s = Settings::default();
+        let (a, b) = ("http://u:p@1.1.1.1:8000".to_string(), "http://u:p@2.2.2.2:8000".to_string());
+        s.proxies = vec![a.clone(), b.clone()];
+        s.proxy_url = Some(a.clone());
+        s.proxy_assignments.insert("anthropic".into(), 0);
+        s.proxy_assignments.insert("openai".into(), 1);
+        s.sites.push(SiteEntry { proxy: Some(1), ..Default::default() });
+        let meta = ShopMeta { key: "k".into(), expires_at: Some("2026-12-15T00:00:00Z".into()), ..Default::default() };
+        let new = "http://buyer:pw@3.3.3.3:8000".to_string();
+        let it = UpsertItem { url: new.clone(), label: None, meta: Some(meta.clone()) };
+        assert_eq!(upsert_pool(&mut s, &[it], true).unwrap(), vec![0]);
+        assert_eq!(s.proxies, vec![new.clone(), a.clone(), b.clone()]);
+        assert_eq!(s.proxy_url.as_deref(), Some(new.as_str()));
+        assert_eq!(s.proxy_assignments.get("anthropic"), Some(&0), "Claude - на новом основном");
+        assert_eq!(s.proxy_assignments.get("openai"), Some(&2), "закреплённое за другим едет с ним");
+        assert_eq!(s.sites[0].proxy, Some(2));
+        assert_eq!(s.shop_proxies.get(&new), Some(&meta));
+
+        // Тот же адрес с новым паролем - ключ и срок едут за записью.
+        let newer = "http://buyer:pw2@3.3.3.3:8000".to_string();
+        upsert_pool(&mut s, &[item(&newer, None)], false).unwrap();
+        assert_eq!(s.shop_proxies.get(&newer).map(|m| m.key.as_str()), Some("k"));
+        assert!(!s.shop_proxies.contains_key(&new));
+        // Удалили из пула - данные магазина ушли вместе с ним.
+        replace_pool(&mut s, vec![a.clone()]);
+        assert!(s.shop_proxies.is_empty());
+    }
+
+    #[test]
+    fn bought_proxy_updates_same_address_in_place() {
+        let mut s = Settings::default();
+        let old = "http://u:p@185.68.187.138:8000".to_string();
+        s.proxies = vec![old.clone(), "socks5://u:p@93.1.2.3:1080".into()];
+        s.proxy_url = Some(old.clone());
+        s.proxy_labels.insert(old.clone(), "Claude main".into());
+        s.proxy_backups.insert(old.clone(), vec!["http://x:y@5.5.5.5:80".into()]);
+        s.proxy_assignments.insert("anthropic".into(), 0);
+        let new = "http://buyer:pw@185.68.187.138:8000".to_string();
+        let at = upsert_pool(&mut s, &[item(&new, Some("Нидерланды"))], false).unwrap();
+        assert_eq!(at, vec![0]);
+        assert_eq!(s.proxies, vec![new.clone(), "socks5://u:p@93.1.2.3:1080".to_string()]);
+        assert_eq!(s.proxy_url.as_deref(), Some(new.as_str()));
+        assert_eq!(s.proxy_labels.get(&new).map(String::as_str), Some("Claude main"), "своё имя не перетирается");
+        assert!(!s.proxy_labels.contains_key(&old));
+        assert_eq!(s.proxy_backups.get(&new).map(Vec::len), Some(1), "резервы едут за записью");
+        assert_eq!(s.proxy_assignments.get("anthropic"), Some(&0));
+    }
+
+    #[test]
+    fn bought_proxy_is_appended_with_shop_label_and_pool_limit_holds() {
+        let mut s = Settings::default();
+        s.proxies = vec!["http://a:b@1.1.1.1:80".into()];
+        s.proxy_backups.insert("http://a:b@1.1.1.1:80".into(), vec!["http://n:m@2.2.2.2:80".into()]);
+        let at = upsert_pool(&mut s, &[item("http://n:m@2.2.2.2:80", Some(" Финляндия "))], false).unwrap();
+        assert_eq!(at, vec![1]);
+        assert_eq!(s.proxy_labels.get("http://n:m@2.2.2.2:80").map(String::as_str), Some("Финляндия"));
+        assert!(s.proxy_backups.is_empty(), "бывший резерв стал прокси пула");
+
+        let mut full = Settings::default();
+        full.proxies = (1..=5).map(|i| format!("http://u:p@10.0.0.{i}:80")).collect();
+        let before = full.proxies.clone();
+        assert!(upsert_pool(&mut full.clone(), &[item("http://u:p@10.0.0.9:80", None)], false).is_err());
+        // Обновление того же адреса в полном пуле - можно.
+        assert_eq!(upsert_pool(&mut full, &[item("http://q:w@10.0.0.3:80", None)], false).unwrap(), vec![2]);
+        assert_eq!(full.proxies.len(), before.len());
+        assert_eq!(full.proxies[2], "http://q:w@10.0.0.3:80");
+    }
+
+    #[test]
+    fn replaced_proxy_keeps_its_place_name_backups_and_assignments() {
+        let mut s = Settings::default();
+        s.proxies = vec!["a".into(), "b".into()];
+        s.proxy_url = Some("a".into());
+        s.proxy_backups.insert("a".into(), vec!["x".into()]);
+        s.proxy_labels.insert("a".into(), "Основной".into());
+        s.proxy_assignments.insert("anthropic".into(), 0);
+        s.shop_proxies.insert("a".into(), ShopMeta { key: "k".into(), ..Default::default() });
+        swap_proxy(&mut s, "a", "a-new".into()).unwrap();
+        assert_eq!(s.shop_proxies.get("a-new").map(|m| m.key.as_str()), Some("k"), "ключ магазина едет за записью");
+        assert_eq!(s.proxies, vec!["a-new", "b"]);
+        assert_eq!(s.proxy_url.as_deref(), Some("a-new"));
+        assert_eq!(s.proxy_backups.get("a-new"), Some(&vec!["x".to_string()]));
+        assert_eq!(s.proxy_labels.get("a-new").map(String::as_str), Some("Основной"));
+        assert_eq!(s.proxy_assignments.get("anthropic"), Some(&0));
+        // Резерв меняется в своём списке.
+        swap_proxy(&mut s, "x", "x-new".into()).unwrap();
+        assert_eq!(s.proxy_backups.get("a-new"), Some(&vec!["x-new".to_string()]));
+        // Нельзя заменить на уже существующий, и нельзя заменить чужой.
+        assert!(swap_proxy(&mut s, "b", "a-new".into()).is_err());
+        assert!(swap_proxy(&mut s, "zzz", "q".into()).is_err());
     }
 
     #[test]

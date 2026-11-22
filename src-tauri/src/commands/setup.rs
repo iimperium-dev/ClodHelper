@@ -41,7 +41,7 @@ pub async fn detect_cursor() -> Result<CursorInfo, String> {
 
 #[tauri::command]
 pub async fn launch_claude_desktop() -> Result<(), String> {
-    tokio::task::spawn_blocking(crate::claude_desktop::launch)
+    tokio::task::spawn_blocking(|| crate::apps::launch(&crate::claude_desktop::preset()))
         .await
         .map_err(|e| format!("Внутренняя ошибка: {e}"))?
 }
@@ -791,6 +791,8 @@ pub fn ui_log(level: String, message: String) {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
+    // Ключ магазина - доступ к кабинету покупателя: в журнал не пишем.
+    let message = crate::telemetry_scrub::mask_shop_keys(&message);
     let line: String = message.chars().take(2000).collect();
     let level: String = level.chars().take(8).collect();
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {

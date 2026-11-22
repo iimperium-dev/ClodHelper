@@ -15,7 +15,11 @@ import { StatusOrb } from "../components/StatusOrb";
 import { NumberTicker } from "../components/NumberTicker";
 import { Sparkline } from "../components/Sparkline";
 import { UpdateBanner } from "../components/UpdateBanner";
+import { PromoBanner } from "../components/PromoBanner";
 import { BridgeFileNotice } from "../components/BridgeFileNotice";
+import { VpnNotice } from "../components/VpnNotice";
+import { hostPort, loadGeoCache } from "./Proxies";
+import { ACTION_LABEL, causeOf, isAuthReason, setProxyIntent, type CauseAction } from "../lib/proxyCause";
 import {
   bridgeTaskRegister,
   bridgeUpdate,
@@ -28,7 +32,9 @@ import {
   proxyAssignmentsGet,
   proxyLabelsGet,
   sitesGet,
+  shopMetaGet,
 } from "../lib/api";
+import { isExpired } from "../lib/shopClaim";
 import { formatUptime, isUsable, useStatus, type ProxyState } from "../lib/status";
 import type { AppProfileStatus, PrivacyReport, ShimTestResult, SiteEntry } from "../lib/types";
 import { fadeInUp, staggerContainer } from "../lib/motion";
@@ -67,18 +73,21 @@ function pinnedTo(pins: Pins | null, i: number): string[] {
   ];
 }
 
-/** Что значит отказ прокси для пользователя - одной строкой. */
-function impactOf(p: ProxyState, i: number, exit: number | null, allMode: boolean, pins: Pins | null, proxies: ProxyState[]): string {
+/**
+ * Что значит отказ прокси для пользователя - одной строкой. null - ничего
+ * не задето: строку о последствиях не показываем вовсе.
+ */
+function impactOf(p: ProxyState, i: number, exit: number | null, allMode: boolean, pins: Pins | null, proxies: ProxyState[]): { text: string; hurts: boolean } | null {
   // Резерв: сейчас ничего не ломает, но подстраховки у своего прокси нет.
   if (p.backupOf !== undefined) {
     const owner = proxies[p.backupOf];
-    return owner ? `Резерв для ${owner.host}: если тот упадёт, этот не подхватит` : "Резервный прокси";
+    return { text: owner ? `Резерв для ${owner.host}: подстраховки сейчас нет` : "Резервный прокси", hurts: false };
   }
   const users = pinnedTo(pins, i);
   // Подменён живым резервом - всё работает, но с другого IP.
   if (p.coveredBy !== undefined) {
     const sub = proxies[p.coveredBy];
-    return `Подменяет резерв ${sub?.host ?? ""}${users.length ? ` - ${users.slice(0, 4).join(", ")} работают через него` : ""}`;
+    return { text: `Работает через резерв ${sub?.host ?? ""}`, hurts: false };
   }
   const parts: string[] = [];
   if (exit === i) {
@@ -88,8 +97,7 @@ function impactOf(p: ProxyState, i: number, exit: number | null, allMode: boolea
     parts.push(alt ? `Основной: «Авто» сейчас идёт через ${alt.host}` : "Основной, а запасных живых нет");
   }
   if (users.length) parts.push(`${p.state === "down" ? "Не работают" : "Сбоят"}: ${users.slice(0, 4).join(", ")}${users.length > 4 ? "…" : ""}`);
-  if (!parts.length) parts.push("Сейчас через него ничего не идёт");
-  return parts.join(" · ");
+  return parts.length ? { text: parts.join(" · "), hurts: true } : null;
 }
 
 /** "N сек/мин/ч назад" для списка ошибок (t - секунды-от-старта моста). */
@@ -101,7 +109,11 @@ function agoLabel(uptimeSec: number, t: number): string {
 }
 
 /** Техническую строку моста - в короткую человеческую причину. */
-function humanError(msg: string): string {
+function humanError(msg: string, expiredHosts: string[] = []): string {
+  // Прокси из магазина с прошедшим сроком: 407 и молчание - из-за срока.
+  if (expiredHosts.some((h) => msg.includes(h)) && /логин\/пароль|407|не отвечает|молчит/.test(msg)) {
+    return "Срок купленного прокси закончился";
+  }
   if (/unreachable|No route|os error 51|os error 65/i.test(msg)) return "Не было интернета на Mac";
   if (/логин\/пароль|407/.test(msg)) return "Прокси не принял логин или пароль";
   if (/молчит на CONNECT|нет ответа на TCP|не отвечает/.test(msg)) return "Прокси не отвечал";
@@ -115,10 +127,11 @@ function humanError(msg: string): string {
 function errorGroups(
   errors: { t: number; msg: string }[],
   uptimeSec: number,
+  expiredHosts: string[] = [],
 ): { text: string; count: number; ago: string; fresh: boolean }[] {
   const map = new Map<string, { text: string; count: number; t: number }>();
   for (const e of errors) {
-    const text = humanError(e.msg);
+    const text = humanError(e.msg, expiredHosts);
     const g = map.get(text);
     if (g) {
       g.count += 1;
@@ -168,25 +181,38 @@ export function Overview({ onOpenProxies }: Props) {
   const [updatingBridge, setUpdatingBridge] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [errorsOpen, setErrorsOpen] = useState(false);
+  // Хосты прокси из магазина с прошедшим сроком - для причин сбоев.
+  const [expiredHosts, setExpiredHosts] = useState<string[]>([]);
+  useEffect(() => {
+    void shopMetaGet()
+      .then((m) =>
+        setExpiredHosts(
+          Object.entries(m)
+            .filter(([, info]) => isExpired(info))
+            .map(([url]) => url.slice(url.lastIndexOf("@") + 1)),
+        ),
+      )
+      .catch(() => {});
+  }, []);
 
   const loading = status === null;
   const running = status?.running ?? false;
-  // Прокси с проблемами: каждый - отдельной строкой с последствиями.
-  const issues = proxies.map((p, i) => ({ p, i })).filter(({ p }) => p.state === "down" || p.state === "unstable");
-  const issueKey = issues.map(({ i, p }) => `${i}:${p.state}`).join(",");
-  // Подпись под заголовком: что с прокси - одной фразой.
-  const lostCount = issues.filter(({ p }) => p.backupOf === undefined && p.coveredBy === undefined).length;
-  const issuesNote = !issues.length
-    ? ""
-    : lostCount > 1
-      ? ` · ${lostCount} прокси с проблемами`
-      : lostCount === 1
-        ? ` · прокси ${issues.find(({ p }) => p.backupOf === undefined && p.coveredBy === undefined)!.p.state === "down" ? "не работает" : "сбоит"}`
-        : issues.some(({ p }) => p.coveredBy !== undefined)
-          ? " · работает резервный прокси"
-          : " · резервный прокси не отвечает";
+  // Страна прокси - из кэша «Прокси» (проверка гео идёт там).
+  const [geo] = useState(loadGeoCache);
+  const inRussia = (p: ProxyState) => geo[hostPort(p.url)]?.country_code?.toUpperCase() === "RU";
   // Кто за каким прокси закреплён - нужно только при проблемах.
   const [pins, setPins] = useState<Pins | null>(null);
+  // Claude ходит через закреплённый за ним прокси, иначе - через основной.
+  const carriesClaude = (i: number) => (pins?.assign.anthropic ?? 0) === i;
+  // Прокси с проблемами: каждый - отдельной строкой с последствиями.
+  // Прокси в России работает, но Claude через него не откроется.
+  const issues = proxies
+    .map((p, i) => ({ p, i, ru: p.backupOf === undefined && p.state !== "down" && inRussia(p) && carriesClaude(i) }))
+    .filter(({ p, ru }) => p.state === "down" || p.state === "unstable" || ru);
+  const issueKey = proxies
+    .map((p, i) => (p.state === "down" || p.state === "unstable" || inRussia(p) ? `${i}:${p.state}` : ""))
+    .filter(Boolean)
+    .join(",");
   useEffect(() => {
     if (!issueKey) return;
     void Promise.all([
@@ -196,6 +222,10 @@ export function Overview({ onOpenProxies }: Props) {
       proxyLabelsGet().catch(() => ({})),
     ]).then(([assign, sites, apps, labels]) => setPins({ assign, sites, apps, labels }));
   }, [issueKey]);
+  // Раскрытая строка проблемы (URL прокси): причина и одна кнопка.
+  const [openIssue, setOpenIssue] = useState<string | null>(null);
+  const [causeBusy, setCauseBusy] = useState<string | null>(null);
+  const poolSize = proxies.filter((p) => p.backupOf === undefined).length;
   const bridgeOutdated = running && (versions?.outdated ?? false);
 
   const oldBridge =
@@ -242,6 +272,28 @@ export function Overview({ onOpenProxies }: Props) {
       setActionError(String(e));
     } finally {
       setBusy(null);
+    }
+  };
+
+  /** Кнопка под причиной поломки. */
+  const runCause = async (action: CauseAction, url: string) => {
+    if (action === "replace" || action === "addSpare") {
+      setProxyIntent(action === "replace" ? { kind: "replace", url } : { kind: "add" });
+      onOpenProxies();
+      return;
+    }
+    setCauseBusy(url);
+    setActionError(null);
+    try {
+      if (action === "restart") {
+        await shimRestart();
+        await refresh();
+      }
+      await refreshPoolPing();
+    } catch (e) {
+      setActionError(String(e));
+    } finally {
+      setCauseBusy(null);
     }
   };
 
@@ -314,7 +366,7 @@ export function Overview({ onOpenProxies }: Props) {
           </h1>
           <p className="tnum text-[12px] text-vb-silver-faint">
             {running
-              ? `работает ${formatUptime(health?.uptime_sec ?? status?.uptime_sec)}${issuesNote}`
+              ? `работает ${formatUptime(health?.uptime_sec ?? status?.uptime_sec)}`
               : loading
                 ? " "
                 : bridgeFile && bridgeFile.kind !== "restored"
@@ -372,6 +424,15 @@ export function Overview({ onOpenProxies }: Props) {
 
       {/* Антивирус удалил мост: восстановлен сам / инструкция */}
       <BridgeFileNotice className="mt-4" />
+
+      {/* VPN рядом: подсказка, только когда есть что чинить */}
+      {running && (
+        <VpnNotice
+          className="mt-4"
+          problems={issues.some(({ p, ru }) => !ru && !isAuthReason(p.reason)) || (testResult !== null && !testResult.ok)}
+          hosts={[...new Set(proxies.map((p) => p.host).filter(Boolean))]}
+        />
+      )}
 
       {/* ── Выход в интернет: единственное место с IP ── */}
       {running && (
@@ -435,40 +496,101 @@ export function Overview({ onOpenProxies }: Props) {
               {testResult.error}
             </p>
           )}
-          {/* Прокси с проблемами - каждый отдельно: что с ним и кого задевает */}
+          {/* Прокси с проблемами: одна тихая строка на прокси. Вторая строка -
+              только если что-то правда задето (выход, сервисы, сайты). По клику -
+              причина простыми словами и одна кнопка, что с этим сделать. */}
           {issues.length > 0 && (
-            <ul className="divide-y divide-vb-border/50 border-t border-vb-border/70">
-              {issues.map(({ p, i }) => {
+            <ul className="border-t border-vb-border/70 py-1">
+              {issues.map(({ p, i, ru }) => {
                 const name = pins?.labels[p.url];
+                const impact = ru
+                  ? { text: "Claude через него не откроется", hurts: true }
+                  : impactOf(p, i, exitIndex, allMode, pins, proxies);
+                const hurts = impact?.hurts ?? false;
+                const open = openIssue === p.url;
+                const cause = causeOf(p, { inRussia: ru, canAddSpare: poolSize < 5 });
+                const busyHere = causeBusy === p.url;
                 return (
-                  <li key={p.url || i} className="flex items-start gap-2.5 px-4 py-2.5">
-                    <AlertCircle
-                      className={cn(
-                        "mt-0.5 h-3.5 w-3.5 shrink-0",
-                        p.state === "down" && p.coveredBy === undefined && p.backupOf === undefined
-                          ? "text-vb-loss"
-                          : "text-vb-warn",
-                      )}
-                    />
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-[12px] text-vb-fg">
-                        {name ? `${name} · ` : ""}
-                        {p.backupOf !== undefined && "резерв "}
-                        <span className="font-mono">{p.host}</span>{" "}
-                        {p.state === "down" ? "не работает" : "нестабилен"}
-                      </span>
-                      {p.reason && <span className="block text-[11px] leading-snug text-vb-silver-faint">{p.reason}</span>}
-                      <span className="block text-[11px] leading-snug text-vb-silver">
-                        {impactOf(p, i, exitIndex, allMode, pins, proxies)}
-                      </span>
-                    </span>
+                  <li key={p.url || i} data-testid="proxy-issue">
                     <button
                       type="button"
-                      onClick={onOpenProxies}
-                      className="shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-vb-silver-dim transition-colors hover:bg-vb-surface-2 hover:text-vb-silver"
+                      onClick={() => setOpenIssue(open ? null : p.url)}
+                      aria-expanded={open}
+                      className="group flex w-full items-start gap-3 px-4 py-2 text-left transition-colors hover:bg-white/[0.02]"
                     >
-                      Прокси →
+                      <span
+                        className={cn(
+                          "mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full",
+                          // Цвет - как на «Прокси»: не отвечает - красный, иначе жёлтый.
+                          p.state === "down" && !ru ? "bg-vb-loss" : "bg-vb-warn",
+                          !hurts && "opacity-80",
+                        )}
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-baseline gap-2 text-[12px]">
+                          <span className="min-w-0 truncate">
+                            {name && <span className="text-vb-silver">{name} </span>}
+                            <span className="font-mono text-vb-silver-dim">{p.host}</span>
+                          </span>
+                          <span className={cn("ml-auto shrink-0", p.state === "down" && !ru ? "text-vb-loss/80" : "text-vb-warn/80")}>
+                            {p.backupOf !== undefined ? "резерв " : ""}
+                            {ru ? "в России" : p.state === "down" ? "не отвечает" : "сбоит"}
+                          </span>
+                          <ChevronDown
+                            className={cn(
+                              "h-3.5 w-3.5 shrink-0 self-center text-vb-silver-faint/60 transition-transform",
+                              open && "rotate-180",
+                            )}
+                          />
+                        </span>
+                        {impact && (
+                          <span
+                            className={cn(
+                              "mt-0.5 block text-[11px] leading-snug",
+                              hurts ? "text-vb-warn/90" : "text-vb-silver-faint",
+                            )}
+                          >
+                            {impact.text}
+                          </span>
+                        )}
+                      </span>
                     </button>
+                    <AnimatePresence initial={false}>
+                      {open && (
+                        <motion.div
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: "auto" }}
+                          exit={{ opacity: 0, height: 0 }}
+                          transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+                          className="overflow-hidden"
+                        >
+                          <div className="pb-3 pl-[34px] pr-4">
+                            <p data-testid="proxy-cause" className="text-[12px] leading-snug text-vb-silver">
+                              {cause.text}
+                            </p>
+                            <div className="mt-2 flex flex-wrap items-center gap-2">
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => void runCause(cause.action, p.url)}
+                                disabled={busyHere || busy !== null}
+                              >
+                                {busyHere && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                                {ACTION_LABEL[cause.action]}
+                              </Button>
+                              <button
+                                type="button"
+                                onClick={onOpenProxies}
+                                className="flex items-center gap-0.5 rounded-md px-1.5 py-1 text-[12px] text-vb-silver-faint transition-colors hover:text-vb-silver"
+                              >
+                                Все прокси
+                                <ChevronRight className="h-3 w-3" />
+                              </button>
+                            </div>
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                   </li>
                 );
               })}
@@ -483,7 +605,7 @@ export function Overview({ onOpenProxies }: Props) {
           {(() => {
             const total = health.via_upstream + health.via_direct;
             const share = total > 0 ? (health.via_upstream / total) * 100 : 0;
-            const groups = errorGroups(health.last_errors ?? [], health.uptime_sec);
+            const groups = errorGroups(health.last_errors ?? [], health.uptime_sec, expiredHosts);
             const lastAgo = groups[0]?.ago;
             return (
               <>
@@ -496,6 +618,10 @@ export function Overview({ onOpenProxies }: Props) {
                       transition={{ type: "spring", bounce: 0, duration: 0.6 }}
                     />
                   </div>
+                  <span className="tnum flex shrink-0 items-center gap-1.5 text-[12px] text-vb-silver-faint" title="Открытых соединений">
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-vb-emerald" />
+                    <NumberTicker value={health.active} /> сейчас
+                  </span>
                   <Sparkline data={history} width={72} height={20} className="shrink-0 opacity-80" />
                 </div>
                 <div className="tnum mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 whitespace-nowrap text-[12px] text-vb-silver-faint">
@@ -511,10 +637,6 @@ export function Overview({ onOpenProxies }: Props) {
                     </span>{" "}
                     напрямую
                   </span>
-                  <span className="flex items-center gap-1.5">
-                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-vb-emerald" />
-                    <NumberTicker value={health.active} /> сейчас
-                  </span>
                   <button
                     type="button"
                     onClick={() => groups.length > 0 && setErrorsOpen((v) => !v)}
@@ -527,7 +649,7 @@ export function Overview({ onOpenProxies }: Props) {
                           : "hover:text-vb-silver",
                     )}
                   >
-                    {groups.length > 0 ? `перебои · ${lastAgo}` : "без сбоев"}
+                    {groups.length > 0 ? `перебои ${lastAgo}` : "без сбоев"}
                     {groups.length > 0 && (
                       <ChevronDown className={cn("h-3 w-3 transition-transform", errorsOpen && "rotate-180")} />
                     )}
@@ -587,6 +709,9 @@ export function Overview({ onOpenProxies }: Props) {
       )}
 
       <UpdateBanner compact />
+
+      {/* Баннер из админки (объявление с оформлением) */}
+      <PromoBanner className="mt-3" />
 
       {health && (
         <p className="mt-4 text-center font-mono text-[10px] text-vb-silver-faint/70">

@@ -18,6 +18,7 @@ import {
   proxiesPing,
   shimStatus,
   systemPacStatus,
+  vpnStatus,
 } from "./api";
 import type {
   BridgeFileIssue,
@@ -28,6 +29,7 @@ import type {
   ProxyPing,
   ShimStatus,
   SystemPacStatus,
+  VpnStatus,
 } from "./types";
 
 const POLL_INTERVAL_MS = 5_000;
@@ -42,6 +44,8 @@ const POOL_RECHECK_MS = 20_000;
 /** Скан процессов (shimStatus) при живом /healthz - раз в N тиков (~30с):
     healthz и так доказывает, что мост жив, а скан - самый дорогой вызов. */
 const PROCESS_SCAN_EVERY_TICKS = 6;
+/** VPN рядом (адаптеры, маршруты, процессы) - раз в N тиков (~30с). */
+const VPN_CHECK_EVERY_TICKS = 6;
 /** Окно оценки стабильности прокси: последние N тиков (~1 мин). */
 const QUALITY_WINDOW = 12;
 /** «Нестабилен»: доля отказов в окне выше порога при ≥2 отказах. */
@@ -204,6 +208,10 @@ interface StatusContextValue {
   setPac: (v: SystemPacStatus | null) => void;
   /** Автонастройку включили, а другая программа её сбросила - сайты не работают. */
   sitesBroken: boolean;
+  /** С какого момента (мс) не работает ни один прокси пула; null - работают. */
+  poolDownSince: number | null;
+  /** VPN рядом с мостом (null - ещё не проверяли). */
+  vpn: VpnStatus | null;
 }
 
 const StatusContext = createContext<StatusContextValue | null>(null);
@@ -232,6 +240,7 @@ export function StatusProvider({ children }: { children: ReactNode }) {
   const [poolPing, setPoolPing] = useState<ProxyPing[]>([]);
   const [bridgeFile, setBridgeFile] = useState<BridgeFileIssue | null>(null);
   const [pac, setPac] = useState<SystemPacStatus | null>(null);
+  const [vpn, setVpn] = useState<VpnStatus | null>(null);
   const lastTotal = useRef<number | null>(null);
   /** Поколение refresh: устаревший ответ (интервальный тик, обогнанный ручным
       refresh после действия) не должен перезатирать более свежее состояние -
@@ -398,6 +407,10 @@ export function StatusProvider({ children }: { children: ReactNode }) {
     if (full || t % PAC_CHECK_EVERY_TICKS === 0) {
       slow.push(systemPacStatus().then((v) => fresh() && setPac(v)).catch(() => {}));
     }
+    // VPN включают и выключают в любой момент - смотрим раз в ~30 с.
+    if (full || t % VPN_CHECK_EVERY_TICKS === 0) {
+      slow.push(vpnStatus().then((v) => fresh() && setVpn(v)).catch(() => {}));
+    }
     // Мост не отвечает - не удалил ли его антивирус (событие могло прийти,
     // пока окна не было).
     if (full || !healthOk) {
@@ -432,6 +445,12 @@ export function StatusProvider({ children }: { children: ReactNode }) {
   const proxies = proxyStatesOf(poolPing, health, quality);
   const orb = orbStateOf(status, proxies);
   const orbPulse = orbPulseOf(orb, proxies);
+  // Отсчёт «прокси не работает уже N минут» - для баннера по ситуации.
+  const [poolDownSince, setPoolDownSince] = useState<number | null>(null);
+  const poolDown = orb === "warn";
+  useEffect(() => {
+    setPoolDownSince((t) => (poolDown ? t ?? Date.now() : null));
+  }, [poolDown]);
 
   return (
     <StatusContext.Provider
@@ -457,6 +476,8 @@ export function StatusProvider({ children }: { children: ReactNode }) {
         pac,
         setPac,
         sitesBroken: !!pac?.supported && pac.enabled && !pac.active,
+        poolDownSince,
+        vpn,
       }}
     >
       {children}

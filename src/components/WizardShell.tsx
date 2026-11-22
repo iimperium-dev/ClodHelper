@@ -3,21 +3,24 @@ import { Check } from "lucide-react";
 import type { WizardStep } from "../lib/types";
 import { cn } from "../lib/cn";
 
-const STEPS: { id: WizardStep; label: string }[] = [
-  { id: "proxy", label: "Прокси" },
-  { id: "install", label: "Настройка" },
-  { id: "done", label: "Готово" },
-];
+const LABELS: Record<WizardStep, string> = {
+  proxy: "Прокси",
+  install: "Настройка",
+  apps: "Приложения",
+  done: "Готово",
+};
 
 interface Props {
   step: WizardStep;
+  /** Шаги этого прохода: «Приложения» - только если чего-то не хватает. */
+  steps?: WizardStep[];
   children: ReactNode;
 }
 
 /*
   Каркас мастера первого запуска.
-  - Шапка в одну строку: имя программы слева, «Шаг N из 3» справа; под ней
-    три сегмента прогресса с подписями. Заливка сегмента - transform
+  - Шапка в одну строку: имя программы слева, «Шаг N из M» справа; под ней
+    сегменты прогресса с подписями (3 или 4). Заливка сегмента - transform
     (scaleX), не ширина: без перерисовки раскладки.
   - Шаг въезжает CSS-анимацией (.wizard-enter) со стороны движения: вперёд -
     справа, назад - слева. Не framer AnimatePresence: в App.tsx описано, как
@@ -28,7 +31,8 @@ interface Props {
   - Кнопки шага - в <WizardFooter>: прилипают к низу прокрутки, на
     маленьком окне всегда видны.
 */
-export function WizardShell({ step, children }: Props) {
+export function WizardShell({ step, steps = ["proxy", "install", "done"], children }: Props) {
+  const STEPS = steps.map((id) => ({ id, label: LABELS[id] }));
   const idx = STEPS.findIndex((s) => s.id === step);
   const prev = useRef(idx);
   const dir = idx >= prev.current ? 1 : -1;
@@ -53,7 +57,11 @@ export function WizardShell({ step, children }: Props) {
             Шаг {idx + 1} из {STEPS.length}
           </span>
         </div>
-        <ol aria-label="Шаги настройки" className="mt-3 grid grid-cols-3 gap-2">
+        <ol
+          aria-label="Шаги настройки"
+          className="mt-3 grid gap-2"
+          style={{ gridTemplateColumns: `repeat(${STEPS.length}, minmax(0, 1fr))` }}
+        >
           {STEPS.map((s, i) => {
             const done = i < idx;
             const current = i === idx;

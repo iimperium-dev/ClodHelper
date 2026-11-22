@@ -236,6 +236,42 @@ pub async fn notices_list() -> Result<Vec<crate::notices::NoticeItem>, String> {
         .map_err(|e| format!("Внутренняя ошибка: {e}"))
 }
 
+/// Баннер на «Обзоре»: действующий или None.
+#[tauri::command]
+pub async fn notices_banners() -> Vec<crate::notices::BannerView> {
+    tokio::task::spawn_blocking(|| {
+        let s = crate::settings::load();
+        // Заодно убрать из кэша файлы снятых баннеров.
+        crate::media::prune(&crate::notices::media_keys(&s));
+        crate::notices::active_banners(&s)
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// Баннеры для мастера: до согласия на статистику - один запрос только о
+/// них (версия и система), после - из обычного кэша.
+#[tauri::command]
+pub async fn notices_setup_banners() -> Vec<crate::notices::BannerView> {
+    crate::notices::setup_banners().await
+}
+
+/// Фото и видео баннера: скачать в кэш (с проверкой суммы) и вернуть пути.
+#[tauri::command]
+pub async fn banner_media(keys: Vec<String>) -> std::collections::HashMap<String, String> {
+    crate::media::ensure_many(keys).await
+}
+
+/// Закрыть баннер крестиком: больше не показывать.
+#[tauri::command]
+pub async fn notices_banner_dismiss(app: AppHandle, id: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || crate::settings::mark_notices_read(&[format!("banner:{id}")]))
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))??;
+    let _ = app.emit("notices:changed", crate::notices::unread());
+    Ok(())
+}
+
 /// Отметить прочитанными (пустой список - все).
 #[tauri::command]
 pub async fn notices_mark_read(app: AppHandle, ids: Vec<String>) -> Result<Vec<crate::notices::NoticeItem>, String> {

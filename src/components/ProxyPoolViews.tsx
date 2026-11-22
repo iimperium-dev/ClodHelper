@@ -5,6 +5,8 @@ import { CountryFlag } from "./CountryFlag";
 import { CopyIp } from "../pages/Proxies";
 import type { ProxyLive } from "../lib/status";
 import { cn } from "../lib/cn";
+import { causeLabel, causeOf, isAuthReason } from "../lib/proxyCause";
+import type { ProxyState } from "../lib/status";
 
 /* ───────────────────────── Модель строки ───────────────────────── */
 
@@ -34,6 +36,8 @@ export interface PoolRow {
   open: boolean;
   /** Ждёт подтверждения удаления: текст вопроса. */
   confirm?: string;
+  /** Куплен в магазине Clod Helper: срок («до 15 декабря») и истёк ли он. */
+  shop?: { until: string | null; expired: boolean };
 }
 
 export interface PoolActions {
@@ -45,12 +49,16 @@ export interface PoolActions {
   remove: (i: number) => void;
   cancelDelete: () => void;
   makePrimary: (i: number) => void;
+  /** «Продлить» прокси из магазина: кабинет покупателя в браузере. */
+  renew: (url: string) => void;
   editing: number | null;
   tagInput: string;
   setTagInput: (v: string) => void;
   startEdit: (i: number, url: string) => void;
   saveTag: (url: string) => void;
   cancelEdit: () => void;
+  /** Вставить новый логин и пароль для прокси. */
+  replace: (url: string) => void;
   /** Панель резервов под прокси (раскрытие - по `open`). */
   backupsPanel: (row: PoolRow) => ReactNode;
 }
@@ -91,18 +99,73 @@ const statusTitle = (r: PoolRow) =>
 
 /** Причина «не работает / сбоит» - одной тихой строкой под именем; полный
     текст - в подсказке и в раскрытой строке. Цвет говорит точка слева. */
-function Problem({ row }: { row: PoolRow }) {
-  if (!(row.live === "down" || row.live === "unstable") || !row.reason) return null;
-  const full =
-    (row.live === "down" ? "Не работает: " : "Сбоит: ") +
-    row.reason.charAt(0).toLowerCase() +
-    row.reason.slice(1) +
-    (row.coverHost ? ` - подменяет резерв ${row.coverHost}` : "");
-  const short = row.live === "down" ? (row.coverHost ? "Не отвечает, работает резерв" : "Не отвечает") : "Сбоит";
+function Problem({ row, a }: { row: PoolRow; a: PoolActions }) {
+  // Срок прокси из магазина прошёл, и он не отвечает - дело в сроке, а не в
+  // логине и пароле.
+  if (row.shop?.expired && row.live === "down" && !row.coverHost) {
+    return (
+      <div className="mt-1 flex min-w-0 items-center gap-2 text-[11px] leading-snug">
+        <span className="truncate text-vb-loss">Срок закончился</span>
+        <RenewBtn row={row} a={a} />
+      </div>
+    );
+  }
+  // Свёрнуто причина видна справа, вместо цифр; раскрыто - здесь, одной
+  // понятной фразой с советом.
+  if (!row.open || !(row.live === "down" || row.live === "unstable") || !row.reason) return null;
+  const auth = isAuthReason(row.reason);
+  const text =
+    causeOf({ state: row.live, reason: row.reason } as ProxyState, { canAddSpare: false }).text +
+    (row.coverHost ? ` Пока работает резерв ${row.coverHost}.` : "");
   return (
-    <div title={full} className="mt-1 truncate text-[11px] leading-snug text-vb-silver-dim">
-      {short}
-      {row.open && <span className="text-vb-silver-faint"> - {row.reason.charAt(0).toLowerCase() + row.reason.slice(1)}</span>}
+    <>
+      <div className="mt-2 max-w-[46ch] text-[11px] leading-snug text-vb-silver-dim">{text}</div>
+      {row.open && auth && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            a.replace(row.url);
+          }}
+          className="mt-1 text-[11px] text-vb-silver underline decoration-vb-silver-faint/60 underline-offset-2 transition-colors hover:text-vb-fg"
+        >
+          Заменить пароль
+        </button>
+      )}
+    </>
+  );
+}
+
+function RenewBtn({ row, a }: { row: PoolRow; a: PoolActions }) {
+  return (
+    <button
+      type="button"
+      onClick={() => a.renew(row.url)}
+      className="shrink-0 rounded font-medium text-vb-emerald transition-colors hover:text-vb-emerald-bright"
+    >
+      Продлить
+    </button>
+  );
+}
+
+/** «Из магазина · до 15 декабря» - строкой под именем. */
+function ShopLine({ row, a }: { row: PoolRow; a: PoolActions }) {
+  if (!row.shop || (row.shop.expired && row.live === "down" && !row.coverHost)) return null;
+  return (
+    <div className="mt-1 flex min-w-0 items-center gap-1.5 whitespace-nowrap text-[11px] leading-none text-vb-silver-faint">
+      <span>Из магазина</span>
+      {row.shop.until && (
+        <>
+          <span aria-hidden="true">·</span>
+          <span className={cn(row.shop.expired && "text-vb-warn")}>{row.shop.expired ? "срок закончился" : row.shop.until}</span>
+        </>
+      )}
+      {row.shop.expired && (
+        <>
+          <span aria-hidden="true">·</span>
+          <RenewBtn row={row} a={a} />
+        </>
+      )}
     </div>
   );
 }
@@ -377,15 +440,16 @@ function RowA({ row, a }: { row: PoolRow; a: PoolActions }) {
         </span>
         <div className="min-w-0 flex-1">
           <NameField row={row} a={a} />
-          <Problem row={row} />
+          <ShopLine row={row} a={a} />
           <div className="mt-1 flex min-w-0 items-center gap-1.5 whitespace-nowrap text-[11px] leading-none text-vb-silver-faint">
             <Where row={row} />
-            {row.backups > 0 && (
+            {row.backups > 0 && !(row.live === "down" && row.coverHost) && (
               <span className={cn("ml-1 shrink-0", row.coverHost ? "text-vb-warn" : "")}>
                 · {row.coverHost ? "работает резерв" : backupsLabel(row.backups)}
               </span>
             )}
           </div>
+          <Problem row={row} a={a} />
         </div>
         {/* Цифры ↔ кнопки: один и тот же слот, сменяются при наведении */}
         <div className="relative flex h-9 w-[132px] shrink-0 items-center justify-end">
@@ -396,13 +460,26 @@ function RowA({ row, a }: { row: PoolRow; a: PoolActions }) {
                 "group-focus-within:-translate-y-0.5 group-focus-within:opacity-0 group-hover:-translate-y-0.5 group-hover:opacity-0",
             )}
           >
-            <span className={cn("tnum font-mono", pingWarn(row) ? "text-vb-warn" : row.live === "down" ? "text-vb-loss" : "text-vb-silver")}>
-              {pingText(row)}
-            </span>
-            {row.speed || row.speedBusy ? (
-              <SpeedMeter entry={row.speed} busy={row.speedBusy} />
+            {row.live === "down" && !(row.shop?.expired && !row.coverHost) ? (
+              // Не работает: вместо прочерков - что случилось.
+              <>
+                {/* Тихо, в размер цифр соседних строк: точка слева уже красная. */}
+                <span className="text-vb-loss/75">{causeLabel(row.reason).toLowerCase()}</span>
+                {row.coverHost && <span className="text-vb-warn">работает резерв</span>}
+              </>
             ) : (
-              <span className="text-vb-silver-faint/70">скорость -</span>
+              <>
+                <span className={cn("tnum font-mono", pingWarn(row) ? "text-vb-warn" : row.live === "down" ? "text-vb-loss" : "text-vb-silver")}>
+                  {pingText(row)}
+                </span>
+                {row.live === "unstable" ? (
+                  <span className="text-vb-warn">сбоит</span>
+                ) : row.speed || row.speedBusy ? (
+                  <SpeedMeter entry={row.speed} busy={row.speedBusy} />
+                ) : (
+                  <span className="text-vb-silver-faint/70">скорость -</span>
+                )}
+              </>
             )}
           </div>
           <div

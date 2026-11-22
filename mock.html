@@ -13,6 +13,10 @@
   ?still - без анимаций (для снимков), ?platform=win - интерфейс Windows,
   ?fresh - первый запуск: моста ещё нет, открывается мастер (?wizfail -
   установка падает на проверке, ?wizslow - фазы идут медленно).
+  Мастер и приложения: ?noclaude / ?nocodex - их нет, шаг «Приложения» предложит
+  поставить; window.__install("claude"|"codex") - установка закончилась (?autoinstall -
+  сама через 2 с после «Установить»); window.__opened - открытые магазины;
+  ?claudeerr - Claude Desktop не подключился; ?claudeopen - был открыт (кнопка «Перезапустить»).
   ?whatsnew - окно «Что нового» после обновления; ?autooffer - затем
   предложение включить автообновление (установка до этой функции).
   ?noticebanner - обычная установка, автообновление уже отвечено, переключатели ещё не показывали
@@ -20,6 +24,15 @@
   ?statsoff - ответ уже был; ?privacyfail - privacy_get падает, пока window.__privacyFailOff не true.
   ?reportlimit (429) и ?reportbusy (503) - ошибка отправки; ?reportslow - отправка 9 секунд; __reportNonces.
   ?reportfail - отправка отчёта падает; window.__privacy(), __reports, __uiErrors - для тестов.
+  ?deeplink - программа открыта ссылкой clodhelper://add?key=... (купленный прокси, новый адрес);
+  ?deeplink=update - тот же адрес уже в пуле, ?deeplink=fail - магазин не ответил.
+  ?shopproxy - в пуле прокси из магазина со сроком, ?shopproxy=expired - срок прошёл, прокси не отвечает.
+  __shopAdds, __shopRemembered, __renewed - что окно отправило в магазинные команды.
+  window.__shopLink() - ссылка пришла в уже запущенную программу; __shopClaims - запрошенные ключи.
+  ?cause=auth|silent|closed|5xx|bridge - второй прокси не работает по этой причине (на «Обзоре» -
+  раскрытие с причиной и кнопкой); ?ru - основной прокси в России (флаг из кэша гео).
+  ?vpn=wg|tun - включён VPN WireGuard / безымянный туннель; ?vpn=sota - SOTA VPN стёр
+  прокси-переменные. window.__replaced - вызовы proxy_replace.
   Используется тестами tests/ui (Playwright).
 -->
 <script>
@@ -53,7 +66,10 @@
   const health = {
     status: "ok", version: "1.8.0", uptime_sec: 28000, listen: "127.0.0.1:8889", mode: "smart",
     active: 3, total: 700, via_upstream: 412, via_direct: 288, errors: 6,
-    upstreams: [{ url: "http://185.68.187.138:8000", healthy: params.get("down") !== "all", ok: 900, fail: params.get("down") === "all" ? 60 : 6, fail_streak: params.get("down") === "all" ? 9 : 0, latency_ms: 66 }],
+    upstreams: [
+      { url: "http://185.68.187.138:8000", healthy: params.get("down") !== "all", ok: 900, fail: params.get("down") === "all" ? 60 : 6, fail_streak: params.get("down") === "all" ? 9 : 0, latency_ms: 66 },
+      ...(params.get("cause") === "bridge" ? [{ url: "socks5://u:p@93.1.2.3:1080", healthy: false, ok: 10, fail: 40, fail_streak: 7, latency_ms: 0 }] : []),
+    ],
     last_errors: [
       { t: 26000, msg: "назначенный прокси http://185.68.187.138:8000 не отвечает (коннект: Network is unreachable (os error 51))" },
       { t: 26010, msg: "назначенный прокси x не отвечает (принял соединение, но молчит на CONNECT)" },
@@ -77,6 +93,27 @@
         ],
       }
     : null;
+  // ?cause - почему не работает второй прокси (строки - как у proxies_ping и моста).
+  const CAUSES = {
+    auth: { ms: 131, alive: false, error: "Прокси не принял логин или пароль" },
+    silent: { ms: 131, alive: false, error: "Порт открыт, но прокси молчит. Скорее всего, ваш провайдер блокирует IP этого сервера: попросите у хостинга новый IP" },
+    closed: { ms: null, alive: null, error: "Прокси не отвечает - порт закрыт или сервер выключен" },
+    "5xx": { ms: 131, alive: false, error: "Прокси ответил ошибкой 502" },
+  };
+  const cause = params.get("cause");
+  // ?ru - основной прокси в России: флаг страны берётся из кэша гео «Прокси».
+  if (params.has("ru")) {
+    try {
+      localStorage.setItem("clod-proxy-geo-v2", JSON.stringify({
+        "185.68.187.138:8000": { reachable: true, latency_ms: 74, status_code: 200, error: null, ip: "185.68.187.138", country_code: "RU", country_name: "Russia", isp: "Rostelecom" },
+      }));
+    } catch {}
+  }
+  const VPN = {
+    wg: { active: true, name: "WireGuard", sota: false },
+    tun: { active: true, name: null, sota: false },
+    sota: { active: false, name: null, sota: true },
+  };
   let layout = null;
   let leak = params.get("tg") === "blocked"
     ? { enabled: true, services: "claude,telegram", auto_restore: true, verified: true }
@@ -103,6 +140,14 @@
     ...(BROWSERS_DEMO ? { sites_bypass_candidates: BROWSERS_DEMO.candidates, sites_bypass_get: [BROWSERS_DEMO.candidates[2]] } : {}),
     google_ads_get: true,
   };
+  // Фото и видео баннера: ключ - файл стенда в mock-assets.
+  const MOCK_FILES = { ["a".repeat(64) + ".jpg"]: "cover.jpg", ["b".repeat(64) + ".mp4"]: "clip.mp4",
+    ["c".repeat(64) + ".jpg"]: "clip-poster.jpg", ["d".repeat(64) + ".jpg"]: "photo2.jpg" };
+  const MOCK_MEDIA = [
+    { key: "a".repeat(64) + ".jpg", kind: "image", w: 1200, h: 600 },
+    { key: "b".repeat(64) + ".mp4", kind: "video", w: 640, h: 360, poster: "c".repeat(64) + ".jpg" },
+    { key: "d".repeat(64) + ".jpg", kind: "image", w: 1200, h: 900 },
+  ];
   const R = {
     settings_get: { proxy_url: "http://u:p@185.68.187.138:8000" },
     shim_script_path: "/x",
@@ -112,12 +157,19 @@
     bridge_task_status: { registered: true, state: "Running" },
     bridge_exe_legacy: false,
     bridge_versions: { installed: "1.8.0", bundled: "1.8.0", outdated: false },
-    global_proxy_env: { present: true, points_to_bridge: true, values: [] },
+    global_proxy_env: params.get("vpn") === "sota"
+      ? { present: false, points_to_bridge: false, values: [] }
+      : { present: true, points_to_bridge: true, values: [] },
     proxies_ping: [
       { url: "http://u:p@185.68.187.138:8000", host: "185.68.187.138", port: 8000, ms: 74 },
       { url: "socks5://u:p@93.1.2.3:1080", host: "93.1.2.3", port: 1080, ms: ["2", "all"].includes(params.get("down")) ? null : 131 },
       ...(params.has("down") ? [{ url: "http://u:p@193.8.114.42:8080", host: "193.8.114.42", port: 8080, ms: null }] : []),
-    ].map((x, i) => (params.get("down") === "all" && i === 0 ? { ...x, ms: null } : x)),
+    ]
+      .map((x, i) => (params.get("down") === "all" && i === 0 ? { ...x, ms: null } : x))
+      .map((x, i) => (i === 1 && CAUSES[cause] ? { ...x, ...CAUSES[cause] } : x))
+      // ?cause=bridge - своей проверки второго прокси ещё нет, судим по мосту.
+      .filter((_, i) => !(cause === "bridge" && i === 1)),
+    vpn_status: VPN[params.get("vpn")] || { active: false, name: null, sota: false },
     apps_list: apps,
     apps_traffic: [
       { id: "claude-desktop", running: true, via_bridge: 6, direct: 0, proxy_extension: null },
@@ -159,6 +211,16 @@
       ? [{ id: "whats-new-0-9-1", kind: "news", date: "2026-11-11", title: "Вышла версия 0.9.1", body: "Что изменилось в этой версии.", link: "https://example.com/new", link_label: "Что нового", read: false }]
       : [],
     proxy_backups_get: {},
+    // ?promo - баннер на «Обзоре» (?promo=blue|violet|amber|rose|neutral - цвет).
+    // &when=proxy_down - только пока не работает ни один прокси (вместе с ?down=all),
+    // &when=setup - в мастере (вместе с ?fresh); &after=N - через N минут.
+    notices_banners: params.has("promo")
+      ? [{ id: "promo-demo", when: params.get("when") || "always", after_min: Number(params.get("after") || 0), title: "Свой прокси за 5 минут", body: "Пошаговая инструкция: купить сервер, поднять прокси и подключить его к Clod Helper.",
+          accent: params.get("promo") || "emerald", eyebrow: "Новое", dismissible: true,
+          buttons: [{ label: "Смотреть", url: "https://example.com/guide" }, { label: "Подробнее", url: "https://example.com" }],
+          // &media - фото и видео с обложкой, &media=nocover - без обложки (кнопка «Посмотреть»).
+          media: params.has("media") ? MOCK_MEDIA : [], cover: params.has("media") && params.get("media") !== "nocover" }]
+      : [],
     notices_mark_read: [],
     whats_new_take: params.has("whatsnew") ? "0.8.18" : null,
     bridge_file_issue: null,
@@ -170,6 +232,16 @@
     R.proxy_labels_get = { "http://u:p@185.68.187.138:8000": "Финляндия" };
     R.update_check = null;
     R.update_latest = null;
+  }
+  // Прокси из магазина (срок; ключ - только в Rust). ?shopproxy - третий прокси
+  // куплен, ?shopproxy=expired - срок прошёл и прокси не отвечает.
+  const shopMeta = {};
+  if (params.has("shopproxy")) {
+    const url = "http://buyer:s3cret@45.142.7.19:8000";
+    const expired = params.get("shopproxy") === "expired";
+    R.proxies_get = [...R.proxies_get, url];
+    R.proxies_ping = [...R.proxies_ping, { url, host: "45.142.7.19", port: 8000, ms: expired ? null : 88, ...(expired ? { error: "Прокси не принял логин или пароль (407)" } : {}) }];
+    shopMeta[url] = expired ? { expires_at: "2026-11-01T00:00:00Z", expired: true } : { expires_at: "2026-12-15T00:00:00Z", expired: false };
   }
   // Тесты подменяют ответы: page.addInitScript(() => { window.__mockOverrides = {...} }).
   Object.assign(R, window.__mockOverrides || {});
@@ -196,6 +268,9 @@
   window.__reports = [];
   window.__uiErrors = [];
   window.__R = R; // тесты меняют ответы на лету (например, растущие ошибки прокси)
+  // Мастер: стоят ли Claude Desktop и Codex.
+  const wizApps = { claude: !params.has("noclaude"), codex: !params.has("nocodex") };
+  window.__install = (id) => { wizApps[id] = true; };
   let cbId = 1;
   // События Tauri: listen() регистрирует колбэк, window.__emit(имя, данные)
   // доставляет его (как emit из Rust) - для хода установки мастера и т.п.
@@ -206,6 +281,15 @@
     for (const l of listeners) if (l.event === event) callbacks[l.handler]?.({ event, id: l.id, payload });
   };
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // Купленный прокси по ссылке: ключ ждёт, пока окно его заберёт.
+  const SHOP_KEY = "q83vEjRWeJCrze8SNFZ4kKvN7xI0VniQq83vEjRWeJA";
+  let shopPending = params.has("deeplink") ? SHOP_KEY : null;
+  window.__shopClaims = [];
+  window.__shopLink = (key = SHOP_KEY) => {
+    shopPending = key;
+    window.__emit("shop:link", null);
+  };
+  const shopHost = params.get("deeplink") === "update" ? "185.68.187.138:8000" : "45.142.7.19:8000";
   window.__TAURI_INTERNALS__ = {
     metadata: { currentWindow: { label: "main" }, currentWebview: { windowLabel: "main", label: "main" } },
     transformCallback: (cb) => {
@@ -220,6 +304,63 @@
         await new Promise((r) => setTimeout(r, 1500));
         return args.url.startsWith("socks5") ? { mbps: 7.4, bytes: 7400000, secs: 8 } : { mbps: 46.3, bytes: 25000000, secs: 4.3 };
       }
+      if (cmd === "shop_link_take") { const k = shopPending; shopPending = null; return k; }
+      if (cmd === "shop_claim") {
+        window.__shopClaims.push(args.key);
+        await wait(params.has("still") ? 50 : 500);
+        if (params.get("deeplink") === "fail") throw "Нет связи с магазином. Проверьте интернет и попробуйте ещё раз";
+        return {
+          proxies: [{ url: `http://buyer:s3cret@${shopHost}`, socks_url: `socks5://buyer:s3cret@${shopHost.replace(/:d+$/, ":1080")}`,
+            country: "NL", label: "Нидерланды", expires_at: "2026-12-22T00:00:00Z" }],
+          email_masked: "b***@mail.ru",
+        };
+      }
+      // Как бэкенд (settings::upsert_pool): тот же адрес - замена на месте с
+      // переносом имени, новый - в конец, имя из магазина - если своего нет.
+      if (cmd === "shop_add") {
+        await wait(params.has("still") ? 20 : 400);
+        const key = (u) => u.slice(u.lastIndexOf("@") + 1).toLowerCase();
+        const pool = [...R.proxies_get];
+        const labels = { ...R.proxy_labels_get };
+        for (const it of args.items) {
+          const i = pool.findIndex((u) => key(u) === key(it.url));
+          if (i >= 0) {
+            if (labels[pool[i]] !== undefined) { labels[it.url] = labels[pool[i]]; delete labels[pool[i]]; }
+            pool[i] = it.url;
+          } else pool.push(it.url);
+          if (it.label && labels[it.url] === undefined) labels[it.url] = it.label;
+        }
+        if (pool.length > 5) throw "В программе помещается 5 прокси";
+        // «Сделать основным»: купленный - на место 0; закреплённое за
+        // основным остаётся за основным, остальное едет со своим прокси.
+        const first = pool.findIndex((u) => key(u) === key(args.items[0].url));
+        if (args.makePrimary && first > 0) {
+          pool.splice(0, 0, ...pool.splice(first, 1));
+          for (const [svc, idx] of Object.entries(R.proxy_assignments_get)) {
+            if (idx !== 0) R.proxy_assignments_get[svc] = idx === first ? 0 : idx < first ? idx + 1 : idx;
+          }
+        }
+        for (const it of args.items) if (it.key) shopMeta[it.url] = { expires_at: it.expires_at ?? null, expired: false };
+        R.proxies_get = pool;
+        R.proxy_labels_get = labels;
+        (window.__poolWrites ||= []).push([...pool]);
+        (window.__shopAdds ||= []).push({ makePrimary: args.makePrimary, keys: args.items.map((i) => i.key) });
+        return structuredClone(pool);
+      }
+      if (cmd === "shop_remember") { (window.__shopRemembered ||= []).push(args.item); return null; }
+      if (cmd === "shop_meta_get") return structuredClone(shopMeta);
+      if (cmd === "shop_renew") { (window.__renewed ||= []).push(args.url); return null; }
+      if (cmd === "proxies_set") {
+        await wait(params.has("still") ? 20 : 400);
+        R.proxies_get = [...args.urls];
+        (window.__poolWrites ||= []).push([...args.urls]);
+        return structuredClone(R.proxies_get);
+      }
+      if (cmd === "proxy_label_set") {
+        R.proxy_labels_get = { ...R.proxy_labels_get, [args.url]: args.label };
+        return structuredClone(R.proxy_labels_get);
+      }
+      if (cmd === "check_proxy") (window.__checked ||= []).push(args.url);
       if (cmd === "apps_layout_get") return layout;
       if (cmd === "apps_layout_set") { layout = args.layout; return null; }
       if (cmd === "leak_guard_set") {
@@ -247,6 +388,19 @@
         const services = leak.enabled && leak.services.includes("telegram") ? "claude,telegram" : "claude";
         leak = { enabled: true, services, auto_restore: true, verified: true };
         return structuredClone(R.claude_proxy_status);
+      }
+      // Замена прокси на тот же с новым паролем: место в пуле, имя - за ним.
+      if (cmd === "proxy_replace") {
+        await wait(300);
+        (window.__replaced ||= []).push({ old: args.old, new: args.new });
+        R.proxies_get = R.proxies_get.map((u) => (u === args.old ? args.new : u));
+        R.proxies_ping = R.proxies_ping.map((p) =>
+          p.url === args.old ? { url: args.new, host: p.host, port: p.port, ms: 120, alive: true, error: null } : p);
+        if (R.proxy_labels_get[args.old]) {
+          R.proxy_labels_get[args.new] = R.proxy_labels_get[args.old];
+          delete R.proxy_labels_get[args.old];
+        }
+        return structuredClone(R.proxies_get);
       }
       if (cmd === "set_global_proxy_env") return (R.global_proxy_env = { present: true, points_to_bridge: true, values: [] });
       if (cmd === "clear_global_proxy_env") return (R.global_proxy_env = { present: false, points_to_bridge: false, values: [] });
@@ -368,9 +522,35 @@
         window.__reports.push({ text: args.text, contact: args.contact });
         return null;
       }
-      if (cmd === "notice_event") {
-        (window.__noticeEvents ||= []).push({ id: args.id, ev: args.ev });
+      if (cmd === "banner_media") {
+        (window.__mediaAsked ||= []).push(...args.keys);
+        await wait(params.has("mediaslow") ? 4000 : 150);
+        return Object.fromEntries(args.keys.filter((k) => MOCK_FILES[k]).map((k) => [k, "/mock-assets/" + MOCK_FILES[k]]));
+      }
+      if (cmd === "notices_banner_dismiss") {
+        R.notices_banners = R.notices_banners.filter((x) => x.id !== args.id);
         return null;
+      }
+      if (cmd === "notice_event") {
+        // Как бэкенд: до показа переключателей и без статистики событие не уходит.
+        const sent = noticeSeen && privacy.usage_stats;
+        (sent ? (window.__noticeEvents ||= []) : (window.__noticeEventsHeld ||= [])).push({ id: args.id, ev: args.ev });
+        return null;
+      }
+      // Баннеры мастера: до согласия бэкенд один раз спрашивает сервер только о них.
+      if (cmd === "notices_setup_banners") {
+        (window.__setupAsked ||= []).push({ noticeSeen });
+        return structuredClone(R.notices_banners.filter((x) => x.when === "setup"));
+      }
+      if (cmd === "wizard_apps") return { ...wizApps };
+      if (cmd === "wizard_open_store") {
+        (window.__opened ||= []).push(args.app);
+        if (params.has("autoinstall")) setTimeout(() => window.__install(args.app), 2000);
+        return null;
+      }
+      if (cmd === "wizard_connect_claude") {
+        await wait(params.has("still") ? 60 : 900);
+        return { ok: !params.has("claudeerr"), running: params.has("claudeopen") };
       }
       if (cmd === "telemetry_ui_error") {
         window.__uiErrors.push({ msg: args.msg, stack: args.stack });
@@ -383,17 +563,26 @@
       // Мастер: фазы установки событиями "wizard:step", как wizard_install.
       if (cmd === "wizard_install") {
         const step = params.has("wizslow") ? 900 : params.has("still") ? 40 : 420;
-        const phases = ["bridge", "task", "env", "presets", ...(win ? [] : ["claude"]), "test"];
+        const phases = ["bridge", "task", "env", "presets", "claude", "test"];
         for (const ph of phases) {
+          if (ph === "claude" && !wizApps.claude) {
+            window.__emit("wizard:step", "claude:skip");
+            continue;
+          }
           window.__emit("wizard:step", ph + ":start");
           await wait(step);
           if (ph === "test" && params.has("wizfail")) {
             window.__emit("wizard:step", "test:err");
             throw "Прокси не ответил за 10 секунд (185.68.187.138:8000)";
           }
+          if (ph === "claude" && params.has("claudeerr")) {
+            window.__emit("wizard:step", "claude:err");
+            continue;
+          }
           window.__emit("wizard:step", ph + ":ok");
         }
-        return { test: structuredClone(R.shim_test), env_on: true };
+        const claude = !wizApps.claude ? "absent" : params.has("claudeerr") ? "err" : "ok";
+        return { test: structuredClone(R.shim_test), env_on: true, claude, claude_running: claude === "ok" && params.has("claudeopen") };
       }
       if (cmd in R) return structuredClone(R[cmd]);
       if (cmd in SITES) return structuredClone(SITES[cmd]);

@@ -82,6 +82,10 @@ fn build(redact: bool) -> String {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let _ = writeln!(r, "Время (unix): {now}");
+    let _ = writeln!(r, "Автообновление: {}", if s.auto_update == Some(true) { "включено" } else { "выключено" });
+    if let Some(w) = crate::auto_update::last_wait_line() {
+        let _ = writeln!(r, "Тихая установка: {w}");
+    }
 
     // ── Мост ──
     let _ = writeln!(r, "\n--- Мост ---");
