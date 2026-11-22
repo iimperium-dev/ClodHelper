@@ -5,6 +5,7 @@ import { WizardShell } from "./components/WizardShell";
 import { StepProxy } from "./wizard/StepProxy";
 import { StepInstall } from "./wizard/StepInstall";
 import { StepDone } from "./wizard/StepDone";
+import { StepApps } from "./wizard/StepApps";
 import { Overview } from "./pages/Overview";
 import { Proxies } from "./pages/Proxies";
 import { Apps } from "./pages/Apps";
@@ -31,8 +32,9 @@ import {
   shimScriptPath,
   shimStatus,
   whatsNewTake,
+  wizardApps,
 } from "./lib/api";
-import type { AppView, PrivacyKey, WizardInstallResult, WizardStep } from "./lib/types";
+import type { AppView, PrivacyKey, WizardApps, WizardInstallResult, WizardStep } from "./lib/types";
 
 /** Окно трей-попапа рендерит тот же bundle с ?view=tray. */
 const IS_TRAY = new URLSearchParams(window.location.search).get("view") === "tray";
@@ -169,6 +171,12 @@ function App() {
   });
   const [wizProxyUrl, setWizProxyUrl] = useState<string | null>(null);
   const [wizResult, setWizResult] = useState<WizardInstallResult | null>(null);
+  // Claude Desktop и Codex: чего нет - шаг «Приложения» предложит поставить.
+  // Проверяется при входе в мастер (сколько шагов в шапке) и ещё раз после
+  // установки моста (человек мог поставить что-то, пока вводил прокси).
+  const [wizApps, setWizApps] = useState<WizardApps | null>(null);
+  const needApps = !!wizApps && (!wizApps.claude || !wizApps.codex);
+  const wizSteps: WizardStep[] = needApps ? ["proxy", "install", "apps", "done"] : ["proxy", "install", "done"];
   // Мастер пропущен кнопкой «Сначала очистка»: программа открыта без прокси,
   // сверху полоса «Прокси ещё не добавлен» с возвратом в мастер.
   const [noProxy, setNoProxy] = useState(false);
@@ -213,6 +221,17 @@ function App() {
   useOnceShown(wizDone, markWizard);
 
   // Вернулись в мастер, а человек уже отвечал (плашка, настройки): берём его выбор.
+  useEffect(() => {
+    if (view !== "wizard") return;
+    void wizardApps()
+      .then(setWizApps)
+      .catch(() => {});
+  }, [view]);
+  const onWizClaude = useCallback((claude: WizardInstallResult["claude"], running: boolean) => {
+    setWizResult((r) => (r ? { ...r, claude, claude_running: running } : r));
+  }, []);
+  const toWizDone = useCallback(() => setStep("done"), []);
+
   useEffect(() => {
     if (view !== "wizard") return;
     wizMarked.current = false;
@@ -293,7 +312,7 @@ function App() {
         <div className="flex h-screen w-screen flex-col overflow-hidden">
           <Titlebar bell={false} />
           <div className="min-h-0 flex-1">
-            <WizardShell step={step}>
+            <WizardShell step={step} steps={wizSteps}>
               {step === "proxy" && (
                 <StepProxy
                   initialUrl={wizProxyUrl}
@@ -314,9 +333,17 @@ function App() {
                   onBack={() => setStep("proxy")}
                   onDone={(r) => {
                     setWizResult(r);
-                    setStep("done");
+                    void wizardApps()
+                      .catch(() => wizApps)
+                      .then((now) => {
+                        if (now) setWizApps(now);
+                        setStep(now && (!now.claude || !now.codex) ? "apps" : "done");
+                      });
                   }}
                 />
+              )}
+              {step === "apps" && wizResult && wizApps && (
+                <StepApps initial={wizApps} onClaude={onWizClaude} onDone={toWizDone} />
               )}
               {step === "done" && wizResult && (
                 <StepDone

@@ -185,12 +185,22 @@ async fn post_to(base: &str, path: &str, body: &Value) -> Result<(), String> {
 
 /// GET к серверу статистики: Ok(None) - 404 или сервер не задан.
 pub async fn get(path_and_query: &str) -> Result<Option<String>, String> {
-    let Some(base) = base() else { return Ok(None) };
+    if base().is_none() {
+        return Ok(None);
+    }
     // До показа переключателей сервер не спрашиваем.
     let seen = tokio::task::spawn_blocking(|| settings::load_checked().is_ok_and(|s| s.privacy_notice_seen)).await;
     if !matches!(seen, Ok(true)) {
         return Err("уведомление о данных ещё не показано".into());
     }
+    get_anon(path_and_query).await
+}
+
+/// GET без проверки согласия - только для запросов, где кроме версии и
+/// системы ничего нет (баннеры мастера, как проверка обновлений). Ничего
+/// не записывает и ничего о человеке не передаёт.
+pub async fn get_anon(path_and_query: &str) -> Result<Option<String>, String> {
+    let Some(base) = base() else { return Ok(None) };
     let url = format!("{base}{path_and_query}");
     with_fallback(|c| {
         let url = url.clone();
@@ -206,10 +216,11 @@ pub async fn get(path_and_query: &str) -> Result<Option<String>, String> {
 }
 
 /// Файл с сервера статистики (фото и видео баннеров): только при включённой
-/// статистике, не больше max байт. Напрямую, нет связи - через мост.
-pub async fn get_bytes(path: &str, max: usize, timeout: Duration) -> Result<Vec<u8>, String> {
+/// статистике или для баннера мастера (`setup`), не больше max байт.
+/// Напрямую, нет связи - через мост.
+pub async fn get_bytes(path: &str, max: usize, timeout: Duration, setup: bool) -> Result<Vec<u8>, String> {
     let base = base().ok_or("сервер не задан")?;
-    let on = tokio::task::spawn_blocking(load_if_stats_on).await.ok().flatten().is_some();
+    let on = setup || tokio::task::spawn_blocking(load_if_stats_on).await.ok().flatten().is_some();
     if !on {
         return Err("статистика выключена".into());
     }
@@ -741,14 +752,20 @@ fn first_event(id: &str, ev: &str) -> bool {
 }
 
 /// Событие уведомления для статистики рассылок (shown, clicked, dismissed):
-/// только при включённой статистике, один раз, без повторов.
+/// только при включённой статистике и после показа переключателей, один раз,
+/// без повторов. Показ баннера в мастере до согласия никуда не уходит и не
+/// занимает «один раз»: нажатие уже после согласия отправится как обычно.
 pub fn report_notice_event(id: &str, ev: &str) {
     let Some(body) = notice_event_body(id, ev) else { return };
-    if base().is_none() || !first_event(id, ev) {
+    if base().is_none() {
         return;
     }
+    let (id, ev) = (id.to_string(), ev.to_string());
     tauri::async_runtime::spawn(async move {
         let Ok(Some(_)) = tokio::task::spawn_blocking(load_if_stats_on).await else { return };
+        if !first_event(&id, &ev) {
+            return;
+        }
         if let Err(e) = post("/v1/notice-event", &body).await {
             tracing::info!("событие уведомления: {e}");
         }

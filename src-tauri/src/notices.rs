@@ -162,6 +162,7 @@ pub struct BannerView {
 pub fn media_keys(s: &crate::settings::Settings) -> Vec<String> {
     let mut v: Vec<String> = cached(s)
         .into_iter()
+        .chain(setup_cache())
         .filter_map(|n| n.banner)
         .flat_map(|b| b.media.into_iter().flat_map(|m| std::iter::once(m.key).chain(m.poster)))
         .collect();
@@ -180,19 +181,92 @@ pub fn in_bell(n: &Notice) -> bool {
 /// открыт ли мастер. Баннер с незнакомым условием (от новой админки) не
 /// показывается совсем.
 pub fn active_banners(s: &crate::settings::Settings) -> Vec<BannerView> {
-    cached(s)
-        .into_iter()
+    banner_views(cached(s), &s.notices_read)
+}
+
+fn banner_views(list: Vec<Notice>, read: &[String]) -> Vec<BannerView> {
+    list.into_iter()
         .filter_map(|n| {
             let b = n.banner?;
             if !WHENS.contains(&b.when.as_str()) {
                 return None;
             }
-            if b.dismissible && s.notices_read.contains(&format!("banner:{}", n.id)) {
+            if b.dismissible && read.contains(&format!("banner:{}", n.id)) {
                 return None;
             }
             Some(BannerView { id: n.id, title: n.title, body: n.body, banner: b })
         })
         .collect()
+}
+
+// ---------------------------------------------------------------- мастер
+
+/// Баннеры «в мастере», полученные до согласия на статистику. Только в
+/// памяти этого запуска: в настройки не пишутся.
+static SETUP_CACHE: std::sync::Mutex<Vec<Notice>> = std::sync::Mutex::new(Vec::new());
+/// Сервер в мастере спрашиваем один раз за запуск, даже если не ответил.
+static SETUP_ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn setup_cache() -> Vec<Notice> {
+    SETUP_CACHE.lock().map(|g| g.clone()).unwrap_or_default()
+}
+
+/// Ключ медиа принадлежит баннеру мастера: его можно скачать и до согласия
+/// (обычная загрузка файла по ключу, как загрузка обновления).
+pub fn is_setup_media(key: &str) -> bool {
+    setup_cache()
+        .iter()
+        .filter_map(|n| n.banner.as_ref())
+        .flat_map(|b| b.media.iter())
+        .any(|m| m.key == key || m.poster.as_deref() == Some(key))
+}
+
+/// Запрос баннеров мастера: только версия и система, как проверка
+/// обновлений. Без au и без чего-либо ещё об установке. place=setup - чтобы
+/// сервер мог отдать только баннеры мастера (сервер, который его не знает,
+/// отдаёт всё, и лишнее отбрасывается здесь).
+fn setup_query(current: &str) -> String {
+    let os = if cfg!(target_os = "windows") { "windows" } else { "macos" };
+    format!("/v1/notices?v={current}&os={os}&place=setup")
+}
+
+/// Только баннеры с условием «в мастере».
+fn only_setup(list: Vec<Notice>) -> Vec<Notice> {
+    list.into_iter().filter(|n| n.banner.as_ref().is_some_and(|b| b.when == "setup")).collect()
+}
+
+/// Баннеры для мастера. Человек ещё не видел переключателей - один раз за
+/// запуск спрашиваем сервер только о баннерах мастера (версия и система).
+/// Уже отвечал - обычный путь: сервер спрашивается только при включённой
+/// статистике, а здесь берётся то, что в кэше.
+pub async fn setup_banners() -> Vec<BannerView> {
+    let current = env!("CARGO_PKG_VERSION");
+    let seen = tokio::task::spawn_blocking(|| crate::settings::load_checked().map(|s| s.privacy_notice_seen))
+        .await
+        .ok()
+        .and_then(|r| r.ok());
+    // Настройки не прочитались - неизвестно, отвечал ли человек: не спрашиваем.
+    if seen == Some(false) && !SETUP_ASKED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        match crate::telemetry::get_anon(&setup_query(current)).await {
+            Ok(Some(t)) => match parse_server(&t, current) {
+                Ok(list) => {
+                    if let Ok(mut g) = SETUP_CACHE.lock() {
+                        *g = only_setup(list);
+                    }
+                }
+                Err(e) => tracing::info!("баннеры мастера: {e}"),
+            },
+            Ok(None) => {}
+            Err(e) => tracing::info!("баннеры мастера: {e}"),
+        }
+    }
+    tokio::task::spawn_blocking(|| {
+        let s = crate::settings::load();
+        let extra = if s.privacy_notice_seen { Vec::new() } else { setup_cache() };
+        banner_views(only_setup(merge(vec![cached(&s), extra])), &s.notices_read)
+    })
+    .await
+    .unwrap_or_default()
 }
 
 #[derive(Deserialize)]
@@ -583,6 +657,32 @@ mod tests {
         assert_eq!(get("b"), None);
         assert_eq!(get("c"), None, "подпись без ссылки не нужна");
         assert_eq!(get("d"), None);
+    }
+
+    #[test]
+    fn setup_query_carries_only_version_and_os() {
+        let q = setup_query("0.9.2");
+        assert!(q.starts_with("/v1/notices?v=0.9.2&os="));
+        assert!(!q.contains("au="), "в мастере - без режима автообновления");
+        let params: Vec<&str> =
+            q.split_once('?').unwrap().1.split('&').map(|p| p.split('=').next().unwrap()).collect();
+        assert_eq!(params, ["v", "os", "place"]);
+    }
+
+    #[test]
+    fn setup_list_keeps_only_setup_banners() {
+        let text = r#"{"notices":[
+            {"id":"a","date":"2026-11-20","title":"Обычный","body":"x"},
+            {"id":"b","date":"2026-11-20","title":"Обзор","banner":{"when":"always"}},
+            {"id":"c","date":"2026-11-21","title":"Мастер","banner":{"when":"setup"}},
+            {"id":"d","date":"2026-11-21","title":"Закрытый","banner":{"when":"setup"}}
+        ]}"#;
+        let list = only_setup(parse_server(text, "0.9.2").unwrap());
+        let mut ids: Vec<&str> = list.iter().map(|n| n.id.as_str()).collect();
+        ids.sort();
+        assert_eq!(ids, ["c", "d"]);
+        let views = banner_views(list, &["banner:d".to_string()]);
+        assert_eq!(views.iter().map(|v| v.id.as_str()).collect::<Vec<_>>(), ["c"]);
     }
 
     #[test]

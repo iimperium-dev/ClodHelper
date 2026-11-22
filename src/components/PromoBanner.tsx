@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ArrowUpRight, Images, Play, X } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
-import { bannerMedia, noticeEvent, noticesBanners, noticesBannerDismiss } from "../lib/api";
+import { bannerMedia, noticeEvent, noticesBanners, noticesBannerDismiss, noticesSetupBanners } from "../lib/api";
 import { useStatus } from "../lib/status";
 import type { BannerView } from "../lib/types";
 import { cn } from "../lib/cn";
@@ -19,6 +19,11 @@ import { MediaViewer } from "./MediaViewer";
   Условие показа тоже из админки: «всегда», «пока не работает ни один прокси
   N минут» (предложение по ситуации) или «в мастере» рядом с полем прокси.
   Решает программа на месте: на сервер про прокси ничего не уходит.
+
+  В мастере - своя команда: человек ещё не видел переключателей статистики,
+  поэтому программа один раз спрашивает сервер только о баннерах мастера и
+  передаёт лишь версию и систему. Показ и нажатие уходят в статистику только
+  после согласия (решает Rust, здесь вызывается как обычно).
 */
 
 /** Цвет акцента: точка, метка, свечение в углу и главная кнопка. */
@@ -51,12 +56,13 @@ export function PromoBanner({ className, place = "overview" }: { className?: str
   const [viewer, setViewer] = useState(false);
 
   useEffect(() => {
-    const load = () => void noticesBanners().then((v) => setList(v ?? [])).catch(() => setList([]));
+    const get = place === "setup" ? noticesSetupBanners : noticesBanners;
+    const load = () => void get().then((v) => setList(v ?? [])).catch(() => setList([]));
     load();
     // Рассылки обновились (админка включила или сняла баннер) - перечитать.
     const un = listen("notices:changed", load);
     return () => void un.then((f) => f());
-  }, []);
+  }, [place]);
 
   useEffect(() => {
     if (b && shown.current !== b.id) {
