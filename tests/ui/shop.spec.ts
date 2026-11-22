@@ -226,16 +226,14 @@ test("ключ в мастере: «Ключ из магазина», окно, 
   expect(errors).toEqual([]);
 });
 
-test("страница «Прокси»: срок прокси из магазина и «Сделать основным» словами", async ({ page }) => {
+test("страница «Прокси»: срок прокси из магазина и «Сделать основным»", async ({ page }) => {
   await openProxies(page, "&shopproxy");
   await expect(page.getByText("Из магазина")).toBeVisible();
   await expect(page.getByText("до 15 декабря")).toBeVisible();
-  // Раскрыть строку (щелчок по имени - переименование, поэтому с клавиатуры).
+  // Звёздочка появляется при наведении на строку.
   const row = page.locator("[aria-expanded]").filter({ hasText: "45.142.7.19" });
-  await row.focus();
-  await page.keyboard.press("Enter");
-  await expect(row).toHaveAttribute("aria-expanded", "true");
-  await page.getByRole("button", { name: "Сделать основным", exact: true }).filter({ hasText: "Сделать основным" }).click();
+  await row.hover();
+  await row.getByRole("button", { name: "Сделать основным", exact: true }).click();
   await expect.poll(async () => (await poolWrites(page)).at(-1)?.[0]).toBe("http://buyer:s3cret@45.142.7.19:8000");
 });
 

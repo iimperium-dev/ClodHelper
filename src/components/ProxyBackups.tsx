@@ -172,6 +172,8 @@ export function ProxyBackups({
 
   const danger = warnings.some((w) => w.tone === "loss");
   const reduce = useReducedMotion();
+  // Веточка - только когда есть резервы (или открыта форма добавления).
+  const tree = backups.length > 0 || adding;
   // Ветка «растёт» при раскрытии: ствол тянется вниз, отводы выдвигаются
   // вбок, строки проявляются по очереди. Без анимаций - сразу на месте.
   const grow = (k: number) =>
@@ -192,13 +194,16 @@ export function ProxyBackups({
         };
 
   return (
-    <div className="relative pb-3 pl-[34px] pr-4">
-      {/* Ствол «веточки»: от точки прокси вниз, к резервам и плюсику */}
-      <motion.span
-        aria-hidden
-        className="absolute bottom-[19px] left-[19px] top-0 w-px origin-top bg-vb-border-strong/80"
-        {...(reduce ? {} : { initial: { scaleY: 0 }, animate: { scaleY: 1 }, transition: { duration: 0.3, ease: [0.22, 1, 0.36, 1] } })}
-      />
+    <div className={cn("relative pb-2.5 pr-4", tree ? "pl-[34px]" : "-mt-1.5 pl-[26px]")}>
+      {/* Ствол «веточки»: от точки прокси вниз, к резервам. Без резервов
+          веточки нет - только тихая строка «Добавить резервный прокси». */}
+      {tree && (
+        <motion.span
+          aria-hidden
+          className="absolute bottom-[19px] left-[19px] top-0 w-px origin-top bg-vb-border-strong/80"
+          {...(reduce ? {} : { initial: { scaleY: 0 }, animate: { scaleY: 1 }, transition: { duration: 0.3, ease: [0.22, 1, 0.36, 1] } })}
+        />
+      )}
 
       {backups.map((url, k) => {
         const j = states.findIndex((s) => s.url === url);
@@ -296,7 +301,7 @@ export function ProxyBackups({
             transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
             className="relative overflow-hidden"
           >
-            <span aria-hidden className="absolute -left-[15px] top-[19px] h-px w-[15px] bg-vb-border-strong/80" />
+            {tree && <span aria-hidden className="absolute -left-[15px] top-[19px] h-px w-[15px] bg-vb-border-strong/80" />}
             <div className="mt-1 rounded-xl border border-vb-border bg-vb-surface-2/40 p-3">
               <div className="mb-2 text-[11px] font-medium text-vb-silver">Резервный прокси</div>
               {phase === "confirm" ? (
@@ -364,16 +369,11 @@ export function ProxyBackups({
               onClick={() => setAdding(true)}
               disabled={busy}
               aria-label="Добавить резервный прокси"
-              className="group/add relative mt-0.5 flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-[12px] text-vb-silver-faint transition-colors hover:text-vb-emerald disabled:opacity-40"
+              className="relative mt-0.5 flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[12px] text-vb-silver-faint transition-colors hover:text-vb-emerald disabled:opacity-40"
             >
-              <motion.span {...tick(backups.length)} aria-hidden className="absolute -left-[15px] top-1/2 h-px w-[15px] origin-left bg-vb-border-strong/80" />
-              <span className="flex h-5 w-5 items-center justify-center rounded-full border border-dashed border-vb-border-strong transition-colors group-hover/add:border-vb-emerald/60 group-hover/add:bg-vb-emerald/10">
-                <Plus className="h-3 w-3" />
-              </span>
-              {/* Подсказка раскрывается при наведении на плюсик */}
-              <span className="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 group-hover/add:max-w-[220px] group-hover/add:opacity-100 group-focus-visible/add:max-w-[220px] group-focus-visible/add:opacity-100">
-                {backups.length ? "Добавить ещё резервный прокси" : "Добавить резервный прокси"}
-              </span>
+              {tree && <motion.span {...tick(backups.length)} aria-hidden className="absolute -left-[15px] top-1/2 h-px w-[15px] origin-left bg-vb-border-strong/80" />}
+              <Plus className="h-3 w-3" aria-hidden />
+              {backups.length ? "Добавить ещё резервный прокси" : "Добавить резервный прокси"}
             </motion.button>
           )
         )}

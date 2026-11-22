@@ -117,11 +117,13 @@ function Problem({ row, a }: { row: PoolRow; a: PoolActions }) {
     row.reason.slice(1) +
     (row.coverHost ? ` - подменяет резерв ${row.coverHost}` : "");
   const short = row.live === "down" ? (row.coverHost ? "Не отвечает, работает резерв" : "Не отвечает") : "Сбоит";
+  // Раскрыто - причина целиком одной фразой (она и так начинается с «Прокси
+  // не отвечает…»), свёрнуто - коротко.
+  const reason = row.reason.charAt(0).toUpperCase() + row.reason.slice(1) + (row.coverHost ? `. Работает резерв ${row.coverHost}` : "");
   return (
     <>
-      <div title={full} className="mt-1 truncate text-[11px] leading-snug text-vb-silver-dim">
-        {short}
-        {row.open && <span className="text-vb-silver-faint"> - {row.reason.charAt(0).toLowerCase() + row.reason.slice(1)}</span>}
+      <div title={row.open ? undefined : full} className={cn("mt-1 text-[11px] leading-snug text-vb-silver-dim", !row.open && "truncate")}>
+        {row.open ? reason : short}
       </div>
       {row.open && auth && (
         <button
@@ -511,21 +513,6 @@ function RowA({ row, a }: { row: PoolRow; a: PoolActions }) {
         </div>
         <ChevronDown aria-hidden className={cn("h-3.5 w-3.5 shrink-0 text-vb-silver-faint transition-transform duration-200", row.open && "rotate-180")} />
       </div>
-      {/* Раскрытая строка: «Сделать основным» словами, не только звёздочкой
-          при наведении. */}
-      {row.open && !row.primary && (
-        <div className="flex justify-end px-4 pb-1">
-          <button
-            type="button"
-            onClick={() => a.makePrimary(row.i)}
-            disabled={a.busy !== null}
-            className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] text-vb-silver-dim transition-colors hover:bg-vb-surface-2 hover:text-vb-fg disabled:opacity-40"
-          >
-            <Star className="h-3 w-3" aria-hidden />
-            Сделать основным
-          </button>
-        </div>
-      )}
       <ConfirmStrip row={row} a={a} />
       <Backups row={row} a={a} />
     </div>
