@@ -463,7 +463,8 @@ function RowA({ row, a }: { row: PoolRow; a: PoolActions }) {
             {row.live === "down" && !(row.shop?.expired && !row.coverHost) ? (
               // Не работает: вместо прочерков - что случилось.
               <>
-                <span className="text-[12px] text-vb-loss">{causeLabel(row.reason)}</span>
+                {/* Тихо, в размер цифр соседних строк: точка слева уже красная. */}
+                <span className="text-vb-loss/75">{causeLabel(row.reason).toLowerCase()}</span>
                 {row.coverHost && <span className="text-vb-warn">работает резерв</span>}
               </>
             ) : (
