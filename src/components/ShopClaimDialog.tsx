@@ -21,7 +21,7 @@ import type { ProxyCheckResult } from "../lib/types";
 /** Что окно показывает: данные ещё идут, магазин ответил ошибкой, или покупка. */
 export type ShopClaimState =
   | { kind: "loading" }
-  | { kind: "error"; message: string }
+  | { kind: "error"; message: string; /** Повтор не поможет (битая ссылка). */ final?: boolean }
   | { kind: "ready"; claim: Claim; key: string };
 
 interface Props {
@@ -200,12 +200,20 @@ export function ShopClaimDialog({ state, wizard, onWizardFill, onRetry, onClose,
                   {state.message}
                 </p>
                 <div className="mt-5 flex justify-end gap-2">
-                  <Button variant="ghost" size="sm" onClick={onClose}>
-                    Закрыть
-                  </Button>
-                  <Button ref={yesRef} size="sm" onClick={onRetry}>
-                    Повторить
-                  </Button>
+                  {state.final ? (
+                    <Button ref={yesRef} size="sm" onClick={onClose}>
+                      Понятно
+                    </Button>
+                  ) : (
+                    <>
+                      <Button variant="ghost" size="sm" onClick={onClose}>
+                        Закрыть
+                      </Button>
+                      <Button ref={yesRef} size="sm" onClick={onRetry}>
+                        Повторить
+                      </Button>
+                    </>
+                  )}
                 </div>
               </>
             )}

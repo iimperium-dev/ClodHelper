@@ -68,6 +68,12 @@ pub fn parse_link(link: &str) -> Option<String> {
     valid_key(&key).then_some(key)
 }
 
+/// clodhelper://add... - ссылка на покупку, даже если ключ в ней битый.
+fn is_add_link(link: &str) -> bool {
+    let l = link.trim().to_ascii_lowercase();
+    l.starts_with("clodhelper://add")
+}
+
 /// Ссылки от системы (холодный старт, вторая копия, macOS open URL):
 /// годный ключ запомнить, показать окно и сказать ему об этом.
 pub fn on_links<I, S>(app: &AppHandle, links: I)
@@ -75,9 +81,17 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
-    let Some(key) = links.into_iter().find_map(|l| parse_link(l.as_ref())) else {
-        tracing::info!("shop: ссылка не похожа на покупку, пропускаю");
-        return;
+    let links: Vec<String> = links.into_iter().map(|l| l.as_ref().to_string()).collect();
+    let key = match links.iter().find_map(|l| parse_link(l)) {
+        Some(k) => k,
+        // Ссылка на покупку, но ключ битый (обрезал почтовик, скопировали не
+        // целиком): окно скажет об этом, а не откроется молча. Пустой ключ -
+        // знак «ссылка повреждена».
+        None if links.iter().any(|l| is_add_link(l)) => String::new(),
+        None => {
+            tracing::info!("shop: ссылка не похожа на покупку, пропускаю");
+            return;
+        }
     };
     if let Ok(mut g) = PENDING.lock() {
         *g = Some(key);
@@ -461,6 +475,15 @@ mod tests {
         assert_eq!(c.proxies[1].socks_url, None);
         assert_eq!(c.proxies[1].country, None);
         assert_eq!(c.email_masked.as_deref(), Some("m***@mail.ru"));
+    }
+
+    #[test]
+    fn damaged_purchase_link_is_still_recognised() {
+        assert!(is_add_link("clodhelper://add?key=short"));
+        assert!(is_add_link(" ClodHelper://ADD/?key="));
+        assert!(!is_add_link("clodhelper://other"));
+        assert!(!is_add_link("https://clodhelper.com/add"));
+        assert_eq!(parse_link("clodhelper://add?key=short"), None);
     }
 
     #[test]

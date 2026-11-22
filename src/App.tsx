@@ -209,7 +209,13 @@ function App() {
     if (IS_TRAY || IS_TOAST || IS_SPLASH) return;
     const take = () =>
       void shopLinkTake()
-        .then((key) => key && loadClaim(key))
+        .then((key) => {
+          // Пустой ключ - ссылка на покупку пришла повреждённой.
+          if (key === "") {
+            shopKey.current = null;
+            setShop({ kind: "error", message: "Ссылка повреждена: ключ в ней неполный. Скопируйте ключ из письма целиком и вставьте его в поле прокси.", final: true });
+          } else if (key) loadClaim(key);
+        })
         .catch(() => {});
     take();
     const un = listen("shop:link", take);
