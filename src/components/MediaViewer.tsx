@@ -15,6 +15,10 @@ interface Props {
   banner: BannerView | null;
   /** Адреса файлов по ключам; нет ключа - файл ещё качается. */
   srcs: Record<string, string>;
+  /** Файлы, которые не удалось скачать. */
+  failed?: Record<string, true>;
+  /** Попробовать скачать ещё раз. */
+  onRetry?: () => void;
   accent: string;
   start?: number;
   onClose: () => void;
@@ -123,9 +127,40 @@ function VideoPlayer({ src, poster, active }: { src: string; poster?: string; ac
   );
 }
 
-function Slide({ m, srcs, active }: { m: BannerMedia; srcs: Record<string, string>; active: boolean }) {
+function Slide({
+  m,
+  srcs,
+  failed,
+  onRetry,
+  active,
+}: {
+  m: BannerMedia;
+  srcs: Record<string, string>;
+  failed?: Record<string, true>;
+  onRetry?: () => void;
+  active: boolean;
+}) {
   const src = srcs[m.key];
   const poster = m.poster ? srcs[m.poster] : undefined;
+  if (!src && failed?.[m.key]) {
+    return (
+      <div className="relative flex h-full w-full flex-col items-center justify-center gap-3 bg-black px-6 text-center">
+        {poster && <img src={poster} alt="" className="absolute inset-0 h-full w-full object-contain opacity-30" />}
+        <p className="relative max-w-[340px] text-[13px] leading-relaxed text-white/85">
+          {m.kind === "video" ? "Видео не загрузилось." : "Фото не загрузилось."} Проверьте интернет или запустите мост и попробуйте ещё раз.
+        </p>
+        {onRetry && (
+          <button
+            type="button"
+            onClick={onRetry}
+            className="relative inline-flex h-8 items-center rounded-lg bg-white/15 px-3 text-[12px] font-medium text-white ring-1 ring-white/20 transition-colors hover:bg-white/25"
+          >
+            Попробовать ещё раз
+          </button>
+        )}
+      </div>
+    );
+  }
   if (!src) {
     return (
       <div className="relative flex h-full w-full items-center justify-center bg-black">
@@ -138,7 +173,7 @@ function Slide({ m, srcs, active }: { m: BannerMedia; srcs: Record<string, strin
   return <img src={src} alt="" draggable={false} className="h-full w-full select-none bg-black object-contain" />;
 }
 
-export function MediaViewer({ banner, srcs, accent, start = 0, onClose, onOpenUrl }: Props) {
+export function MediaViewer({ banner, srcs, failed, onRetry, accent, start = 0, onClose, onOpenUrl }: Props) {
   const reduce = useReducedMotion();
   const uid = useId();
   const [[i, dir], setI] = useState<[number, number]>([start, 0]);
@@ -225,7 +260,7 @@ export function MediaViewer({ banner, srcs, accent, start = 0, onClose, onOpenUr
                   onDragEnd={onDragEnd}
                   className="absolute inset-0"
                 >
-                  {cur && <Slide m={cur} srcs={srcs} active />}
+                  {cur && <Slide m={cur} srcs={srcs} failed={failed} onRetry={onRetry} active />}
                 </motion.div>
               </AnimatePresence>
 

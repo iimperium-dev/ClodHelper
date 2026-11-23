@@ -334,10 +334,13 @@ fn parse(text: &str, current: &str) -> Result<Vec<Notice>, String> {
     Ok(v)
 }
 
-/// Сервер рассылок спрашиваем не чаще раза в 10 минут (по фокусу окна запрос
-/// шёл бы раз в минуту). GitHub - как раньше. Баннер, включённый в админке, должен появиться при следующем открытии
-/// окна, а не через час: 10 минут (ответ сервера и так кэшируется 5 минут).
-const SERVER_MIN_GAP: std::time::Duration = std::time::Duration::from_secs(600);
+/// Сервер рассылок спрашиваем не чаще раза в 5 минут (по фокусу окна запрос
+/// шёл бы раз в минуту). GitHub - как раньше. Баннер, включённый или снятый в
+/// админке, должен появиться или пропасть за минуты, а не через час. Чаще
+/// 5 минут смысла нет: ответ сервера и так кэшируется на 5 минут. Открытое
+/// окно с «Обзором» само просит обновление раз в 5 минут (PromoBanner), а
+/// предел чуть меньше, чтобы такой опрос не промахивался на секунды.
+const SERVER_MIN_GAP: std::time::Duration = std::time::Duration::from_secs(270);
 static SERVER_AT: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
 
 fn server_due() -> bool {
@@ -391,25 +394,30 @@ pub async fn fetch() -> Result<Vec<Notice>, String> {
     // Кэш каждого источника свой: ответил - заменяется целиком, упал -
     // остаётся прежний (заново проверенный на пригодность этой версии).
     let s = crate::settings::update_notices_caches(|s| {
-        combine_caches(&s.notices_cache, &s.notices_cache_server, github, server, current)
+        combine_caches(&s.notices_cache, &s.notices_cache_server, github, server, server_on, current)
     })?;
     Ok(cached(&s).into_iter().filter(|n| !s.notices_toasted.contains(&n.id)).collect())
 }
 
 /// Новые кэши (GitHub, сервер). Источник ответил (Ok) - его кэш заменяется
-/// целиком; упал (Err) или не спрашивался (None) - берём его прежний кэш,
-/// заново пропущенный через applies(current).
+/// целиком (пустой ответ тоже: снятый в админке баннер пропадает); упал (Err)
+/// или ещё рано спрашивать (None) - берём его прежний кэш, заново
+/// пропущенный через applies(current). Статистика выключена (`server_on` =
+/// false) - сервер больше не спрашиваем и его кэш очищаем: проверить, не
+/// сняли ли баннер, нельзя, а висеть вечно он не должен.
 fn combine_caches(
     prev_github: &[Notice],
     prev_server: &[Notice],
     github: Result<Vec<Notice>, String>,
     server: Option<Result<Vec<Notice>, String>>,
+    server_on: bool,
     current: &str,
 ) -> (Vec<Notice>, Vec<Notice>) {
     let keep = |prev: &[Notice]| -> Vec<Notice> { prev.iter().filter(|n| applies(n, current)).cloned().collect() };
     let gh = github.unwrap_or_else(|_| keep(prev_github));
     let srv = match server {
         Some(Ok(v)) => v,
+        _ if !server_on => Vec::new(),
         _ => keep(prev_server),
     };
     (gh, srv)
@@ -625,16 +633,22 @@ mod tests {
         let prev_srv = vec![n("srv-old", None)];
         let ids = |v: &[Notice]| v.iter().map(|x| x.id.clone()).collect::<Vec<_>>();
         // GitHub упал, сервер ответил: кэш GitHub - прежний (минус неподходящее), кэш сервера заменён целиком.
-        let (gh, srv) = combine_caches(&prev_gh, &prev_srv, Err("нет сети".into()), Some(Ok(vec![n("srv-new", None)])), "0.8.3");
+        let (gh, srv) = combine_caches(&prev_gh, &prev_srv, Err("нет сети".into()), Some(Ok(vec![n("srv-new", None)])), true, "0.8.3");
         assert_eq!(ids(&gh), vec!["gh-old"], "прежний кэш заново прошёл applies");
         assert_eq!(ids(&srv), vec!["srv-new"], "ответивший источник заменяется целиком");
         // Сервер упал, GitHub ответил пустым списком: пустой ответ тоже заменяет кэш.
-        let (gh, srv) = combine_caches(&prev_gh, &prev_srv, Ok(vec![]), Some(Err("500".into())), "0.8.3");
+        let (gh, srv) = combine_caches(&prev_gh, &prev_srv, Ok(vec![]), Some(Err("500".into())), true, "0.8.3");
         assert!(gh.is_empty());
         assert_eq!(ids(&srv), vec!["srv-old"]);
-        // Сервер не спрашивали (статистика выключена): его кэш остаётся.
-        let (_, srv) = combine_caches(&prev_gh, &prev_srv, Ok(vec![]), None, "0.8.3");
+        // Сервер не спрашивали (рано, 5 минут не прошло): его кэш остаётся.
+        let (_, srv) = combine_caches(&prev_gh, &prev_srv, Ok(vec![]), None, true, "0.8.3");
         assert_eq!(ids(&srv), vec!["srv-old"]);
+        // Сервер ответил пустым списком (баннер сняли в админке): кэш пуст.
+        let (_, srv) = combine_caches(&prev_gh, &prev_srv, Ok(vec![]), Some(Ok(vec![])), true, "0.8.3");
+        assert!(srv.is_empty(), "снятый баннер не остаётся в кэше");
+        // Статистику выключили: сервер не спрашиваем, старый баннер не висит вечно.
+        let (_, srv) = combine_caches(&prev_gh, &prev_srv, Ok(vec![]), None, false, "0.8.3");
+        assert!(srv.is_empty(), "без статистики кэш сервера очищается");
         // Колокольчик видит оба источника.
         let s = crate::settings::Settings { notices_cache: prev_gh, notices_cache_server: prev_srv, ..Default::default() };
         assert_eq!(cached(&s).len(), 3);
