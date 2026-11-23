@@ -271,7 +271,7 @@ export function ProxySelect({ value, pool, labels, disabled, onChange }: SelectP
   «сервис → прокси» через кастомный пикер, удаление с подтверждением.
 */
 export function Proxies() {
-  const { proxies, refresh, refreshPoolPing, bridgeFile } = useStatus();
+  const { proxies, refresh, refreshPoolPing, bridgeFile, setAlertMuted } = useStatus();
 
   const [pool, setPool] = useState<string[] | null>(null);
   const [labels, setLabels] = useState<Record<string, string>>({});
@@ -581,10 +581,12 @@ export function Proxies() {
       open: expanded.has(url),
       confirm,
       shop: shopMeta[url] ? { until: expiryShort(shopMeta[url].expires_at), expired: isExpired(shopMeta[url]) } : undefined,
+      muted: st?.muted,
     };
   });
 
   const poolActions: PoolActions = {
+    unmute: (url) => void setAlertMuted(url, false).catch((e) => setError(String(e))),
     busy,
     toggle: toggleExpanded,
     speed: (url) => void speedCheck(url),

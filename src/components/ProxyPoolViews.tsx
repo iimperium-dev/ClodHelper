@@ -38,6 +38,8 @@ export interface PoolRow {
   confirm?: string;
   /** Куплен в магазине Clod Helper: срок («до 15 декабря») и истёк ли он. */
   shop?: { until: string | null; expired: boolean };
+  /** Предупреждение о поломке скрыто (на «Обзоре» кнопкой «Скрыть»). */
+  muted?: boolean;
 }
 
 export interface PoolActions {
@@ -61,6 +63,8 @@ export interface PoolActions {
   replace: (url: string) => void;
   /** Панель резервов под прокси (раскрытие - по `open`). */
   backupsPanel: (row: PoolRow) => ReactNode;
+  /** Снова предупреждать о поломке прокси. */
+  unmute: (url: string) => void;
 }
 
 /* ───────────────────────── Общие кусочки ───────────────────────── */
@@ -166,6 +170,28 @@ function ShopLine({ row, a }: { row: PoolRow; a: PoolActions }) {
           <RenewBtn row={row} a={a} />
         </>
       )}
+    </div>
+  );
+}
+
+/** «Предупреждение скрыто · Вернуть» - строкой под именем. Метка видна,
+    пока прокси не работает: заработает - она снимется сама. */
+export function MutedLine({ onUnmute, className }: { onUnmute: () => void; className?: string }) {
+  return (
+    <div
+      data-testid="proxy-muted"
+      title="На «Обзоре» и в статусе этот прокси не считается поломкой. Проверки идут как раньше"
+      className={cn("mt-1 flex min-w-0 items-center gap-1.5 whitespace-nowrap text-[11px] leading-none text-vb-silver-faint", className)}
+    >
+      <span>Предупреждение скрыто</span>
+      <span aria-hidden="true">·</span>
+      <button
+        type="button"
+        onClick={onUnmute}
+        className="shrink-0 rounded text-vb-silver-dim transition-colors hover:text-vb-silver"
+      >
+        Вернуть
+      </button>
     </div>
   );
 }
@@ -449,6 +475,7 @@ function RowA({ row, a }: { row: PoolRow; a: PoolActions }) {
               </span>
             )}
           </div>
+          {row.muted && row.live === "down" && <MutedLine onUnmute={() => a.unmute(row.url)} />}
           <Problem row={row} a={a} />
         </div>
         {/* Цифры ↔ кнопки: один и тот же слот, сменяются при наведении */}

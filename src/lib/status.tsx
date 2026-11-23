@@ -16,6 +16,8 @@ import {
   bridgeVersions,
   globalProxyEnv,
   proxiesPing,
+  proxyAlertMute,
+  proxyAlertsMutedGet,
   shimStatus,
   systemPacStatus,
   vpnStatus,
@@ -86,6 +88,10 @@ export interface ProxyState {
   backupOf?: number;
   /** Прокси пула не работает, но его подменяет этот резерв (индекс). */
   coveredBy?: number;
+  /** Человек скрыл предупреждение о поломке этого прокси (знает причину,
+      например, не оплатил). Проверки идут как раньше, но «Обзор», сайдбар
+      и мигание орба его не считают. Заработает - метка снимется сама. */
+  muted?: boolean;
 }
 
 /** Прокси пула (без резервов) - с исходными индексами. */
@@ -212,6 +218,8 @@ interface StatusContextValue {
   poolDownSince: number | null;
   /** VPN рядом с мостом (null - ещё не проверяли). */
   vpn: VpnStatus | null;
+  /** Скрыть или вернуть предупреждение о неработающем прокси (по URL). */
+  setAlertMuted: (url: string, mute: boolean) => Promise<void>;
 }
 
 const StatusContext = createContext<StatusContextValue | null>(null);
@@ -238,6 +246,11 @@ export function StatusProvider({ children }: { children: ReactNode }) {
   const lastEvent = useRef(0);
   const [history, setHistory] = useState<TrafficSample[]>([]);
   const [poolPing, setPoolPing] = useState<ProxyPing[]>([]);
+  /** URL прокси со скрытым предупреждением о поломке. */
+  const [mutedUrls, setMutedUrls] = useState<string[]>([]);
+  const setAlertMuted = useCallback(async (url: string, mute: boolean) => {
+    setMutedUrls(await proxyAlertMute(url, mute));
+  }, []);
   const [bridgeFile, setBridgeFile] = useState<BridgeFileIssue | null>(null);
   const [pac, setPac] = useState<SystemPacStatus | null>(null);
   const [vpn, setVpn] = useState<VpnStatus | null>(null);
@@ -266,6 +279,8 @@ export function StatusProvider({ children }: { children: ReactNode }) {
     try {
       const list = await proxiesPing();
       setPoolPing(list);
+      // После проверки: заработавший прокси Rust уже снял со скрытых.
+      proxyAlertsMutedGet().then(setMutedUrls, () => {});
       if (recheck.current !== null) window.clearTimeout(recheck.current);
       recheck.current = list.some((p) => p.ms === null)
         ? window.setTimeout(() => {
@@ -442,7 +457,9 @@ export function StatusProvider({ children }: { children: ReactNode }) {
     };
   }, [refresh, refreshPoolPing]);
 
-  const proxies = proxyStatesOf(poolPing, health, quality);
+  const proxies = proxyStatesOf(poolPing, health, quality).map((p) =>
+    mutedUrls.includes(p.url) ? { ...p, muted: true } : p,
+  );
   const orb = orbStateOf(status, proxies);
   const orbPulse = orbPulseOf(orb, proxies);
   // Отсчёт «прокси не работает уже N минут» - для баннера по ситуации.
@@ -478,6 +495,7 @@ export function StatusProvider({ children }: { children: ReactNode }) {
         sitesBroken: !!pac?.supported && pac.enabled && !pac.active,
         poolDownSince,
         vpn,
+        setAlertMuted,
       }}
     >
       {children}
@@ -491,9 +509,10 @@ export function useStatus(): StatusContextValue {
   return ctx;
 }
 
-/** Сколько прокси с проблемой: не отвечает или нестабилен (резервы тоже). */
+/** Сколько прокси с проблемой: не отвечает или нестабилен (резервы тоже).
+    Скрытые человеком не в счёт. */
 export function proxyProblems(proxies: ProxyState[]): number {
-  return proxies.filter((p) => p.state === "down" || p.state === "unstable").length;
+  return proxies.filter((p) => !p.muted && (p.state === "down" || p.state === "unstable")).length;
 }
 
 /** Единая логика статуса для орба/логотипа/трея: loading/down/warn/ok.

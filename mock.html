@@ -33,6 +33,8 @@
   раскрытие с причиной и кнопкой); ?ru - основной прокси в России (флаг из кэша гео).
   ?vpn=wg|tun - включён VPN WireGuard / безымянный туннель; ?vpn=sota - SOTA VPN стёр
   прокси-переменные. window.__replaced - вызовы proxy_replace.
+  ?down=1&oldname - у неработающего третьего прокси есть имя «CD - old2»; ?muted - предупреждение
+  о нём скрыто (proxy_alerts_muted_get).
   Используется тестами tests/ui (Playwright).
 -->
 <script>
@@ -233,6 +235,10 @@
     R.update_check = null;
     R.update_latest = null;
   }
+  // ?oldname (вместе с ?down=1) - у неработающего третьего прокси есть имя, как у
+  // владельца: «CD - old2». ?muted - предупреждение о нём скрыто.
+  if (params.has("oldname")) R.proxy_labels_get = { ...R.proxy_labels_get, "http://u:p@193.8.114.42:8080": "CD - old2" };
+  R.proxy_alerts_muted_get = params.has("muted") ? ["http://u:p@193.8.114.42:8080"] : [];
   // Прокси из магазина (срок; ключ - только в Rust). ?shopproxy - третий прокси
   // куплен, ?shopproxy=expired - срок прошёл и прокси не отвечает.
   const shopMeta = {};
@@ -355,6 +361,11 @@
         R.proxies_get = [...args.urls];
         (window.__poolWrites ||= []).push([...args.urls]);
         return structuredClone(R.proxies_get);
+      }
+      if (cmd === "proxy_alert_mute") {
+        const rest = R.proxy_alerts_muted_get.filter((u) => u !== args.url);
+        R.proxy_alerts_muted_get = args.mute ? [...rest, args.url] : rest;
+        return structuredClone(R.proxy_alerts_muted_get);
       }
       if (cmd === "proxy_label_set") {
         R.proxy_labels_get = { ...R.proxy_labels_get, [args.url]: args.label };

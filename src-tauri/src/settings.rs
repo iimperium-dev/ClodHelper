@@ -112,6 +112,12 @@ pub struct Settings {
     /// со своим прокси.
     #[serde(default)]
     pub proxy_backups: std::collections::HashMap<String, Vec<String>>,
+    /// Прокси, о поломке которых человек попросил не предупреждать (например,
+    /// не оплачен, оплатит позже): адреса host:port (proxy_addr_key), чтобы
+    /// новый логин и пароль не сбрасывали выбор. Прокси остаётся в пуле и
+    /// проверяется как раньше; заработал - метка снимается сама (proxies_ping).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub muted_proxy_alerts: Vec<String>,
     /// Версия, о которой уже показали уведомление «Доступно обновление»:
     /// фоновая проверка не повторяет его каждые несколько часов.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -477,6 +483,35 @@ fn retain_labels(s: &mut Settings) {
     let keep = bridge_upstreams(s);
     s.proxy_labels.retain(|u, _| keep.contains(u));
     s.shop_proxies.retain(|u, _| keep.contains(u));
+    let addrs: Vec<String> = keep.iter().filter_map(|u| proxy_addr_key(u)).collect();
+    s.muted_proxy_alerts.retain(|k| addrs.contains(k));
+}
+
+/// URL прокси (пула и резервов), о поломке которых не предупреждаем.
+pub fn muted_alert_urls(s: &Settings) -> Vec<String> {
+    bridge_upstreams(s)
+        .into_iter()
+        .filter(|u| proxy_addr_key(u).is_some_and(|k| s.muted_proxy_alerts.contains(&k)))
+        .collect()
+}
+
+/// Скрыть (`mute`) или вернуть предупреждение о неработающем прокси.
+pub fn set_alert_muted(s: &mut Settings, url: &str, mute: bool) -> Result<(), String> {
+    let key = proxy_addr_key(url).ok_or("Не получилось разобрать адрес прокси")?;
+    s.muted_proxy_alerts.retain(|k| *k != key);
+    if mute {
+        s.muted_proxy_alerts.push(key);
+    }
+    Ok(())
+}
+
+/// Прокси снова заработал: предупреждение о нём возвращается (сломается
+/// ещё раз - человек об этом узнает). true - что-то сняли.
+pub fn unmute_alive(s: &mut Settings, alive_urls: &[String]) -> bool {
+    let alive: Vec<String> = alive_urls.iter().filter_map(|u| proxy_addr_key(u)).collect();
+    let before = s.muted_proxy_alerts.len();
+    s.muted_proxy_alerts.retain(|k| !alive.contains(k));
+    s.muted_proxy_alerts.len() != before
 }
 
 /// Купленный в магазине прокси: ключ покупки и срок действия.
@@ -1378,5 +1413,37 @@ mod tests {
             assert_eq!(profiles[0].process_names, ["Claude.exe"]);
             assert!(!merge_presets(&mut profiles, vec![detected]));
         }
+    }
+
+    #[test]
+    fn muted_alert_by_address_and_unmuted_when_alive() {
+        let mut s = Settings::default();
+        s.proxies = vec!["http://a:b@1.1.1.1:8000".into(), "http://u:p@193.8.114.42:8080".into()];
+        set_alert_muted(&mut s, "http://u:p@193.8.114.42:8080", true).unwrap();
+        assert_eq!(s.muted_proxy_alerts, vec!["193.8.114.42:8080".to_string()]);
+        // Новый логин и пароль - тот же прокси, метка остаётся.
+        s.proxies[1] = "http://x:y@193.8.114.42:8080".into();
+        assert_eq!(muted_alert_urls(&s), vec!["http://x:y@193.8.114.42:8080".to_string()]);
+        // Повторное скрытие не плодит дубли.
+        set_alert_muted(&mut s, "http://x:y@193.8.114.42:8080", true).unwrap();
+        assert_eq!(s.muted_proxy_alerts.len(), 1);
+        // Живой другой прокси метку не трогает, живой этот - снимает.
+        assert!(!unmute_alive(&mut s, &["http://a:b@1.1.1.1:8000".into()]));
+        assert!(unmute_alive(&mut s, &["http://x:y@193.8.114.42:8080".into()]));
+        assert!(muted_alert_urls(&s).is_empty());
+        // Вернуть показ вручную.
+        set_alert_muted(&mut s, "http://x:y@193.8.114.42:8080", true).unwrap();
+        set_alert_muted(&mut s, "http://x:y@193.8.114.42:8080", false).unwrap();
+        assert!(s.muted_proxy_alerts.is_empty());
+    }
+
+    #[test]
+    fn muted_alert_dropped_with_proxy() {
+        let mut s = Settings::default();
+        s.proxies = vec!["http://a:b@1.1.1.1:8000".into(), "http://u:p@193.8.114.42:8080".into()];
+        set_alert_muted(&mut s, "http://u:p@193.8.114.42:8080", true).unwrap();
+        s.proxies.truncate(1);
+        retain_labels(&mut s);
+        assert!(s.muted_proxy_alerts.is_empty(), "удалённый прокси метку не держит");
     }
 }

@@ -265,6 +265,8 @@ pub fn run() {
             commands::system_pac_set,
             commands::proxy_labels_get,
             commands::proxy_label_set,
+            commands::proxy_alerts_muted_get,
+            commands::proxy_alert_mute,
             commands::claude_telemetry_get,
             commands::claude_telemetry_set,
             commands::google_ads_get,
