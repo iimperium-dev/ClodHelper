@@ -24,6 +24,7 @@
   ?statsoff - ответ уже был; ?privacyfail - privacy_get падает, пока window.__privacyFailOff не true.
   ?reportlimit (429) и ?reportbusy (503) - ошибка отправки; ?reportslow - отправка 9 секунд; __reportNonces.
   ?reportfail - отправка отчёта падает; window.__privacy(), __reports, __uiErrors - для тестов.
+  ?claudedirect - Claude Desktop открыт без прокси («Открыть» предлагает перезапуск); ?relaunchfail - перезапуск не вышел.
   ?deeplink - программа открыта ссылкой clodhelper://add?key=... (купленный прокси, новый адрес);
   ?deeplink=update - тот же адрес уже в пуле, ?deeplink=fail - магазин не ответил.
   ?shopproxy - в пуле прокси из магазина со сроком, ?shopproxy=expired - срок прошёл, прокси не отвечает.
@@ -476,7 +477,24 @@
         return structuredClone(R.apps_list);
       }
       if (cmd === "proxy_assignments_set") { await new Promise((r) => setTimeout(r, 500)); R.proxy_assignments_get = args.assignments; return null; }
-      if (cmd === "apps_relaunch") { await new Promise((r) => setTimeout(r, 700)); return null; }
+      // ?claudedirect - Claude Desktop открыт без прокси: «Открыть» отвечает предложением
+      // перезапуска (тот же текст, что claude_desktop::RESTART_OFFER); ?relaunchfail - перезапуск
+      // не вышел. window.__launched / __relaunched - что запускалось.
+      if (cmd === "apps_launch") {
+        await wait(params.has("still") ? 30 : 400);
+        (window.__launched ||= []).push(args.id);
+        if (args.id === "claude-desktop" && params.has("claudedirect") && !window.__claudeRelaunched) {
+          throw "Claude Desktop открыт без прокси. Перезапустить его с прокси?";
+        }
+        return null;
+      }
+      if (cmd === "apps_relaunch") {
+        await new Promise((r) => setTimeout(r, params.has("still") ? 60 : 700));
+        (window.__relaunched ||= []).push(args.id);
+        if (params.has("relaunchfail")) throw "Claude Desktop не закрылся - закройте его и нажмите «Открыть»";
+        if (args.id === "claude-desktop") window.__claudeRelaunched = true;
+        return null;
+      }
       if (cmd === "reveal_in_folder") return null;
       if (cmd === "plugin:event|listen") {
         const id = listenId++;

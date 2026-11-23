@@ -725,7 +725,15 @@ pub fn relaunch(p: &AppProfile) -> Result<(), String> {
         profile_installed(p).1
     }
     .filter(|l| l.to_lowercase().ends_with(".exe") && l.contains('\\'));
-    let pids = || main_pids(&image, exe.as_deref());
+    // Claude Desktop - по правилам лаунчера: и прежняя версия из Store.
+    let claude = p.id == crate::claude_desktop::PROFILE_ID;
+    let pids = || {
+        if claude {
+            crate::claude_desktop::running_pids()
+        } else {
+            main_pids(&image, exe.as_deref())
+        }
+    };
     let wait = |secs: u64| {
         let deadline = Instant::now() + Duration::from_secs(secs);
         while !pids().is_empty() && Instant::now() < deadline {
@@ -753,12 +761,24 @@ pub fn relaunch(p: &AppProfile) -> Result<(), String> {
     if restore && matches!(p.kind, LaunchKind::ExeFlag | LaunchKind::Custom) {
         return launch_exe(p, &["--restore-last-session"]);
     }
-    launch(p)
+    // Claude закрыли, а лаунчер всё ещё видит его открытым - это «не закрылся»,
+    // а не новое предложение перезапуститься.
+    launch(p).map_err(|e| if claude && e == crate::claude_desktop::RESTART_OFFER { not_closed() } else { e })
 }
 
 /// PID главного процесса программы: имя образа и, если известен, путь к exe.
 #[cfg(target_os = "windows")]
 pub(crate) fn main_pids(image: &str, exe: Option<&str>) -> Vec<u32> {
+    match exe {
+        Some(path) => pids_where(image, |e| e.eq_ignore_ascii_case(path)),
+        None => pids_where(image, |_| true),
+    }
+}
+
+/// PID процессов с этим именем образа, путь к exe которых подходит `path_ok`
+/// (без пути - только если подходит пустая строка).
+#[cfg(target_os = "windows")]
+pub(crate) fn pids_where(image: &str, path_ok: impl Fn(&str) -> bool) -> Vec<u32> {
     use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
     let mut sys = System::new();
     sys.refresh_processes_specifics(
@@ -769,10 +789,7 @@ pub(crate) fn main_pids(image: &str, exe: Option<&str>) -> Vec<u32> {
     sys.processes()
         .iter()
         .filter(|(_, proc)| proc.name().to_string_lossy().eq_ignore_ascii_case(image))
-        .filter(|(_, proc)| match exe {
-            Some(path) => proc.exe().is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case(path)),
-            None => true,
-        })
+        .filter(|(_, proc)| path_ok(&proc.exe().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default()))
         .map(|(pid, _)| pid.as_u32())
         .collect()
 }
@@ -810,20 +827,35 @@ pub fn launch(p: &AppProfile) -> Result<(), String> {
 }
 
 /// Claude Desktop уже открыт: лаунчер такой запуск отвергает (Electron отдал
-/// бы его открытому окну без прокси), и человек видел просьбу закрыть Claude
-/// через трей. Теперь: ходит мимо моста - перезапускаем через мост, иначе
-/// просто выводим окно вперёд (прокси задан политикой Claude).
+/// бы его открытому окну без прокси). Через мост - просто выводим окно
+/// вперёд. Мимо моста - не закрываем молча, а предлагаем перезапуск
+/// (RESTART_OFFER, кнопка «Перезапустить» в интерфейсе). Это ожидаемая
+/// ситуация, а не сбой: в отчёты об ошибках не уходит.
 fn launch_claude_desktop(p: &AppProfile) -> Result<(), String> {
+    use crate::claude_desktop::{is_already_running_error, RESTART_OFFER};
     if !crate::claude_desktop::running() {
-        return crate::claude_desktop::launch();
+        // Скрипт увидел открытый Claude, а детект нет (гонка с запуском).
+        return crate::claude_desktop::launch().map_err(|e| {
+            if is_already_running_error(&e) { RESTART_OFFER.to_string() } else { e }
+        });
     }
-    let around = crate::traffic::snapshot(std::slice::from_ref(p))
-        .first()
-        .is_some_and(|t| t.direct > 0);
-    if around {
-        relaunch(p)
+    let t = crate::traffic::snapshot(std::slice::from_ref(p)).into_iter().next();
+    let policy = || crate::claude_policy::status().is_ok_and(|s| s.configured);
+    if claude_goes_around(t.as_ref().map(|t| (t.direct, t.via_bridge)), policy) {
+        Err(RESTART_OFFER.into())
     } else {
         crate::claude_desktop::focus()
+    }
+}
+
+/// Открытый Claude Desktop ходит мимо моста: есть прямые соединения, или
+/// через мост нет ни одного, а прокси политикой Claude не задан (значит,
+/// открыт без флага прокси). `policy` спрашивается только при нужде.
+fn claude_goes_around(traffic: Option<(u32, u32)>, policy: impl FnOnce() -> bool) -> bool {
+    match traffic {
+        Some((direct, _)) if direct > 0 => true,
+        Some((_, via)) if via > 0 => false,
+        _ => !policy(),
     }
 }
 
@@ -1788,6 +1820,17 @@ fn squirrel_app(update: &std::path::Path, args: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod search_tests {
     use super::*;
+
+    /// Открытый Claude Desktop: когда предлагать перезапуск, а когда просто
+    /// вывести окно вперёд.
+    #[test]
+    fn claude_around_bridge_rules() {
+        assert!(claude_goes_around(Some((3, 5)), || panic!("не нужно")), "есть прямые соединения");
+        assert!(!claude_goes_around(Some((0, 2)), || panic!("не нужно")), "идёт через мост");
+        assert!(claude_goes_around(Some((0, 0)), || false), "тихо и без политики - открыт без флага");
+        assert!(!claude_goes_around(Some((0, 0)), || true), "тихо, прокси задан политикой");
+        assert!(!claude_goes_around(None, || true));
+    }
 
     /// Оба флага WebRTC и в аргументах, и в строке для ярлыков.
     #[test]

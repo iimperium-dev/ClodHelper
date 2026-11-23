@@ -6,6 +6,8 @@ import { type RowAction, type RowStatus } from "../components/AppRow";
 import { AppSearchAdd } from "../components/AppSearchAdd";
 import { AppsBoard } from "../components/AppsBoard";
 import { AppSettingsModal } from "../components/AppSettingsModal";
+import { LaunchNotice } from "../components/LaunchNotice";
+import { isRestartOffer } from "../lib/launch";
 import { moveApp } from "../lib/appLayout";
 import { reconcile, type AppsLayout, type AppsView } from "../lib/appLayout";
 import {
@@ -71,6 +73,7 @@ function trafficStatus(t: AppTraffic | undefined, idle: string): RowStatus {
 export function Apps() {
   const [apps, setApps] = useState<AppProfileStatus[] | null>(null);
   const [adding, setAdding] = useState(false);
+  const [launchNote, setLaunchNote] = useState<{ id: string; text: string; restart: boolean } | null>(null);
 
   const [traffic, setTraffic] = useState<Record<string, AppTraffic>>({});
   const [claude, setClaude] = useState<ClaudeProxyStatus | null>(null);
@@ -343,6 +346,24 @@ export function Apps() {
     }
   };
 
+  // «Открыть» у Claude Desktop, открытого без прокси: вопрос с кнопкой
+  // «Перезапустить» над списком (в обоих видах). В виде плитками здесь же -
+  // причина, почему приложение не открылось (у строки списка она своя).
+  const launch = async (id: string) => {
+    try {
+      await after(appsLaunch(id));
+      setLaunchNote((n) => (n?.id === id ? null : n));
+    } catch (e) {
+      if (isRestartOffer(e)) {
+        setLaunchNote({ id, text: String(e), restart: true });
+        return;
+      }
+      throw e;
+    }
+  };
+  const onBoardError = (id: string, e: unknown) =>
+    setLaunchNote({ id, text: String(e), restart: isRestartOffer(e) });
+
   return (
     <motion.div
       variants={staggerContainer}
@@ -398,6 +419,17 @@ export function Apps() {
         />
       )}
 
+      {launchNote && (
+        <LaunchNotice
+          key={`${launchNote.id}:${launchNote.text}`}
+          className="mt-4"
+          text={launchNote.text}
+          restart={launchNote.restart}
+          onRestart={() => after(appsRelaunch(launchNote.id))}
+          onClose={() => setLaunchNote(null)}
+        />
+      )}
+
       {/* Список - одна поверхность, hairline-разделители */}
       <motion.section variants={fadeInUp} className="mt-5">
         {apps === null ? (
@@ -418,7 +450,8 @@ export function Apps() {
             onEditing={setEditing}
             describe={describe}
             icons={icons}
-            onLaunch={(id) => after(appsLaunch(id))}
+            onLaunch={launch}
+            onError={onBoardError}
             onRemove={(id) => void removeApp(id)}
             onSettings={setSettingsId}
           />

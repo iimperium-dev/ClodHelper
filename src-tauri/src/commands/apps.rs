@@ -254,9 +254,12 @@ pub async fn apps_launch(id: String) -> Result<(), String> {
         .find(|p| p.id == id)
         .ok_or_else(|| "Профиль не найден".to_string())?
         .clone();
-    tokio::task::spawn_blocking(move || apps::launch(&profile))
+    let builtin = profile.builtin;
+    let r = tokio::task::spawn_blocking(move || apps::launch(&profile))
         .await
-        .map_err(|e| format!("Внутренняя ошибка: {e}"))?
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))?;
+    report_launch_failure(&r, builtin, "apps::launch");
+    r
 }
 
 /// Закрыть приложение, открытое мимо моста, и запустить через мост.
@@ -267,9 +270,23 @@ pub async fn apps_relaunch(id: String) -> Result<(), String> {
         .into_iter()
         .find(|p| p.id == id)
         .ok_or_else(|| "Профиль не найден".to_string())?;
-    tokio::task::spawn_blocking(move || apps::relaunch(&profile))
+    let builtin = profile.builtin;
+    let r = tokio::task::spawn_blocking(move || apps::relaunch(&profile))
         .await
-        .map_err(|e| format!("Внутренняя ошибка: {e}"))?
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))?;
+    report_launch_failure(&r, builtin, "apps::relaunch");
+    r
+}
+
+/// Настоящий сбой запуска или перезапуска - в отчёты об ошибках (только
+/// встроенные приложения: имя своего приложения - уже личное). Предложение
+/// перезапустить Claude Desktop - не сбой, его не отправляем.
+fn report_launch_failure(r: &Result<(), String>, builtin: bool, place: &str) {
+    if let Err(e) = r {
+        if builtin && e != crate::claude_desktop::RESTART_OFFER {
+            crate::telemetry::report_app(e, place);
+        }
+    }
 }
 
 /// Создать ярлык «<name> (proxy)» на рабочем столе или в панели задач.

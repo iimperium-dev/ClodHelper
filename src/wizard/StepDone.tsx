@@ -2,6 +2,7 @@ import { useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import { AppWindow, ArrowRight, Check, Globe, Loader2, Monitor, Power } from "lucide-react";
 import { appsLaunch, appsRelaunch } from "../lib/api";
+import { isRestartOffer } from "../lib/launch";
 import { Button } from "../components/Button";
 import { PrivacySwitches } from "../components/PrivacySwitches";
 import { WizardFooter, WizardTitle } from "../components/WizardShell";
@@ -139,7 +140,10 @@ const CLAUDE_ID = "claude-desktop";
   кнопка «Перезапустить Claude». Не был открыт - «Открыть Claude», он сразу
   пойдёт через мост.
 */
-function ClaudeRow({ claude, running }: { claude: WizardClaude; running: boolean }) {
+function ClaudeRow({ claude, running: wasRunning }: { claude: WizardClaude; running: boolean }) {
+  // Открыли его уже после подключения, мимо моста: «Открыть» ответит
+  // предложением перезапуска - кнопка становится «Перезапустить Claude».
+  const [running, setRunning] = useState(wasRunning);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -164,7 +168,8 @@ function ClaudeRow({ claude, running }: { claude: WizardClaude; running: boolean
       await (running ? appsRelaunch(CLAUDE_ID) : appsLaunch(CLAUDE_ID));
       setDone(true);
     } catch (e) {
-      setErr(String(e));
+      if (isRestartOffer(e)) setRunning(true);
+      else setErr(String(e));
     } finally {
       setBusy(false);
     }

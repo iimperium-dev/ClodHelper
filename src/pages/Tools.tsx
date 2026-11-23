@@ -22,8 +22,11 @@ import {
 } from "lucide-react";
 import { Button } from "../components/Button";
 import { Toggle } from "../components/Toggle";
+import { LaunchNotice } from "../components/LaunchNotice";
+import { isRestartOffer } from "../lib/launch";
 import {
   appsLaunch,
+  appsRelaunch,
   claudeChatsExport,
   claudeChatsExportProgress,
   claudeWipeRun,
@@ -684,7 +687,16 @@ function ClaudeWipeCard({ onOpenApps }: { onOpenApps: () => void }) {
                   </Button>
                 )}
               </div>
-              {launchError && <p className="mt-2 text-[12px] leading-snug text-vb-loss">{launchError}</p>}
+              {launchError && (
+                <LaunchNotice
+                  key={launchError}
+                  className="mt-2"
+                  text={launchError}
+                  restart={isRestartOffer(launchError)}
+                  onRestart={() => appsRelaunch("claude-desktop")}
+                  onClose={() => setLaunchError(null)}
+                />
+              )}
             </div>
           </motion.div>
         )}
