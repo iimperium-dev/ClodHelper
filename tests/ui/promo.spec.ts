@@ -106,7 +106,7 @@ test("файлы не скачались - баннер без обложки, �
   expect(errors).toEqual([]);
 });
 
-test("снятый в админке баннер пропадает с открытого «Обзора» сам, за 5 минут", async ({ page }) => {
+test("открытый «Обзор» раз в 5 минут просит проверить рассылки, снятый баннер пропадает сам", async ({ page }) => {
   await page.clock.install();
   await page.goto("/mock.html?still&promo");
   const banner = page.getByRole("region", { name: "Свой прокси за 5 минут" });
