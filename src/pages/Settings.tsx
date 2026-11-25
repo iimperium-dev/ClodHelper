@@ -8,7 +8,7 @@ import { ReportDialog } from "../components/ReportDialog";
 import { Button } from "../components/Button";
 import { UpdateBanner } from "../components/UpdateBanner";
 import { useStatus } from "../lib/status";
-import { autostartGet, autostartSet } from "../lib/api";
+import { autostartGet, autostartSet, bridgeTaskRegister } from "../lib/api";
 import { fadeInUp, staggerContainer } from "../lib/motion";
 import { isMac } from "../lib/platform";
 import { cn } from "../lib/cn";
@@ -18,7 +18,7 @@ import { cn } from "../lib/cn";
   своём разделе «Прокси» (сайдбар) - здесь только системное.
 */
 export function Settings() {
-  const { health, task } = useStatus();
+  const { health, task, refresh } = useStatus();
 
   const [autostart, setAutostart] = useState<boolean | null>(null);
   /** macOS: объект входа добавлен, но ждёт разрешения в Системных настройках. */
@@ -50,11 +50,27 @@ export function Settings() {
     } catch {
       setAutostartError(
         isMac
-          ? "Не получилось изменить автозапуск. Можно вручную: Системные настройки → Основные → Объекты входа."
-          : "Не получилось изменить автозапуск (нет прав в Windows). Можно вручную через Пуск → Автозагрузка.",
+          ? "Не получилось изменить автозапуск. Можно вручную: откройте Системные настройки, затем «Основные», затем «Объекты входа»."
+          : "Не получилось изменить автозапуск: нет прав в Windows. Можно вручную: откройте Пуск, затем «Автозагрузка».",
       );
     } finally {
       setAutostartBusy(false);
+    }
+  };
+
+  // Задача автозапуска моста пропала - та же кнопка, что на «Обзоре».
+  const [taskBusy, setTaskBusy] = useState(false);
+  const [taskError, setTaskError] = useState<string | null>(null);
+  const handleTaskRegister = async () => {
+    setTaskBusy(true);
+    setTaskError(null);
+    try {
+      await bridgeTaskRegister();
+      await refresh();
+    } catch (e) {
+      setTaskError(String(e));
+    } finally {
+      setTaskBusy(false);
     }
   };
 
@@ -97,7 +113,7 @@ export function Settings() {
         )}
         {!autostartError && needsApproval && (
           <p className="mt-3 text-[12px] leading-snug text-vb-warn">
-            Разрешите в Системных настройках → Объекты входа
+            Разрешите в Системных настройках, раздел «Объекты входа»
           </p>
         )}
       </motion.section>
@@ -120,11 +136,26 @@ export function Settings() {
             {health ? `v${health.version}` : "-"}
           </span>
         </div>
-        <div className="flex items-center justify-between px-4 py-3">
-          <span className="text-[13px] text-vb-silver-dim">Мост запускается сам</span>
-          <span className={cn("text-[12px]", task?.registered ? "text-vb-emerald" : "text-vb-warn")}>
-            {task === null ? "-" : task.registered ? "да" : "нет"}
-          </span>
+        <div className={cn("px-4", task && !task.registered ? "py-2.5" : "py-3")}>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-[13px] text-vb-silver-dim">Мост запускается сам</span>
+            <span className="flex items-center gap-2">
+              <span className={cn("text-[12px]", task?.registered ? "text-vb-emerald" : "text-vb-warn")}>
+                {task === null ? "-" : task.registered ? "да" : "нет"}
+              </span>
+              {task !== null && !task.registered && (
+                <Button variant="secondary" size="sm" onClick={handleTaskRegister} disabled={taskBusy}>
+                  {taskBusy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  Исправить
+                </Button>
+              )}
+            </span>
+          </div>
+          {taskError && (
+            <p role="alert" className="mt-2 text-[12px] leading-snug text-vb-loss">
+              {taskError}
+            </p>
+          )}
         </div>
         <div className="flex items-center justify-between px-4 py-2.5">
           <span className="text-[13px] text-vb-silver-dim">Что-то не так</span>
