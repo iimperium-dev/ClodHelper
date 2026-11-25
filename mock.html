@@ -12,7 +12,8 @@
   npm run mock → http://localhost:1420/mock.html (в vite build не входит).
   ?still - без анимаций (для снимков), ?platform=win - интерфейс Windows,
   ?fresh - первый запуск: моста ещё нет, открывается мастер (?wizfail -
-  установка падает на проверке, ?wizslow - фазы идут медленно).
+  установка падает на проверке, ?wizslow - фазы идут медленно, ?wizhold - после
+  всех фаз шаг ждёт window.__wizRelease(), чтобы тест успел прочитать строки).
   Мастер и приложения: ?noclaude / ?nocodex - их нет, шаг «Приложения» предложит
   поставить; window.__install("claude"|"codex") - установка закончилась (?autoinstall -
   сама через 2 с после «Установить»); window.__opened - открытые магазины;
@@ -665,6 +666,7 @@
           }
           window.__emit("wizard:step", ph + ":ok");
         }
+        if (params.has("wizhold")) await new Promise((r) => (window.__wizRelease = r));
         const claude = !wizApps.claude ? "absent" : params.has("claudeerr") ? "err" : "ok";
         return { test: structuredClone(R.shim_test), env_on: true, claude, claude_running: claude === "ok" && params.has("claudeopen") };
       }

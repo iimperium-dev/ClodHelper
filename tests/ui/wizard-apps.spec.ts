@@ -10,6 +10,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 type W = Window & {
   __install: (id: string) => void;
+  __wizRelease: () => void;
   __opened?: string[];
   __noticeEvents?: unknown[];
   __noticeEventsHeld?: unknown[];
@@ -64,9 +65,12 @@ test("Claude Desktop не подключился: мастер идёт даль
 
 test("нет обоих: «Установить» открывает магазин, «Жду установку…», затем «Установлено» и дальше сам", async ({ page }) => {
   const errors = collectErrors(page);
-  await throughInstall(page, "&platform=win&noclaude&nocodex&wizslow");
-  // На шаге установки Claude Desktop пропущен честно.
+  await throughInstall(page, "&platform=win&noclaude&nocodex&wizhold");
+  // На шаге установки Claude Desktop пропущен честно. Стенд держит шаг, пока
+  // строку не прочитали: иначе она видна меньше секунды и проверка её проскакивает.
   await expect(page.getByText("Claude Desktop не установлен")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByRole("progressbar", { name: "Ход настройки" })).toHaveAttribute("aria-valuenow", "100", { timeout: 10_000 });
+  await page.evaluate(() => (window as unknown as W).__wizRelease());
   await expect(page.getByRole("heading", { name: "Claude Desktop и Codex" })).toBeVisible({ timeout: 10_000 });
   await expect(page.getByText("Шаг 3 из 4")).toBeVisible();
 
