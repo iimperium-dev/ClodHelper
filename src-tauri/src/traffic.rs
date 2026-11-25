@@ -324,15 +324,12 @@ pub fn snapshot(profiles: &[AppProfile]) -> Vec<AppTraffic> {
     fresh
 }
 
-/// PID → имя образа («chrome.exe»): один системный снимок процессов.
+/// PID → имя образа («chrome.exe»): общий снимок процессов приложения.
 #[cfg(target_os = "windows")]
 fn process_names() -> std::collections::HashMap<u32, String> {
-    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
-    let mut sys = System::new();
-    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::new());
-    sys.processes()
+    crate::apps::running_processes()
         .iter()
-        .map(|(pid, p)| (pid.as_u32(), p.name().to_string_lossy().to_string()))
+        .map(|p| (p.pid, p.name.clone()))
         .collect()
 }
 

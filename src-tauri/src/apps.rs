@@ -289,20 +289,74 @@ fn telegram_link_handler() -> Option<PathBuf> {
     link_handler_exe(&command).filter(|p| p.is_file())
 }
 
-/// Пути exe запущенных процессов, подходящих под условие (имя образа, путь).
-#[cfg(target_os = "windows")]
-fn running_exes(matches: impl Fn(&str, &Path) -> bool) -> Vec<PathBuf> {
+/// Запущенный процесс из общего снимка (см. running_processes).
+#[derive(Debug, Clone)]
+// На Mac пока нужны только имена (VPN, Telegram).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) struct RunningProc {
+    pub pid: u32,
+    /// Имя образа как есть («Telegram.exe», на Mac - «Telegram»).
+    pub name: String,
+    /// Путь к exe; None - система не дала (чужой или защищённый процесс).
+    pub exe: Option<PathBuf>,
+}
+
+/// Сколько живёт общий снимок процессов. Статусы (VPN, трафик программ,
+/// Telegram) спрашивают его из разных окон и потоков почти одновременно -
+/// одного перебора на всех хватает.
+const PROC_SNAPSHOT_TTL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Общий снимок запущенных процессов для фоновых статусов. Раньше каждый
+/// статус собирал с нуля свою таблицу: новый System, перебор всех процессов
+/// и путь к exe каждого. Здесь таблица одна и живёт всё время: путь к exe
+/// читается один раз на PID, а сам перебор - не чаще раза в PROC_SNAPSHOT_TTL.
+/// Для действий, где важен «прямо сейчас» (ждать закрытия программы, закрыть
+/// её), - свой свежий перебор (pids_where).
+pub(crate) fn running_processes() -> std::sync::Arc<Vec<RunningProc>> {
+    use std::sync::{Arc, Mutex, OnceLock};
+    use std::time::Instant;
     use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
-    let mut sys = System::new();
-    sys.refresh_processes_specifics(
+    struct Table {
+        sys: System,
+        at: Option<Instant>,
+        snap: Arc<Vec<RunningProc>>,
+    }
+    static TABLE: OnceLock<Mutex<Table>> = OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        Mutex::new(Table { sys: System::new(), at: None, snap: Arc::new(Vec::new()) })
+    });
+    let mut t = table.lock().unwrap_or_else(|e| e.into_inner());
+    if t.at.is_some_and(|at| at.elapsed() < PROC_SNAPSHOT_TTL) {
+        return t.snap.clone();
+    }
+    t.sys.refresh_processes_specifics(
         ProcessesToUpdate::All,
         true,
         ProcessRefreshKind::new().with_exe(UpdateKind::OnlyIfNotSet),
     );
+    let snap: Arc<Vec<RunningProc>> = Arc::new(
+        t.sys
+            .processes()
+            .iter()
+            .map(|(pid, p)| RunningProc {
+                pid: pid.as_u32(),
+                name: p.name().to_string_lossy().into_owned(),
+                exe: p.exe().map(Path::to_path_buf),
+            })
+            .collect(),
+    );
+    t.snap = snap.clone();
+    t.at = Some(Instant::now());
+    snap
+}
+
+/// Пути exe запущенных процессов, подходящих под условие (имя образа, путь).
+#[cfg(target_os = "windows")]
+fn running_exes(matches: impl Fn(&str, &Path) -> bool) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
-    for proc in sys.processes().values() {
-        let Some(exe) = proc.exe() else { continue };
-        if !out.iter().any(|p| p == exe) && matches(&proc.name().to_string_lossy(), exe) {
+    for proc in running_processes().iter() {
+        let Some(exe) = proc.exe.as_deref() else { continue };
+        if !out.iter().any(|p| p == exe) && matches(&proc.name, exe) {
             out.push(exe.to_path_buf());
         }
     }
