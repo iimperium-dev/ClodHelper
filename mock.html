@@ -36,6 +36,9 @@
   прокси-переменные. window.__replaced - вызовы proxy_replace.
   ?down=1&oldname - у неработающего третьего прокси есть имя «CD - old2»; ?muted - предупреждение
   о нём скрыто (proxy_alerts_muted_get).
+  ?live - мост каждые 5 с шлёт событие bridge-health с растущими счётчиками (как монитор
+  программы); ?live=same - один и тот же снимок; ?livems=1000 - другой период.
+  window.__healthEvents - сколько событий отправлено.
   Используется тестами tests/ui (Playwright).
 -->
 <script>
@@ -288,6 +291,25 @@
     for (const l of listeners) if (l.event === event) callbacks[l.handler]?.({ event, id: l.id, payload });
   };
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // ?live: монитор программы присылает /healthz событием (по умолчанию стенд молчит,
+  // чтобы не менять поведение тестов).
+  window.__healthEvents = 0;
+  if (params.has("live")) {
+    const same = params.get("live") === "same";
+    setInterval(() => {
+      if (!same) {
+        const n = 3 + Math.floor(Math.random() * 6);
+        health.uptime_sec += 5;
+        health.total += n;
+        health.via_upstream += n - 1;
+        health.via_direct += 1;
+        health.active = 2 + Math.floor(Math.random() * 4);
+        for (const u of health.upstreams) if (u.healthy) u.ok += n - 1;
+      }
+      window.__healthEvents++;
+      window.__emit("bridge-health", structuredClone(health));
+    }, Number(params.get("livems")) || 5000);
+  }
   // Купленный прокси по ссылке: ключ ждёт, пока окно его заберёт.
   const SHOP_KEY = "q83vEjRWeJCrze8SNFZ4kKvN7xI0VniQq83vEjRWeJA";
   let shopPending = params.has("deeplink") ? SHOP_KEY : null;
