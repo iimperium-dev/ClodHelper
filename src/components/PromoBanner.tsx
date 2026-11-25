@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ArrowUpRight, Images, Play, X } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
-import { bannerMedia, noticeEvent, noticesBanners, noticesBannerDismiss, noticesSetupBanners } from "../lib/api";
+import { bannerMedia, noticeEvent, noticesBanners, noticesBannerDismiss, noticesRefresh, noticesSetupBanners } from "../lib/api";
 import { useStatus } from "../lib/status";
 import type { BannerView } from "../lib/types";
 import { cn } from "../lib/cn";
@@ -25,6 +25,9 @@ import { MediaViewer } from "./MediaViewer";
   передаёт лишь версию и систему. Показ и нажатие уходят в статистику только
   после согласия (решает Rust, здесь вызывается как обычно).
 */
+
+/** Как часто открытый «Обзор» проверяет, не сняли ли баннер. */
+const BANNER_POLL_MS = 5 * 60_000;
 
 /** Цвет акцента: точка, метка, свечение в углу и главная кнопка. */
 const ACCENT: Record<BannerView["accent"], string> = {
@@ -53,6 +56,9 @@ export function PromoBanner({ className, place = "overview" }: { className?: str
   const b = list.find((x) => !gone.includes(x.id) && bannerFits(x, place, poolDownSince, Date.now())) ?? null;
   const shown = useRef<string | null>(null);
   const [srcs, setSrcs] = useState<Record<string, string>>({});
+  // Файлы, которые не скачались ни одним путём: вместо вечной
+  // загрузки баннер без обложки, а в окне просмотра - понятный текст.
+  const [failed, setFailed] = useState<Record<string, true>>({});
   const [viewer, setViewer] = useState(false);
 
   useEffect(() => {
@@ -61,7 +67,20 @@ export function PromoBanner({ className, place = "overview" }: { className?: str
     load();
     // Рассылки обновились (админка включила или сняла баннер) - перечитать.
     const un = listen("notices:changed", load);
-    return () => void un.then((f) => f());
+    // Окно может часами стоять открытым на «Обзоре» без смены фокуса. Раз в
+    // 5 минут просим программу проверить рассылки (сам сервер она спросит не
+    // чаще раза в 10 минут): баннер, снятый в админке, пропадает за 10-15
+    // минут. Ответ придёт событием notices:changed.
+    const poll =
+      place === "overview"
+        ? window.setInterval(() => {
+            if (document.visibilityState === "visible") void noticesRefresh().catch(() => {});
+          }, BANNER_POLL_MS)
+        : undefined;
+    return () => {
+      void un.then((f) => f());
+      if (poll !== undefined) window.clearInterval(poll);
+    };
   }, [place]);
 
   useEffect(() => {
@@ -75,26 +94,38 @@ export function PromoBanner({ className, place = "overview" }: { className?: str
   // В мастере места мало: без обложки, фото и видео - по кнопке «Посмотреть».
   const cover = !!b?.cover && place !== "setup";
   const coverKey = cover && b?.media[0] ? (b.media[0].kind === "video" ? b.media[0].poster ?? null : b.media[0].key) : null;
+
+  /** Скачать файлы: что пришло - в srcs, чего нет в ответе - в failed. */
+  const fetchMedia = (keys: string[]) => {
+    if (!keys.length) return Promise.resolve();
+    setFailed((f) => Object.fromEntries(Object.entries(f).filter(([k]) => !keys.includes(k))));
+    return bannerMedia(keys)
+      .catch(() => ({}) as Record<string, string>)
+      .then((m) => {
+        setSrcs((s) => ({ ...s, ...m }));
+        const miss = keys.filter((k) => !m[k]);
+        if (miss.length) setFailed((f) => ({ ...f, ...Object.fromEntries(miss.map((k) => [k, true as const])) }));
+      });
+  };
+
   useEffect(() => {
-    if (!coverKey || srcs[coverKey]) return;
-    void bannerMedia([coverKey]).then((m) => setSrcs((s) => ({ ...s, ...m }))).catch(() => {});
-  }, [coverKey, srcs]);
+    if (!coverKey || srcs[coverKey] || failed[coverKey]) return;
+    void fetchMedia([coverKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [coverKey]);
+
+  const loadAll = () => {
+    if (!b) return;
+    const want = b.media.flatMap((m) => (m.poster ? [m.poster, m.key] : [m.key])).filter((k) => !srcs[k]);
+    // Сначала заставки и фото (мелкие), потом видео.
+    const isVideo = (k: string) => /\.(mp4|webm)$/.test(k);
+    void fetchMedia(want.filter((k) => !isVideo(k))).finally(() => void fetchMedia(want.filter(isVideo)));
+  };
 
   const openViewer = () => {
     if (!b || b.media.length === 0) return;
     setViewer(true);
-    const want = b.media.flatMap((m) => (m.poster ? [m.poster, m.key] : [m.key])).filter((k) => !srcs[k]);
-    if (!want.length) return;
-    // Сначала заставки и фото (мелкие), потом видео.
-    const isVideo = (k: string) => /\.(mp4|webm)$/.test(k);
-    const add = (m: Record<string, string>) => setSrcs((s) => ({ ...s, ...m }));
-    const big = want.filter(isVideo);
-    void bannerMedia(want.filter((k) => !isVideo(k)))
-      .then(add)
-      .catch(() => {})
-      .finally(() => {
-        if (big.length) void bannerMedia(big).then(add).catch(() => {});
-      });
+    loadAll();
   };
 
   const open = (url: string) => {
@@ -115,6 +146,8 @@ export function PromoBanner({ className, place = "overview" }: { className?: str
   const hasMedia = !!b && b.media.length > 0;
   const first = b?.media[0];
   const coverSrc = coverKey ? srcs[coverKey] : undefined;
+  // Обложка не скачалась - баннер без неё, с кнопкой «Посмотреть».
+  const showCover = cover && !!first && !(coverKey && failed[coverKey]);
 
   return (
     <>
@@ -145,7 +178,7 @@ export function PromoBanner({ className, place = "overview" }: { className?: str
             style={{ background: "linear-gradient(90deg, transparent, var(--acc), transparent)" }}
           />
 
-          {cover && first && (
+          {showCover && first && (
             <button
               type="button"
               onClick={openViewer}
@@ -159,9 +192,9 @@ export function PromoBanner({ className, place = "overview" }: { className?: str
                   draggable={false}
                   className="h-full w-full object-cover transition-transform duration-500 ease-out group-hover/cover:scale-[1.03]"
                 />
-              ) : (
+              ) : coverKey ? (
                 <span aria-hidden className="absolute inset-0 animate-pulse bg-vb-surface-2" />
-              )}
+              ) : null}
               <span aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-black/45 to-transparent" />
               {first.kind === "video" && (
                 <span className="absolute inset-0 flex items-center justify-center">
@@ -188,7 +221,7 @@ export function PromoBanner({ className, place = "overview" }: { className?: str
             <p className="relative mt-1 line-clamp-3 whitespace-pre-line text-[12px] leading-relaxed text-vb-silver-dim">{b.body}</p>
           )}
 
-          {(b.buttons.length > 0 || (hasMedia && !cover)) && (
+          {(b.buttons.length > 0 || (hasMedia && !showCover)) && (
             <div className="relative mt-3 flex flex-wrap gap-2">
               {b.buttons.map((x, i) =>
                 i === 0 ? (
@@ -213,7 +246,7 @@ export function PromoBanner({ className, place = "overview" }: { className?: str
                   </button>
                 ),
               )}
-              {hasMedia && !cover && (
+              {hasMedia && !showCover && (
                 <button
                   type="button"
                   onClick={openViewer}
@@ -234,7 +267,7 @@ export function PromoBanner({ className, place = "overview" }: { className?: str
               title="Скрыть"
               className={cn(
                 "absolute right-2.5 top-2.5 p-1 transition-colors",
-                cover && first
+                showCover
                   ? "rounded-full bg-black/50 text-white backdrop-blur-sm hover:bg-black/70"
                   : "rounded-md text-vb-silver-faint hover:bg-vb-surface-2 hover:text-vb-silver",
               )}
@@ -248,6 +281,8 @@ export function PromoBanner({ className, place = "overview" }: { className?: str
     <MediaViewer
       banner={viewer ? b : null}
       srcs={srcs}
+      failed={failed}
+      onRetry={loadAll}
       accent={acc}
       onClose={() => setViewer(false)}
       onOpenUrl={open}

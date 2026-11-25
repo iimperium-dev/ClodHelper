@@ -289,20 +289,74 @@ fn telegram_link_handler() -> Option<PathBuf> {
     link_handler_exe(&command).filter(|p| p.is_file())
 }
 
-/// Пути exe запущенных процессов, подходящих под условие (имя образа, путь).
-#[cfg(target_os = "windows")]
-fn running_exes(matches: impl Fn(&str, &Path) -> bool) -> Vec<PathBuf> {
+/// Запущенный процесс из общего снимка (см. running_processes).
+#[derive(Debug, Clone)]
+// На Mac пока нужны только имена (VPN, Telegram).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) struct RunningProc {
+    pub pid: u32,
+    /// Имя образа как есть («Telegram.exe», на Mac - «Telegram»).
+    pub name: String,
+    /// Путь к exe; None - система не дала (чужой или защищённый процесс).
+    pub exe: Option<PathBuf>,
+}
+
+/// Сколько живёт общий снимок процессов. Статусы (VPN, трафик программ,
+/// Telegram) спрашивают его из разных окон и потоков почти одновременно -
+/// одного перебора на всех хватает.
+const PROC_SNAPSHOT_TTL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Общий снимок запущенных процессов для фоновых статусов. Раньше каждый
+/// статус собирал с нуля свою таблицу: новый System, перебор всех процессов
+/// и путь к exe каждого. Здесь таблица одна и живёт всё время: путь к exe
+/// читается один раз на PID, а сам перебор - не чаще раза в PROC_SNAPSHOT_TTL.
+/// Для действий, где важен «прямо сейчас» (ждать закрытия программы, закрыть
+/// её), - свой свежий перебор (pids_where).
+pub(crate) fn running_processes() -> std::sync::Arc<Vec<RunningProc>> {
+    use std::sync::{Arc, Mutex, OnceLock};
+    use std::time::Instant;
     use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
-    let mut sys = System::new();
-    sys.refresh_processes_specifics(
+    struct Table {
+        sys: System,
+        at: Option<Instant>,
+        snap: Arc<Vec<RunningProc>>,
+    }
+    static TABLE: OnceLock<Mutex<Table>> = OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        Mutex::new(Table { sys: System::new(), at: None, snap: Arc::new(Vec::new()) })
+    });
+    let mut t = table.lock().unwrap_or_else(|e| e.into_inner());
+    if t.at.is_some_and(|at| at.elapsed() < PROC_SNAPSHOT_TTL) {
+        return t.snap.clone();
+    }
+    t.sys.refresh_processes_specifics(
         ProcessesToUpdate::All,
         true,
         ProcessRefreshKind::new().with_exe(UpdateKind::OnlyIfNotSet),
     );
+    let snap: Arc<Vec<RunningProc>> = Arc::new(
+        t.sys
+            .processes()
+            .iter()
+            .map(|(pid, p)| RunningProc {
+                pid: pid.as_u32(),
+                name: p.name().to_string_lossy().into_owned(),
+                exe: p.exe().map(Path::to_path_buf),
+            })
+            .collect(),
+    );
+    t.snap = snap.clone();
+    t.at = Some(Instant::now());
+    snap
+}
+
+/// Пути exe запущенных процессов, подходящих под условие (имя образа, путь).
+#[cfg(target_os = "windows")]
+fn running_exes(matches: impl Fn(&str, &Path) -> bool) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
-    for proc in sys.processes().values() {
-        let Some(exe) = proc.exe() else { continue };
-        if !out.iter().any(|p| p == exe) && matches(&proc.name().to_string_lossy(), exe) {
+    for proc in running_processes().iter() {
+        let Some(exe) = proc.exe.as_deref() else { continue };
+        if !out.iter().any(|p| p == exe) && matches(&proc.name, exe) {
             out.push(exe.to_path_buf());
         }
     }
@@ -589,25 +643,11 @@ pub fn browser_mode(p: &AppProfile) -> &'static str {
     }
 }
 
-/// Мост поднимает вход сайтов (≥1.9)? Проба версии exe кэшируется.
+/// Мост поднимает вход сайтов (≥1.9)? Проба версии exe кэшируется в tasks.
 pub fn sites_listener_available() -> bool {
-    use std::sync::Mutex;
-    static CACHE: Mutex<Option<(std::time::SystemTime, bool)>> = Mutex::new(None);
-    let Some(exe) = crate::shim::bridge_exe_path().filter(|p| p.exists()) else {
-        return false;
-    };
-    let mtime = std::fs::metadata(&exe).and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
-    if let Ok(mut c) = CACHE.lock() {
-        if let Some((t, v)) = *c {
-            if t == mtime {
-                return v;
-            }
-        }
-        let v = crate::tasks::bridge_supports_sites(&exe);
-        *c = Some((mtime, v));
-        return v;
-    }
-    false
+    crate::shim::bridge_exe_path()
+        .filter(|p| p.exists())
+        .is_some_and(|exe| crate::tasks::bridge_supports_sites(&exe))
 }
 
 /// WebRTC (звонки, видео в браузере) ходит по UDP к STUN-серверам мимо
@@ -625,25 +665,11 @@ const WEBRTC_FLAGS: [&str; 2] = [
 const WEBRTC_GUARD: &str =
     "--webrtc-ip-handling-policy=disable_non_proxied_udp --force-webrtc-ip-handling-policy=disable_non_proxied_udp";
 
-/// Мост поднимает закреплённые входы (≥1.7)? Проба версии exe кэшируется.
+/// Мост поднимает закреплённые входы (≥1.7)? Проба версии exe кэшируется в tasks.
 fn pinned_listeners_available() -> bool {
-    use std::sync::Mutex;
-    static CACHE: Mutex<Option<(std::time::SystemTime, bool)>> = Mutex::new(None);
-    let Some(exe) = crate::shim::bridge_exe_path().filter(|p| p.exists()) else {
-        return false;
-    };
-    let mtime = std::fs::metadata(&exe).and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
-    if let Ok(mut c) = CACHE.lock() {
-        if let Some((t, v)) = *c {
-            if t == mtime {
-                return v;
-            }
-        }
-        let v = crate::tasks::bridge_supports_pin_listen(&exe);
-        *c = Some((mtime, v));
-        return v;
-    }
-    false
+    crate::shim::bridge_exe_path()
+        .filter(|p| p.exists())
+        .is_some_and(|exe| crate::tasks::bridge_supports_pin_listen(&exe))
 }
 
 /// Строка прокси для локального моста, которую впрыскиваем приложению.
@@ -725,7 +751,15 @@ pub fn relaunch(p: &AppProfile) -> Result<(), String> {
         profile_installed(p).1
     }
     .filter(|l| l.to_lowercase().ends_with(".exe") && l.contains('\\'));
-    let pids = || main_pids(&image, exe.as_deref());
+    // Claude Desktop - по правилам лаунчера: и прежняя версия из Store.
+    let claude = p.id == crate::claude_desktop::PROFILE_ID;
+    let pids = || {
+        if claude {
+            crate::claude_desktop::running_pids()
+        } else {
+            main_pids(&image, exe.as_deref())
+        }
+    };
     let wait = |secs: u64| {
         let deadline = Instant::now() + Duration::from_secs(secs);
         while !pids().is_empty() && Instant::now() < deadline {
@@ -753,12 +787,24 @@ pub fn relaunch(p: &AppProfile) -> Result<(), String> {
     if restore && matches!(p.kind, LaunchKind::ExeFlag | LaunchKind::Custom) {
         return launch_exe(p, &["--restore-last-session"]);
     }
-    launch(p)
+    // Claude закрыли, а лаунчер всё ещё видит его открытым - это «не закрылся»,
+    // а не новое предложение перезапуститься.
+    launch(p).map_err(|e| if claude && e == crate::claude_desktop::RESTART_OFFER { not_closed() } else { e })
 }
 
 /// PID главного процесса программы: имя образа и, если известен, путь к exe.
 #[cfg(target_os = "windows")]
 pub(crate) fn main_pids(image: &str, exe: Option<&str>) -> Vec<u32> {
+    match exe {
+        Some(path) => pids_where(image, |e| e.eq_ignore_ascii_case(path)),
+        None => pids_where(image, |_| true),
+    }
+}
+
+/// PID процессов с этим именем образа, путь к exe которых подходит `path_ok`
+/// (без пути - только если подходит пустая строка).
+#[cfg(target_os = "windows")]
+pub(crate) fn pids_where(image: &str, path_ok: impl Fn(&str) -> bool) -> Vec<u32> {
     use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
     let mut sys = System::new();
     sys.refresh_processes_specifics(
@@ -769,10 +815,7 @@ pub(crate) fn main_pids(image: &str, exe: Option<&str>) -> Vec<u32> {
     sys.processes()
         .iter()
         .filter(|(_, proc)| proc.name().to_string_lossy().eq_ignore_ascii_case(image))
-        .filter(|(_, proc)| match exe {
-            Some(path) => proc.exe().is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case(path)),
-            None => true,
-        })
+        .filter(|(_, proc)| path_ok(&proc.exe().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default()))
         .map(|(pid, _)| pid.as_u32())
         .collect()
 }
@@ -810,20 +853,35 @@ pub fn launch(p: &AppProfile) -> Result<(), String> {
 }
 
 /// Claude Desktop уже открыт: лаунчер такой запуск отвергает (Electron отдал
-/// бы его открытому окну без прокси), и человек видел просьбу закрыть Claude
-/// через трей. Теперь: ходит мимо моста - перезапускаем через мост, иначе
-/// просто выводим окно вперёд (прокси задан политикой Claude).
+/// бы его открытому окну без прокси). Через мост - просто выводим окно
+/// вперёд. Мимо моста - не закрываем молча, а предлагаем перезапуск
+/// (RESTART_OFFER, кнопка «Перезапустить» в интерфейсе). Это ожидаемая
+/// ситуация, а не сбой: в отчёты об ошибках не уходит.
 fn launch_claude_desktop(p: &AppProfile) -> Result<(), String> {
+    use crate::claude_desktop::{is_already_running_error, RESTART_OFFER};
     if !crate::claude_desktop::running() {
-        return crate::claude_desktop::launch();
+        // Скрипт увидел открытый Claude, а детект нет (гонка с запуском).
+        return crate::claude_desktop::launch().map_err(|e| {
+            if is_already_running_error(&e) { RESTART_OFFER.to_string() } else { e }
+        });
     }
-    let around = crate::traffic::snapshot(std::slice::from_ref(p))
-        .first()
-        .is_some_and(|t| t.direct > 0);
-    if around {
-        relaunch(p)
+    let t = crate::traffic::snapshot(std::slice::from_ref(p)).into_iter().next();
+    let policy = || crate::claude_policy::status().is_ok_and(|s| s.configured);
+    if claude_goes_around(t.as_ref().map(|t| (t.direct, t.via_bridge)), policy) {
+        Err(RESTART_OFFER.into())
     } else {
         crate::claude_desktop::focus()
+    }
+}
+
+/// Открытый Claude Desktop ходит мимо моста: есть прямые соединения, или
+/// через мост нет ни одного, а прокси политикой Claude не задан (значит,
+/// открыт без флага прокси). `policy` спрашивается только при нужде.
+fn claude_goes_around(traffic: Option<(u32, u32)>, policy: impl FnOnce() -> bool) -> bool {
+    match traffic {
+        Some((direct, _)) if direct > 0 => true,
+        Some((_, via)) if via > 0 => false,
+        _ => !policy(),
     }
 }
 
@@ -881,6 +939,10 @@ fn launch_exe(p: &AppProfile, extra: &[&str]) -> Result<(), String> {
     cmd.env("https_proxy", &proxy);
     // NO_PROXY: локалхост и служебные - не гонять через мост.
     cmd.env("NO_PROXY", "localhost,127.0.0.1,::1");
+    // macOS: программа не из бандла (CLI и т.п.) - с полным PATH шелла,
+    // чтобы её дочерние node/git находились.
+    #[cfg(not(target_os = "windows"))]
+    cmd.env("PATH", crate::macos::user_path());
     apply_no_window(&mut cmd);
     cmd.spawn()
         .map_err(|e| format!("Не удалось запустить {}: {e}", p.name))?;
@@ -1788,6 +1850,17 @@ fn squirrel_app(update: &std::path::Path, args: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod search_tests {
     use super::*;
+
+    /// Открытый Claude Desktop: когда предлагать перезапуск, а когда просто
+    /// вывести окно вперёд.
+    #[test]
+    fn claude_around_bridge_rules() {
+        assert!(claude_goes_around(Some((3, 5)), || panic!("не нужно")), "есть прямые соединения");
+        assert!(!claude_goes_around(Some((0, 2)), || panic!("не нужно")), "идёт через мост");
+        assert!(claude_goes_around(Some((0, 0)), || false), "тихо и без политики - открыт без флага");
+        assert!(!claude_goes_around(Some((0, 0)), || true), "тихо, прокси задан политикой");
+        assert!(!claude_goes_around(None, || true));
+    }
 
     /// Оба флага WebRTC и в аргументах, и в строке для ярлыков.
     #[test]

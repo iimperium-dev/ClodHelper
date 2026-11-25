@@ -24,6 +24,7 @@
   ?statsoff - ответ уже был; ?privacyfail - privacy_get падает, пока window.__privacyFailOff не true.
   ?reportlimit (429) и ?reportbusy (503) - ошибка отправки; ?reportslow - отправка 9 секунд; __reportNonces.
   ?reportfail - отправка отчёта падает; window.__privacy(), __reports, __uiErrors - для тестов.
+  ?claudedirect - Claude Desktop открыт без прокси («Открыть» предлагает перезапуск); ?relaunchfail - перезапуск не вышел.
   ?deeplink - программа открыта ссылкой clodhelper://add?key=... (купленный прокси, новый адрес);
   ?deeplink=update - тот же адрес уже в пуле, ?deeplink=fail - магазин не ответил.
   ?shopproxy - в пуле прокси из магазина со сроком, ?shopproxy=expired - срок прошёл, прокси не отвечает.
@@ -33,6 +34,15 @@
   раскрытие с причиной и кнопкой); ?ru - основной прокси в России (флаг из кэша гео).
   ?vpn=wg|tun - включён VPN WireGuard / безымянный туннель; ?vpn=sota - SOTA VPN стёр
   прокси-переменные. window.__replaced - вызовы proxy_replace.
+  ?down=1&oldname - у неработающего третьего прокси есть имя «CD - old2»; ?muted - предупреждение
+  о нём скрыто (proxy_alerts_muted_get).
+  ?live - мост каждые 5 с шлёт событие bridge-health с растущими счётчиками (как монитор
+  программы); ?live=same - один и тот же снимок; ?livems=1000 - другой период.
+  window.__healthEvents - сколько событий отправлено. ?slowboot - settings_get отвечает 1,5 с
+  (заставка «Проверяю…» при запуске).
+  ?notask - задача автозапуска моста пропала (?taskfail - «Исправить» падает); ?checkfail - проверка
+  приватности падает, связь есть; ?testfail - тест соединения не прошёл; ?removefail - «Убрать из
+  списка» падает. Остановка моста идёт 0,7 с (видно спиннер).
   Используется тестами tests/ui (Playwright).
 -->
 <script>
@@ -154,7 +164,7 @@
     shim_status: { running: true, pid: 1, uptime_sec: 28000, listen: "127.0.0.1:8889" },
     shim_test: { ok: true, latency_ms: 420, external_ip: "185.68.187.138", error: null },
     bridge_health: health,
-    bridge_task_status: { registered: true, state: "Running" },
+    bridge_task_status: params.has("notask") ? { registered: false, state: null } : { registered: true, state: "Running" },
     bridge_exe_legacy: false,
     bridge_versions: { installed: "1.8.0", bundled: "1.8.0", outdated: false },
     global_proxy_env: params.get("vpn") === "sota"
@@ -233,6 +243,10 @@
     R.update_check = null;
     R.update_latest = null;
   }
+  // ?oldname (вместе с ?down=1) - у неработающего третьего прокси есть имя, как у
+  // владельца: «CD - old2». ?muted - предупреждение о нём скрыто.
+  if (params.has("oldname")) R.proxy_labels_get = { ...R.proxy_labels_get, "http://u:p@193.8.114.42:8080": "CD - old2" };
+  R.proxy_alerts_muted_get = params.has("muted") ? ["http://u:p@193.8.114.42:8080"] : [];
   // Прокси из магазина (срок; ключ - только в Rust). ?shopproxy - третий прокси
   // куплен, ?shopproxy=expired - срок прошёл и прокси не отвечает.
   const shopMeta = {};
@@ -281,6 +295,25 @@
     for (const l of listeners) if (l.event === event) callbacks[l.handler]?.({ event, id: l.id, payload });
   };
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // ?live: монитор программы присылает /healthz событием (по умолчанию стенд молчит,
+  // чтобы не менять поведение тестов).
+  window.__healthEvents = 0;
+  if (params.has("live")) {
+    const same = params.get("live") === "same";
+    setInterval(() => {
+      if (!same) {
+        const n = 3 + Math.floor(Math.random() * 6);
+        health.uptime_sec += 5;
+        health.total += n;
+        health.via_upstream += n - 1;
+        health.via_direct += 1;
+        health.active = 2 + Math.floor(Math.random() * 4);
+        for (const u of health.upstreams) if (u.healthy) u.ok += n - 1;
+      }
+      window.__healthEvents++;
+      window.__emit("bridge-health", structuredClone(health));
+    }, Number(params.get("livems")) || 5000);
+  }
   // Купленный прокси по ссылке: ключ ждёт, пока окно его заберёт.
   const SHOP_KEY = "q83vEjRWeJCrze8SNFZ4kKvN7xI0VniQq83vEjRWeJA";
   let shopPending = params.has("deeplink") ? SHOP_KEY : null;
@@ -300,6 +333,24 @@
     unregisterCallback: () => {},
     convertFileSrc: (p) => p,
     invoke: async (cmd, args) => {
+      // Остановка и запуск моста: остановка идёт заметное время (кнопка со спиннером).
+      if (cmd === "shim_stop") { await wait(700); R.shim_status = { ...R.shim_status, running: false }; return 0; }
+      if (cmd === "shim_start") { await wait(300); R.shim_status = { ...R.shim_status, running: true }; return 1; }
+      // ?notask - задача автозапуска моста пропала; ?taskfail - «Исправить» не вышло.
+      if (cmd === "bridge_task_register") {
+        await wait(params.has("still") ? 200 : 600);
+        if (params.has("taskfail")) throw "Планировщик заданий отказал: нет прав администратора";
+        return (R.bridge_task_status = { registered: true, state: "Ready" });
+      }
+      // ?checkfail - проверка приватности падает, связь через мост есть.
+      if (cmd === "privacy_check" && params.has("checkfail")) { await wait(100); throw "Сервис проверки не ответил"; }
+      // ?testfail - тест соединения не прошёл (длинный текст ошибки).
+      if (cmd === "shim_test" && params.has("testfail")) {
+        await wait(100);
+        return { ok: false, error: "Прокси 185.68.187.138:8000 не ответил за 10 секунд: соединение сброшено удалённой стороной" };
+      }
+      // ?removefail - убрать приложение из списка не вышло.
+      if (cmd === "apps_remove" && params.has("removefail")) { await wait(100); throw "Нет прав, чтобы снять защиту от прямого соединения"; }
       if (cmd === "proxy_speedtest") {
         await new Promise((r) => setTimeout(r, 1500));
         return args.url.startsWith("socks5") ? { mbps: 7.4, bytes: 7400000, secs: 8 } : { mbps: 46.3, bytes: 25000000, secs: 4.3 };
@@ -355,6 +406,11 @@
         R.proxies_get = [...args.urls];
         (window.__poolWrites ||= []).push([...args.urls]);
         return structuredClone(R.proxies_get);
+      }
+      if (cmd === "proxy_alert_mute") {
+        const rest = R.proxy_alerts_muted_get.filter((u) => u !== args.url);
+        R.proxy_alerts_muted_get = args.mute ? [...rest, args.url] : rest;
+        return structuredClone(R.proxy_alerts_muted_get);
       }
       if (cmd === "proxy_label_set") {
         R.proxy_labels_get = { ...R.proxy_labels_get, [args.url]: args.label };
@@ -476,8 +532,26 @@
         return structuredClone(R.apps_list);
       }
       if (cmd === "proxy_assignments_set") { await new Promise((r) => setTimeout(r, 500)); R.proxy_assignments_get = args.assignments; return null; }
-      if (cmd === "apps_relaunch") { await new Promise((r) => setTimeout(r, 700)); return null; }
+      // ?claudedirect - Claude Desktop открыт без прокси: «Открыть» отвечает предложением
+      // перезапуска (тот же текст, что claude_desktop::RESTART_OFFER); ?relaunchfail - перезапуск
+      // не вышел. window.__launched / __relaunched - что запускалось.
+      if (cmd === "apps_launch") {
+        await wait(params.has("still") ? 30 : 400);
+        (window.__launched ||= []).push(args.id);
+        if (args.id === "claude-desktop" && params.has("claudedirect") && !window.__claudeRelaunched) {
+          throw "Claude Desktop открыт без прокси. Перезапустить его с прокси?";
+        }
+        return null;
+      }
+      if (cmd === "apps_relaunch") {
+        await new Promise((r) => setTimeout(r, params.has("still") ? 60 : 700));
+        (window.__relaunched ||= []).push(args.id);
+        if (params.has("relaunchfail")) throw "Claude Desktop не закрылся - закройте его и нажмите «Открыть»";
+        if (args.id === "claude-desktop") window.__claudeRelaunched = true;
+        return null;
+      }
       if (cmd === "reveal_in_folder") return null;
+      if (cmd === "settings_get" && params.has("slowboot")) await wait(1500);
       if (cmd === "plugin:event|listen") {
         const id = listenId++;
         listeners.push({ id, event: args.event, handler: args.handler });
@@ -525,7 +599,17 @@
       if (cmd === "banner_media") {
         (window.__mediaAsked ||= []).push(...args.keys);
         await wait(params.has("mediaslow") ? 4000 : 150);
+        // ?mediafail - ни один файл не скачался (провайдер душит, моста нет).
+        if (params.has("mediafail")) return {};
         return Object.fromEntries(args.keys.filter((k) => MOCK_FILES[k]).map((k) => [k, "/mock-assets/" + MOCK_FILES[k]]));
+      }
+      if (cmd === "notices_refresh") {
+        // Как бэкенд: проверил рассылки и сообщил окну. window.__bannerGone -
+        // баннер сняли в админке, сервер его больше не отдаёт.
+        (window.__noticesRefreshed ||= []).push(Date.now());
+        if (window.__bannerGone) R.notices_banners = [];
+        window.__emit("notices:changed", 0);
+        return null;
       }
       if (cmd === "notices_banner_dismiss") {
         R.notices_banners = R.notices_banners.filter((x) => x.id !== args.id);

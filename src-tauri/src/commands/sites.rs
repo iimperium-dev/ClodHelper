@@ -344,13 +344,10 @@ pub struct SeenHosts {
 #[tauri::command]
 pub async fn sites_hosts(since: u64, reset: Option<bool>) -> Result<SeenHosts, String> {
     let reset = if reset.unwrap_or(false) { "&reset=1" } else { "" };
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .timeout(std::time::Duration::from_secs(3))
-        .build()
-        .map_err(|e| format!("client: {e}"))?;
-    client
+    // Опрос раз в 1,5 с, пока идёт «Подсмотреть»: клиент общий, не новый.
+    crate::monitor::loopback_client()?
         .get(format!("http://127.0.0.1:{}/hosts?since={since}{reset}", crate::tasks::SITES_PORT))
+        .timeout(std::time::Duration::from_secs(3))
         .send()
         .await
         .map_err(|_| "Вход сайтов моста не отвечает - обновите мост или перезапустите его".to_string())?

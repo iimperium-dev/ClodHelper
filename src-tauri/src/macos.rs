@@ -190,15 +190,80 @@ pub fn strip_quarantine(path: &Path) {
         .output();
 }
 
-/// GUI-приложение, запущенное из Finder/Dock, получает урезанный PATH
-/// (`/usr/bin:/bin:/usr/sbin:/sbin`) - node/npm/claude из Homebrew или nvm не
-/// находятся. Берём PATH из login-шелла пользователя и добавляем типовые папки.
-pub fn fix_path_env() {
+// ─── PATH GUI-процесса ───────────────────────────────────────────
+//
+// GUI-приложение, запущенное из Finder/Dock, получает урезанный PATH
+// (`/usr/bin:/bin:/usr/sbin:/sbin`) - node/npm/claude из Homebrew или nvm не
+// находятся. Настоящий PATH знает только login-шелл пользователя, а он с
+// oh-my-zsh/nvm стартует до 3 с. Поэтому:
+// 1. `init_path_env` (первой строкой `run`, пока поток один) ставит PATH
+//    процесса из кэша прошлого запуска + типовых папок - без шелла;
+// 2. `spawn_path_resolver` (в setup) спрашивает шелл в фоне, обновляет кэш и
+//    открывает барьер;
+// 3. каждый запуск node/npm/python и чужих программ берёт `user_path()` и
+//    передаёт его явно через `.env("PATH", ...)`: до готовности шелла ждёт
+//    барьер (не дольше `PATH_WAIT`).
+// После старта потоков `set_var` больше не вызывается: на macOS setenv
+// параллельно с getenv в другом потоке может уронить процесс.
+
+/// Файл с PATH login-шелла из прошлого запуска - в папке данных рядом с
+/// settings.json, отдельно от него: кэш можно стереть без потерь.
+const PATH_CACHE_FILE: &str = "login-path.txt";
+/// Сколько запуск программы ждёт PATH из шелла. Шелл сам ограничен
+/// `SHELL_TIMEOUT`, так что ожидание на практике ещё короче.
+const PATH_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+const SHELL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+/// Кэш длиннее - не PATH, а мусор (защита от испорченного файла).
+const PATH_CACHE_MAX: usize = 32 * 1024;
+
+/// Одноразовый барьер «значение готово»: ждущие спят на Condvar, первый
+/// `set` будит всех. Повторный `set` значение не меняет.
+pub struct PathBarrier {
+    value: std::sync::Mutex<Option<String>>,
+    ready: std::sync::Condvar,
+}
+
+impl PathBarrier {
+    pub const fn new() -> Self {
+        Self { value: std::sync::Mutex::new(None), ready: std::sync::Condvar::new() }
+    }
+
+    pub fn set(&self, path: String) {
+        let mut v = self.value.lock().unwrap_or_else(|e| e.into_inner());
+        if v.is_none() {
+            *v = Some(path);
+        }
+        self.ready.notify_all();
+    }
+
+    /// Значение, если оно появилось за `timeout`; иначе None.
+    pub fn wait(&self, timeout: std::time::Duration) -> Option<String> {
+        let v = self.value.lock().unwrap_or_else(|e| e.into_inner());
+        let (v, _) = self
+            .ready
+            .wait_timeout_while(v, timeout, |v| v.is_none())
+            .unwrap_or_else(|e| e.into_inner());
+        v.clone()
+    }
+}
+
+/// PATH, с которым процесс пришёл от launchd (до наших добавлений).
+static INHERITED_PATH: OnceLock<String> = OnceLock::new();
+/// PATH, поставленный при старте (кэш + типовые папки).
+static STARTUP_PATH: OnceLock<String> = OnceLock::new();
+/// PATH после ответа шелла (или startup, если шелл не ответил).
+static RESOLVED_PATH: PathBarrier = PathBarrier::new();
+static RESOLVER_STARTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Собрать PATH: папки шелла (или кэша) первыми, затем типовые папки
+/// Homebrew/npm/volta/bun, затем унаследованный PATH. Без пустых и повторов.
+pub fn merge_path(shell: Option<&str>, home: Option<&Path>, inherited: &str) -> String {
     let mut parts: Vec<String> = Vec::new();
-    if let Some(p) = login_shell_path() {
+    if let Some(p) = shell {
         parts.extend(p.split(':').filter(|s| !s.is_empty()).map(String::from));
     }
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = home {
         for rel in [".local/bin", ".npm-global/bin", ".claude/local", ".volta/bin", ".bun/bin"] {
             parts.push(home.join(rel).to_string_lossy().to_string());
         }
@@ -206,17 +271,113 @@ pub fn fix_path_env() {
     for p in ["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin"] {
         parts.push(p.into());
     }
-    if let Ok(cur) = std::env::var("PATH") {
-        parts.extend(cur.split(':').filter(|s| !s.is_empty()).map(String::from));
-    }
+    parts.extend(inherited.split(':').filter(|s| !s.is_empty()).map(String::from));
     let mut seen = std::collections::HashSet::new();
     parts.retain(|p| seen.insert(p.clone()));
-    std::env::set_var("PATH", parts.join(":"));
+    parts.join(":")
+}
+
+/// Разобрать содержимое кэша: одна строка, без NUL, не пустая, разумной длины.
+fn parse_path_cache(text: &str) -> Option<String> {
+    let line = text.trim();
+    (!line.is_empty() && line.len() <= PATH_CACHE_MAX && !line.contains(['\0', '\n', '\r']))
+        .then(|| line.to_string())
+}
+
+fn path_cache_file() -> Option<PathBuf> {
+    Some(crate::settings::data_dir()?.join(PATH_CACHE_FILE))
+}
+
+fn read_path_cache(file: &Path) -> Option<String> {
+    parse_path_cache(&std::fs::read_to_string(file).ok()?)
+}
+
+/// Записать кэш атомарно (tmp + rename): оборванная запись не оставит
+/// половину строки. Тот же текст не переписываем.
+fn write_path_cache(file: &Path, path: &str) {
+    if parse_path_cache(path).is_none() || read_path_cache(file).as_deref() == Some(path) {
+        return;
+    }
+    if let Some(dir) = file.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let tmp = file.with_extension("txt.tmp");
+    if std::fs::write(&tmp, path).is_ok() && std::fs::rename(&tmp, file).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+}
+
+/// Шаг 1: PATH процесса без шелла - из кэша прошлого запуска и типовых
+/// папок. Вызывать первой строкой `run()`, пока других потоков нет:
+/// `set_var` здесь безопасен, позже - нет.
+pub fn init_path_env() {
+    let inherited = std::env::var("PATH").unwrap_or_default();
+    let cached = path_cache_file().and_then(|f| read_path_cache(&f));
+    let path = merge_path(cached.as_deref(), dirs::home_dir().as_deref(), &inherited);
+    std::env::set_var("PATH", &path);
+    let _ = INHERITED_PATH.set(inherited);
+    let _ = STARTUP_PATH.set(path);
+}
+
+/// Шаг 2: спросить login-шелл в фоне, сохранить его PATH в кэш на следующий
+/// запуск и открыть барьер. Повторный вызов ничего не делает.
+pub fn spawn_path_resolver() {
+    if RESOLVER_STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    let spawned = std::thread::Builder::new()
+        .name("login-path".into())
+        .spawn(|| {
+            let file = path_cache_file();
+            let shell = login_shell_path();
+            let path = match &shell {
+                Some(p) => {
+                    if let Some(f) = &file {
+                        write_path_cache(f, p);
+                    }
+                    merge_path(
+                        Some(p),
+                        dirs::home_dir().as_deref(),
+                        INHERITED_PATH.get().map(String::as_str).unwrap_or(""),
+                    )
+                }
+                // Шелл не ответил - остаётся PATH из кэша.
+                None => startup_path(),
+            };
+            tracing::info!(
+                "PATH из login-шелла: {}",
+                if shell.is_some() { "получен" } else { "нет ответа, взят кэш" }
+            );
+            RESOLVED_PATH.set(path);
+        });
+    if spawned.is_err() {
+        RESOLVED_PATH.set(startup_path());
+    }
+}
+
+fn startup_path() -> String {
+    STARTUP_PATH
+        .get()
+        .cloned()
+        .unwrap_or_else(|| std::env::var("PATH").unwrap_or_default())
+}
+
+/// Шаг 3: PATH для запуска программ. Пока шелл не ответил - ждём барьер
+/// (не дольше `PATH_WAIT`), потом берём PATH старта. Передавать в Command
+/// явно: `.env("PATH", user_path())` - поиск программы по имени тогда тоже
+/// идёт по нему.
+pub fn user_path() -> String {
+    if RESOLVER_STARTED.load(std::sync::atomic::Ordering::SeqCst) {
+        if let Some(p) = RESOLVED_PATH.wait(PATH_WAIT) {
+            return p;
+        }
+    }
+    startup_path()
 }
 
 /// PATH из интерактивного login-шелла (`-ilc`: nvm/volta обычно живут в
-/// ~/.zshrc, не в ~/.zprofile). Жёсткий таймаут 3 с - тяжёлый или зависший
-/// конфиг шелла не должен блокировать старт приложения. Маркеры отделяют
+/// ~/.zshrc, не в ~/.zprofile). Жёсткий таймаут - тяжёлый или зависший
+/// конфиг шелла не должен держать запуск программ. Маркеры отделяют
 /// PATH от того, что шелл печатает при старте (приветствия, oh-my-zsh).
 fn login_shell_path() -> Option<String> {
     use std::io::Read;
@@ -231,7 +392,7 @@ fn login_shell_path() -> Option<String> {
         .stderr(Stdio::null())
         .spawn()
         .ok()?;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    let deadline = std::time::Instant::now() + SHELL_TIMEOUT;
     loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
@@ -449,6 +610,107 @@ mod tests {
         assert_eq!(extract_between(out, "__B__", "__E__"), Some("/opt/homebrew/bin:/usr/bin"));
         assert_eq!(extract_between("no markers", "__B__", "__E__"), None);
         assert_eq!(extract_between("__B____E__", "__B__", "__E__"), None);
+    }
+
+    #[test]
+    fn merge_path_puts_shell_first_and_dedupes() {
+        let home = Path::new("/Users/u");
+        let local = home.join(".local/bin").to_string_lossy().to_string();
+        let shell = "/Users/u/.nvm/versions/node/v22/bin:/opt/homebrew/bin::/usr/bin";
+        let inherited = "/usr/bin:/bin:/usr/sbin:/sbin";
+        let path = merge_path(Some(shell), Some(home), inherited);
+        let parts: Vec<&str> = path.split(':').collect();
+        assert_eq!(parts[0], "/Users/u/.nvm/versions/node/v22/bin");
+        assert_eq!(parts[1], "/opt/homebrew/bin");
+        assert_eq!(parts[2], "/usr/bin");
+        assert!(parts.contains(&local.as_str()));
+        assert!(parts.contains(&"/usr/local/bin"));
+        assert_eq!(parts.last(), Some(&"/sbin"));
+        assert!(!parts.contains(&""), "пустой элемент в PATH: {path}");
+        let mut uniq = parts.clone();
+        uniq.sort();
+        uniq.dedup();
+        assert_eq!(uniq.len(), parts.len(), "повторы в PATH: {path}");
+    }
+
+    #[test]
+    fn merge_path_without_shell_keeps_standard_dirs() {
+        // Первый запуск: кэша нет, шелл ещё не ответил.
+        let path = merge_path(None, None, "/usr/bin:/bin");
+        assert_eq!(path, "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin");
+        // Пустой унаследованный PATH не даёт хвостового «:».
+        assert!(!merge_path(None, None, "").ends_with(':'));
+    }
+
+    #[test]
+    fn path_cache_rejects_garbage() {
+        assert_eq!(parse_path_cache("/a:/b\n").as_deref(), Some("/a:/b"));
+        assert_eq!(parse_path_cache("  \n"), None);
+        assert_eq!(parse_path_cache("/a\n/b"), None);
+        assert_eq!(parse_path_cache("/a\0/b"), None);
+        assert_eq!(parse_path_cache(&"x".repeat(PATH_CACHE_MAX + 1)), None);
+    }
+
+    #[test]
+    fn path_cache_roundtrip_is_atomic_and_skips_same_text() {
+        let dir = temp_dir("pathcache");
+        let file = dir.join("sub").join(PATH_CACHE_FILE);
+        assert_eq!(read_path_cache(&file), None);
+        write_path_cache(&file, "/opt/homebrew/bin:/usr/bin");
+        assert_eq!(read_path_cache(&file).as_deref(), Some("/opt/homebrew/bin:/usr/bin"));
+        assert!(!file.with_extension("txt.tmp").exists());
+        // Мусор не записывается поверх хорошего кэша.
+        write_path_cache(&file, "bad\nvalue");
+        assert_eq!(read_path_cache(&file).as_deref(), Some("/opt/homebrew/bin:/usr/bin"));
+        write_path_cache(&file, "/usr/local/bin");
+        assert_eq!(read_path_cache(&file).as_deref(), Some("/usr/local/bin"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn path_barrier_wakes_waiters_and_keeps_first_value() {
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+        let barrier = Arc::new(PathBarrier::new());
+        let waiters: Vec<_> = (0..4)
+            .map(|_| {
+                let b = barrier.clone();
+                std::thread::spawn(move || {
+                    let t = Instant::now();
+                    (b.wait(Duration::from_secs(10)), t.elapsed())
+                })
+            })
+            .collect();
+        std::thread::sleep(Duration::from_millis(100));
+        barrier.set("/first".into());
+        barrier.set("/second".into());
+        for w in waiters {
+            let (value, waited) = w.join().unwrap();
+            assert_eq!(value.as_deref(), Some("/first"));
+            assert!(waited < Duration::from_secs(5), "ждали дольше нужного: {waited:?}");
+        }
+        // Готовый барьер отвечает сразу.
+        let t = Instant::now();
+        assert_eq!(barrier.wait(Duration::from_secs(10)).as_deref(), Some("/first"));
+        assert!(t.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn path_barrier_times_out_without_value() {
+        use std::time::{Duration, Instant};
+        let barrier = PathBarrier::new();
+        let t = Instant::now();
+        assert_eq!(barrier.wait(Duration::from_millis(150)), None);
+        let waited = t.elapsed();
+        assert!(waited >= Duration::from_millis(140) && waited < Duration::from_secs(3), "{waited:?}");
+    }
+
+    #[test]
+    fn user_path_without_resolver_does_not_wait() {
+        // Фоновый опрос шелла не запущен (тесты, CLI-режимы) - ответ сразу.
+        let t = std::time::Instant::now();
+        let _ = user_path();
+        assert!(t.elapsed() < std::time::Duration::from_secs(1));
     }
 
     fn temp_dir(name: &str) -> PathBuf {

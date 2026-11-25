@@ -412,6 +412,20 @@ pub fn proxy_label_set(
     Ok(settings::set_proxy_label(url, label)?.proxy_labels)
 }
 
+/// Прокси (URL пула и резервов), о поломке которых не предупреждаем.
+#[tauri::command]
+pub fn proxy_alerts_muted_get() -> Vec<String> {
+    settings::muted_alert_urls(&settings::load())
+}
+
+/// Скрыть или вернуть предупреждение «не отвечает» о прокси. Мост и
+/// проверки не трогаем: прокси остаётся в пуле и проверяется как раньше.
+#[tauri::command]
+pub fn proxy_alert_mute(url: String, mute: bool) -> Result<Vec<String>, String> {
+    let s = settings::with_settings(|s| settings::set_alert_muted(s, &url, mute))?;
+    Ok(settings::muted_alert_urls(&s))
+}
+
 /// Назначения «сервис → прокси из пула»: сохранить, переписать rules,
 /// перезапустить мост (rules читаются при старте).
 #[tauri::command]
@@ -497,6 +511,15 @@ pub async fn proxies_ping() -> Vec<ProxyPing> {
         if let Ok(p) = h.await {
             out.push(p);
         }
+    }
+    // Скрытое предупреждение о прокси, который снова заработал, снимаем:
+    // сломается ещё раз - человек увидит это как новую поломку.
+    let alive: Vec<String> = out.iter().filter(|p| p.alive == Some(true)).map(|p| p.url.clone()).collect();
+    if !alive.is_empty() && !s.muted_proxy_alerts.is_empty() {
+        let _ = settings::with_settings(|s| {
+            settings::unmute_alive(s, &alive);
+            Ok(())
+        });
     }
     out
 }

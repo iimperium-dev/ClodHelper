@@ -6,7 +6,7 @@ import { Button } from "./Button";
 import { CountryFlag } from "./CountryFlag";
 import { checkProxy, proxiesGet, shopAdd, shopRemember, type ShopAddItem } from "../lib/api";
 import { useStatus } from "../lib/status";
-import { loadGeoCache, saveGeoCache } from "../pages/Proxies";
+import { loadGeoCache, saveGeoCache } from "../lib/proxyGeo";
 import {
   type Claim,
   countryCode,

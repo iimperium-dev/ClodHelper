@@ -1,21 +1,26 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Titlebar } from "./components/Titlebar";
 import { Sidebar, NAV_ORDER } from "./components/Sidebar";
 import { WizardShell } from "./components/WizardShell";
-import { StepProxy } from "./wizard/StepProxy";
-import { StepInstall } from "./wizard/StepInstall";
-import { StepDone } from "./wizard/StepDone";
-import { StepApps } from "./wizard/StepApps";
-import { Overview } from "./pages/Overview";
-import { Proxies } from "./pages/Proxies";
-import { Apps } from "./pages/Apps";
-import { Sites } from "./pages/Sites";
-import { Settings } from "./pages/Settings";
-import { Tools } from "./pages/Tools";
-import { TrayPopup } from "./pages/TrayPopup";
-import { UpdateToast } from "./pages/UpdateToast";
-import { UpdateSplash } from "./pages/UpdateSplash";
-import { UpdateDialog } from "./components/UpdateDialog";
+import { LoadingScreen, PageBoundary, useCalmLoading } from "./components/LoadingScreen";
+import { UpdateDialogHost } from "./components/UpdateDialogHost";
+import {
+  Apps,
+  Overview,
+  Proxies,
+  Settings,
+  Sites,
+  StepApps,
+  StepDone,
+  StepInstall,
+  StepProxy,
+  Tools,
+  loadPage,
+  pageReady,
+  preloadPages,
+  preloadWizard,
+  whenIdle,
+} from "./lazyViews";
 import { WhatsNewModal } from "./components/WhatsNewModal";
 import { AutoUpdateOffer } from "./components/AutoUpdateOffer";
 import { ShopClaimDialog, type ShopClaimState } from "./components/ShopClaimDialog";
@@ -41,12 +46,14 @@ import {
 } from "./lib/api";
 import type { AppView, PrivacyKey, WizardApps, WizardInstallResult, WizardStep } from "./lib/types";
 
-/** Окно трей-попапа рендерит тот же bundle с ?view=tray. */
-const IS_TRAY = new URLSearchParams(window.location.search).get("view") === "tray";
-/** Уведомление «Доступно обновление» в углу экрана - ?view=toast. */
-const IS_TOAST = new URLSearchParams(window.location.search).get("view") === "toast";
-/** Заставка на время установки обновления (отдельный процесс) - ?view=updating. */
-const IS_SPLASH = new URLSearchParams(window.location.search).get("view") === "updating";
+/*
+  Главное окно. Трей-попап, уведомление и заставка обновления - свои
+  корни в main.tsx и этот файл не грузят.
+*/
+
+// «Обзор» нужен почти всегда первым - берём его код сразу, пока идут
+// вопросы к программе (мост установлен?).
+void Overview.preload().catch(() => {});
 
 /*
   Переход между разделами - CSS-анимация появления (index.css, .view-enter):
@@ -94,7 +101,7 @@ function useOnceShown(active: boolean, onShown: () => void) {
 function App() {
   // ─── Top-level routing ───────────────────────────────────────
   // На старте определяем: установлен ли уже мост → Обзор, иначе Wizard.
-  const [view, setView] = useState<AppView | null>(IS_TRAY ? "overview" : null);
+  const [view, setView] = useState<AppView | null>(null);
   const prevIndex = useRef(0);
   const [direction, setDirection] = useState(1);
   // Версия для окна «Что нового» (приложение только что обновилось).
@@ -114,7 +121,6 @@ function App() {
   const [noticeLegacy, setNoticeLegacy] = useState(false);
 
   useEffect(() => {
-    if (IS_TRAY || IS_TOAST || IS_SPLASH) return;
     // До выбора мастер/Обзор: первый запуск после установки ещё без прокси -
     // это не обновление, «Что нового» не нужно.
     void whatsNewTake()
@@ -144,9 +150,9 @@ function App() {
           shimStatus().catch(() => null),
         ]);
         const installed = !!s?.proxy_url || !!scriptPath || !!status?.running;
-        setView(installed ? "overview" : "wizard");
+        showView(installed ? "overview" : "wizard");
       } catch {
-        setView("wizard");
+        showView("wizard");
       }
     })();
   }, []);
@@ -157,12 +163,27 @@ function App() {
     setOfferAuto(false);
   }, []);
 
+  // Раздел показываем, когда его код уже загружен (обычно он взят заранее):
+  // тогда он рисуется сразу, без заглушки. Нажали другой раздел, пока
+  // грузился первый, - покажется последний.
+  const navToken = useRef(0);
+  const showView = useCallback((next: AppView) => {
+    const t = ++navToken.current;
+    if (pageReady(next)) {
+      setView(next);
+      return;
+    }
+    void loadPage(next).then(() => {
+      if (navToken.current === t) setView(next);
+    });
+  }, []);
+
   const navigate = (next: AppView) => {
     const nextIdx = NAV_ORDER.indexOf(next);
     const prevIdx = prevIndex.current;
     setDirection(nextIdx >= prevIdx ? 1 : -1);
     prevIndex.current = nextIdx;
-    setView(next);
+    showView(next);
   };
 
   // ─── Wizard state: 3 шага (прокси → установка → готово) ──────
@@ -206,7 +227,6 @@ function App() {
     setShop(null);
   }, []);
   useEffect(() => {
-    if (IS_TRAY || IS_TOAST || IS_SPLASH) return;
     const take = () =>
       void shopLinkTake()
         .then((key) => {
@@ -353,7 +373,7 @@ function App() {
         setWizProxyUrl(url);
         setWizFill((n) => n + 1);
         setStep("proxy");
-        setView("wizard");
+        showView("wizard");
       }}
       onOpenProxies={
         view === "proxies"
@@ -366,172 +386,209 @@ function App() {
     />
   );
 
-  if (IS_TOAST) return <UpdateToast />;
-  if (IS_SPLASH) return <UpdateSplash />;
+  // ─── Запуск: пока не знаем, мастер или Обзор ─────────────────
+  // Знак программы и «Проверяю…» - только если ответ задержался дольше
+  // 150 мс; появившаяся заглушка не мелькает (держится хотя бы 350 мс).
+  const boot = useCalmLoading(view === null);
+  // Окно нарисовано - остальные разделы (или шаги мастера) берём заранее,
+  // чтобы переход был без пустого кадра.
+  const isWizard = view === "wizard";
+  const viewKnown = view !== null;
+  useEffect(() => {
+    if (!viewKnown) return;
+    return whenIdle(() => {
+      if (isWizard) preloadWizard();
+      preloadPages();
+    });
+  }, [viewKnown, isWizard]);
 
-  // ─── Трей-попап: отдельная вьюха в прозрачном окне ───────────
-  if (IS_TRAY) {
-    return (
-      <StatusProvider>
-        <TrayPopup />
-      </StatusProvider>
+  /*
+    Один StatusProvider на всё окно: и мастер, и программа под ним. После
+    «Готово» в мастере опрос не начинается заново, история трафика на
+    «Обзоре» не обнуляется.
+  */
+  let content;
+  if (boot.waiting) {
+    content = (
+      <div className="flex h-screen w-screen flex-col overflow-hidden">
+        <Titlebar bell={false} />
+        <div className="min-h-0 flex-1">{boot.shown && <LoadingScreen brand immediate />}</div>
+      </div>
     );
-  }
-
-  // ─── Wizard (первый запуск): 3 шага, без легаси-режимов ──────
-  // StatusProvider и здесь: логотип в сайдбаре показывает живой статус.
-  if (view === "wizard") {
-    return (
-      <StatusProvider>
+  } else if (view === "wizard") {
+    // ─── Wizard (первый запуск): 3 шага, без легаси-режимов ──────
+    content = (
+      <>
         <div className="flex h-screen w-screen flex-col overflow-hidden">
           <Titlebar bell={false} />
           <div className="min-h-0 flex-1">
             <WizardShell step={step} steps={wizSteps}>
-              {step === "proxy" && (
-                <StepProxy
-                  key={wizFill}
-                  initialUrl={wizProxyUrl}
-                  onSkipToTools={() => {
-                    setNoProxy(true);
-                    prevIndex.current = NAV_ORDER.indexOf("tools");
-                    setView("tools");
-                  }}
-                  onNext={(url) => {
-                    setWizProxyUrl(url);
-                    setStep("install");
-                  }}
-                />
-              )}
-              {step === "install" && wizProxyUrl && (
-                <StepInstall
-                  proxyUrl={wizProxyUrl}
-                  onBack={() => setStep("proxy")}
-                  onDone={(r) => {
-                    setWizResult(r);
-                    void wizardApps()
-                      .catch(() => wizApps)
-                      .then((now) => {
-                        if (now) setWizApps(now);
-                        setStep(now && (!now.claude || !now.codex) ? "apps" : "done");
-                      });
-                  }}
-                />
-              )}
-              {step === "apps" && wizResult && wizApps && (
-                <StepApps initial={wizApps} onClaude={onWizClaude} onDone={toWizDone} />
-              )}
-              {step === "done" && wizResult && (
-                <StepDone
-                  result={wizResult}
-                  privacy={wizPrivacy}
-                  onPrivacy={(key, on) => {
-                    setWizPrivacy((p) => ({ ...p, [key]: on }));
-                    void privacySet(key, on).catch(() => {});
-                  }}
-                  onFinish={() => {
-                    markWizard();
-                    setNoProxy(false);
-                    setOfferAuto(false);
-                    setView("overview");
-                  }}
-                />
-              )}
+              <PageBoundary>
+              <Suspense fallback={<LoadingScreen label="Загружаю…" />}>
+                {step === "proxy" && (
+                  <StepProxy
+                    key={wizFill}
+                    initialUrl={wizProxyUrl}
+                    onSkipToTools={() => {
+                      setNoProxy(true);
+                      prevIndex.current = NAV_ORDER.indexOf("tools");
+                      showView("tools");
+                    }}
+                    onNext={(url) => {
+                      setWizProxyUrl(url);
+                      setStep("install");
+                    }}
+                  />
+                )}
+                {step === "install" && wizProxyUrl && (
+                  <StepInstall
+                    proxyUrl={wizProxyUrl}
+                    onBack={() => setStep("proxy")}
+                    onDone={(r) => {
+                      setWizResult(r);
+                      void wizardApps()
+                        .catch(() => wizApps)
+                        .then((now) => {
+                          if (now) setWizApps(now);
+                          setStep(now && (!now.claude || !now.codex) ? "apps" : "done");
+                        });
+                    }}
+                  />
+                )}
+                {step === "apps" && wizResult && wizApps && (
+                  <StepApps initial={wizApps} onClaude={onWizClaude} onDone={toWizDone} />
+                )}
+                {step === "done" && wizResult && (
+                  <StepDone
+                    result={wizResult}
+                    privacy={wizPrivacy}
+                    onPrivacy={(key, on) => {
+                      setWizPrivacy((p) => ({ ...p, [key]: on }));
+                      void privacySet(key, on).catch(() => {});
+                    }}
+                    onFinish={() => {
+                      markWizard();
+                      setNoProxy(false);
+                      setOfferAuto(false);
+                      showView("overview");
+                    }}
+                  />
+                )}
+              </Suspense>
+              </PageBoundary>
             </WizardShell>
           </div>
         </div>
         {shopDialog}
-      </StatusProvider>
+      </>
+    );
+  } else {
+    // ─── App shell: titlebar + sidebar + контент ─────────────────
+    content = (
+      <>
+        <div className="flex h-screen w-screen flex-col overflow-hidden">
+          <Titlebar />
+          {noProxy && (
+            <div className="flex items-center gap-3 border-b border-vb-warn/25 bg-vb-warn/[0.07] px-5 py-2.5">
+              <AlertTriangle className="h-4 w-4 shrink-0 text-vb-warn" />
+              <span className="min-w-0 flex-1 text-[13px] text-vb-silver">
+                Прокси ещё не добавлен. Приложения пока ходят напрямую. Добавьте его, когда сервер будет готов.
+              </span>
+              <Button
+                size="sm"
+                onClick={() => {
+                  setStep("proxy");
+                  showView("wizard");
+                }}
+              >
+                Добавить прокси
+              </Button>
+            </div>
+          )}
+          {noticeBanner && (
+            <div
+              role="region"
+              aria-label="Отчёты и статистика"
+              className="flex items-center gap-3 border-b border-vb-border/60 bg-vb-surface px-5 py-2"
+            >
+              <Info className="h-4 w-4 shrink-0 text-vb-silver-dim" aria-hidden />
+              <span className="min-w-0 flex-1 text-[12px] text-vb-silver">
+                {noticeLegacy ? "С этой версии программа отправляет" : "Программа отправляет"} отчёты об ошибках и анонимную
+                статистику
+              </span>
+              <Button variant="ghost" size="sm" onClick={() => closeBanner()}>
+                Понятно
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => closeBanner(() => {
+                  openPrivacyNext();
+                  navigate("settings");
+                })}
+              >
+                Настройки
+              </Button>
+            </div>
+          )}
+          <div className="flex min-h-0 flex-1">
+            {view !== null && <Sidebar view={view} onNavigate={navigate} />}
+            <main className="min-h-0 flex-1 overflow-y-auto">
+              <div
+                key={view ?? "loading"}
+                className="view-enter min-h-full"
+                style={{ "--view-dir": direction } as React.CSSProperties}
+              >
+                <PageBoundary>
+                  <Suspense fallback={<LoadingScreen label="Загружаю…" />}>
+                    {view === "overview" ? (
+                      <Overview onOpenProxies={() => navigate("proxies")} />
+                    ) : view === "proxies" ? (
+                      <Proxies />
+                    ) : view === "apps" ? (
+                      <Apps />
+                    ) : view === "sites" ? (
+                      <Sites onOpenApps={() => navigate("apps")} />
+                    ) : view === "tools" ? (
+                      <Tools onOpenApps={() => navigate("apps")} />
+                    ) : view === "settings" ? (
+                      <Settings />
+                    ) : (
+                      <div className="h-full w-full" />
+                    )}
+                  </Suspense>
+                </PageBoundary>
+              </div>
+            </main>
+          </div>
+        </div>
+        {shopDialog}
+        <WhatsNewModal version={view !== null ? whatsNew : null} onClose={closeWhatsNew} />
+        <AutoUpdateOffer
+          open={view !== null && whatsNewTaken && !whatsNew && offerAuto}
+          onAnswer={answerAutoUpdate}
+          onOpenSettings={() => {
+            // Без ответа: auto_update остаётся пустым, предложение вернётся при следующем запуске.
+            setOfferAuto(false);
+            openPrivacyNext();
+            navigate("settings");
+          }}
+        />
+      </>
     );
   }
 
-  // ─── App shell: titlebar + sidebar + контент ─────────────────
   return (
     <StatusProvider>
-      <div className="flex h-screen w-screen flex-col overflow-hidden">
-        <Titlebar />
-        {noProxy && (
-          <div className="flex items-center gap-3 border-b border-vb-warn/25 bg-vb-warn/[0.07] px-5 py-2.5">
-            <AlertTriangle className="h-4 w-4 shrink-0 text-vb-warn" />
-            <span className="min-w-0 flex-1 text-[13px] text-vb-silver">
-              Прокси ещё не добавлен. Приложения пока ходят напрямую. Добавьте его, когда сервер будет готов.
-            </span>
-            <Button
-              size="sm"
-              onClick={() => {
-                setStep("proxy");
-                setView("wizard");
-              }}
-            >
-              Добавить прокси
-            </Button>
-          </div>
-        )}
-        {noticeBanner && (
-          <div
-            role="region"
-            aria-label="Отчёты и статистика"
-            className="flex items-center gap-3 border-b border-vb-border/60 bg-vb-surface px-5 py-2"
-          >
-            <Info className="h-4 w-4 shrink-0 text-vb-silver-dim" aria-hidden />
-            <span className="min-w-0 flex-1 text-[12px] text-vb-silver">
-              {noticeLegacy ? "С этой версии программа отправляет" : "Программа отправляет"} отчёты об ошибках и анонимную
-              статистику
-            </span>
-            <Button variant="ghost" size="sm" onClick={() => closeBanner()}>
-              Понятно
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => closeBanner(() => {
-                openPrivacyNext();
-                navigate("settings");
-              })}
-            >
-              Настройки
-            </Button>
-          </div>
-        )}
-        <div className="flex min-h-0 flex-1">
-          {view !== null && <Sidebar view={view} onNavigate={navigate} />}
-          <main className="min-h-0 flex-1 overflow-y-auto">
-            <div
-              key={view ?? "loading"}
-              className="view-enter min-h-full"
-              style={{ "--view-dir": direction } as React.CSSProperties}
-            >
-                {view === "overview" ? (
-                  <Overview onOpenProxies={() => navigate("proxies")} />
-                ) : view === "proxies" ? (
-                  <Proxies />
-                ) : view === "apps" ? (
-                  <Apps />
-                ) : view === "sites" ? (
-                  <Sites onOpenApps={() => navigate("apps")} />
-                ) : view === "tools" ? (
-                  <Tools onOpenApps={() => navigate("apps")} />
-                ) : view === "settings" ? (
-                  <Settings />
-                ) : (
-                  <div className="h-full w-full" />
-                )}
-            </div>
-          </main>
-        </div>
-      </div>
-      <UpdateDialog />
-      {shopDialog}
-      <WhatsNewModal version={view !== null ? whatsNew : null} onClose={closeWhatsNew} />
-      <AutoUpdateOffer
-        open={view !== null && whatsNewTaken && !whatsNew && offerAuto}
-        onAnswer={answerAutoUpdate}
-        onOpenSettings={() => {
-          // Без ответа: auto_update остаётся пустым, предложение вернётся при следующем запуске.
-          setOfferAuto(false);
-          openPrivacyNext();
-          navigate("settings");
-        }}
-      />
+      {content}
+      {/* Вне веток: просьба открыть обновление во время запуска не теряется
+          (в мастере окна обновления нет, как и раньше). Сбой его загрузки
+          не трогает остальное окно. */}
+      {!isWizard && (
+        <PageBoundary silent>
+          <UpdateDialogHost />
+        </PageBoundary>
+      )}
     </StatusProvider>
   );
 }

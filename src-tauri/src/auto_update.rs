@@ -200,6 +200,20 @@ fn read_counters() -> Counters {
     c
 }
 
+/// Нужны ли замеры моста: найдено обновление и тихая установка включена.
+/// Сначала дешёвое (обновление в памяти), настройки - только при нём.
+fn sampler_needed() -> bool {
+    crate::update_notify::latest().is_some() && settings::load().auto_update == Some(true)
+}
+
+/// Замеры не шли: прошлое окно устарело. Начнём с чистого, чтобы «тихо»
+/// не посчиталось по промежутку в несколько часов.
+fn reset_bridge_window() {
+    if let Ok(mut w) = BRIDGE.lock() {
+        *w = BridgeWindow { base: None, last_quiet: None, latest: None };
+    }
+}
+
 /// Снять замер и вернуть, тихо ли сейчас (блокирующий вызов).
 fn sample_bridge() -> bool {
     let c = read_counters();
@@ -663,9 +677,18 @@ static RETRY_AFTER: AtomicU64 = AtomicU64::new(0);
 pub fn spawn(app: AppHandle) {
     on_start(&app);
     // Счётчики моста: окно в 5 минут набирается по замерам раз в 30 секунд.
+    // Только пока они нужны: есть обновление и тихая установка включена.
+    // Иначе мост зря опрашивался бы всю жизнь программы.
     tauri::async_runtime::spawn(async move {
         loop {
-            let _ = tokio::task::spawn_blocking(sample_bridge).await;
+            let _ = tokio::task::spawn_blocking(|| {
+                if sampler_needed() {
+                    sample_bridge();
+                } else {
+                    reset_bridge_window();
+                }
+            })
+            .await;
             tokio::time::sleep(SAMPLE_EVERY).await;
         }
     });

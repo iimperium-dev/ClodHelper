@@ -2,9 +2,10 @@ import { useEffect, useState, type ReactNode } from "react";
 import { AnimatePresence, animate, motion, useMotionValue, useReducedMotion, useTransform } from "framer-motion";
 import { ChevronDown, Gauge, Loader2, Pencil, RefreshCw, Star, Trash2 } from "lucide-react";
 import { CountryFlag } from "./CountryFlag";
-import { CopyIp } from "../pages/Proxies";
+import { CopyIp } from "./CopyIp";
 import type { ProxyLive } from "../lib/status";
 import { cn } from "../lib/cn";
+import { ConfirmStrip as SharedConfirmStrip } from "./ConfirmStrip";
 import { causeLabel, causeOf, isAuthReason } from "../lib/proxyCause";
 import type { ProxyState } from "../lib/status";
 
@@ -38,6 +39,8 @@ export interface PoolRow {
   confirm?: string;
   /** Куплен в магазине Clod Helper: срок («до 15 декабря») и истёк ли он. */
   shop?: { until: string | null; expired: boolean };
+  /** Предупреждение о поломке скрыто (на «Обзоре» кнопкой «Скрыть»). */
+  muted?: boolean;
 }
 
 export interface PoolActions {
@@ -61,6 +64,8 @@ export interface PoolActions {
   replace: (url: string) => void;
   /** Панель резервов под прокси (раскрытие - по `open`). */
   backupsPanel: (row: PoolRow) => ReactNode;
+  /** Снова предупреждать о поломке прокси. */
+  unmute: (url: string) => void;
 }
 
 /* ───────────────────────── Общие кусочки ───────────────────────── */
@@ -170,6 +175,28 @@ function ShopLine({ row, a }: { row: PoolRow; a: PoolActions }) {
   );
 }
 
+/** «Предупреждение скрыто · Вернуть» - строкой под именем. Метка видна,
+    пока прокси не работает: заработает - она снимется сама. */
+export function MutedLine({ onUnmute, className }: { onUnmute: () => void; className?: string }) {
+  return (
+    <div
+      data-testid="proxy-muted"
+      title="На «Обзоре» и в статусе этот прокси не считается поломкой. Проверки идут как раньше"
+      className={cn("mt-1 flex min-w-0 items-center gap-1.5 whitespace-nowrap text-[11px] leading-none text-vb-silver-faint", className)}
+    >
+      <span>Предупреждение скрыто</span>
+      <span aria-hidden="true">·</span>
+      <button
+        type="button"
+        onClick={onUnmute}
+        className="shrink-0 rounded text-vb-silver-dim transition-colors hover:text-vb-silver"
+      >
+        Вернуть
+      </button>
+    </div>
+  );
+}
+
 /** Число, которое «докручивается» до значения (как спидометр). */
 function CountUp({ value, format, className }: { value: number; format: (v: number) => string; className?: string }) {
   const reduced = useReducedMotion();
@@ -222,7 +249,7 @@ export function SpeedMeter({ entry, busy, showLabel = true }: { entry?: SpeedEnt
     return () => window.clearTimeout(t);
   }, [failed]);
   if (!busy && failed && !failShown) {
-    return showLabel ? <span className="text-vb-silver-faint/70">скорость -</span> : null;
+    return showLabel ? <span className="text-vb-silver-faint">скорость -</span> : null;
   }
   const level = ok ? speedLevel(ok.mbps) : 0;
   const slow = !!ok && ok.mbps < 2;
@@ -333,36 +360,16 @@ const pingWarn = (r: PoolRow) => r.live === "slow" || r.live === "unstable";
 /** Подтверждение удаления - выезжает полосой под прокси. */
 function ConfirmStrip({ row, a }: { row: PoolRow; a: PoolActions }) {
   return (
-    <AnimatePresence initial={false}>
-      {row.confirm && (
-        <motion.div
-          initial={{ height: 0, opacity: 0 }}
-          animate={{ height: "auto", opacity: 1 }}
-          exit={{ height: 0, opacity: 0 }}
-          transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-          className="overflow-hidden"
-        >
-          <div className="mx-3 mb-3 flex items-center gap-2 rounded-xl border border-vb-loss/35 bg-vb-loss/[0.06] px-3 py-2">
-            <span className="min-w-0 flex-1 text-[12px] leading-snug text-vb-loss">{row.confirm}</span>
-            <button
-              type="button"
-              onClick={() => a.cancelDelete()}
-              className="rounded-full px-2.5 py-1 text-[12px] font-medium text-vb-silver-dim transition-colors hover:bg-vb-surface-2 hover:text-vb-silver"
-            >
-              Отмена
-            </button>
-            <button
-              type="button"
-              onClick={() => a.remove(row.i)}
-              disabled={a.busy !== null}
-              className="rounded-full bg-vb-loss px-3 py-1 text-[12px] font-semibold text-white transition-colors hover:bg-vb-loss/85 active:scale-[0.96] disabled:opacity-40"
-            >
-              {a.busy === `del:${row.i}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Удалить"}
-            </button>
-          </div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+    <SharedConfirmStrip
+      open={!!row.confirm}
+      text={row.confirm}
+      confirmLabel="Удалить"
+      busy={a.busy === `del:${row.i}`}
+      disabled={a.busy !== null}
+      onConfirm={() => a.remove(row.i)}
+      onCancel={() => a.cancelDelete()}
+      className="mx-3 mb-3"
+    />
   );
 }
 
@@ -449,6 +456,7 @@ function RowA({ row, a }: { row: PoolRow; a: PoolActions }) {
               </span>
             )}
           </div>
+          {row.muted && row.live === "down" && <MutedLine onUnmute={() => a.unmute(row.url)} />}
           <Problem row={row} a={a} />
         </div>
         {/* Цифры ↔ кнопки: один и тот же слот, сменяются при наведении */}
@@ -477,7 +485,7 @@ function RowA({ row, a }: { row: PoolRow; a: PoolActions }) {
                 ) : row.speed || row.speedBusy ? (
                   <SpeedMeter entry={row.speed} busy={row.speedBusy} />
                 ) : (
-                  <span className="text-vb-silver-faint/70">скорость -</span>
+                  <span className="text-vb-silver-faint">скорость -</span>
                 )}
               </>
             )}

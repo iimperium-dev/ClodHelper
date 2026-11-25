@@ -144,13 +144,12 @@ fn from_processes(names: &[String]) -> (Option<String>, bool) {
     (brand, sota)
 }
 
+/// Имена запущенных процессов - из общего снимка (его же берут трафик
+/// программ и Telegram): статус VPN спрашивают оба окна и каждый refresh.
 fn process_names() -> Vec<String> {
-    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
-    let mut sys = System::new();
-    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::new());
-    sys.processes()
-        .values()
-        .map(|p| p.name().to_string_lossy().trim_end_matches(".exe").to_string())
+    crate::apps::running_processes()
+        .iter()
+        .map(|p| p.name.trim_end_matches(".exe").to_string())
         .collect()
 }
 

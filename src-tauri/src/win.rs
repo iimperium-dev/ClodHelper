@@ -119,6 +119,85 @@ fn utf16_z(bytes: &[u8]) -> String {
     String::from_utf16_lossy(&words)
 }
 
+// ─── Переменные окружения пользователя ──────────────────────────
+
+/// Хранилище User-переменных окружения (то, что пишут setx и
+/// [Environment]::SetEnvironmentVariable(…, 'User')).
+const USER_ENV: &str = "Environment";
+
+/// User-переменная как есть: REG_EXPAND_SZ не раскрываем, чтобы при
+/// возврате записать то же самое, что было.
+pub fn user_env(name: &str) -> Option<String> {
+    string(&hkcu(), USER_ENV, name)
+}
+
+/// Записать User-переменную (Some) или удалить её (None или пустая строка -
+/// как у SetEnvironmentVariable). Тип значения сохраняем: было REG_EXPAND_SZ -
+/// так и остаётся, иначе REG_SZ. Новые процессы увидят значение только после
+/// broadcast_environment_change().
+pub fn set_user_env(name: &str, value: Option<&str>) -> std::io::Result<()> {
+    use winreg::enums::{RegType, KEY_SET_VALUE};
+    let (key, _) = hkcu().create_subkey_with_flags(USER_ENV, KEY_READ | KEY_SET_VALUE)?;
+    let Some(value) = value.filter(|v| !v.is_empty()) else {
+        return match key.delete_value(name) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            other => other,
+        };
+    };
+    let vtype = match key.get_raw_value(name) {
+        Ok(old) if old.vtype == RegType::REG_EXPAND_SZ => RegType::REG_EXPAND_SZ,
+        _ => RegType::REG_SZ,
+    };
+    let bytes: Vec<u8> = value
+        .encode_utf16()
+        .chain(Some(0))
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    key.set_raw_value(name, &winreg::RegValue { bytes: bytes.into(), vtype })
+}
+
+/// Сообщить, что переменные окружения поменялись (WM_SETTINGCHANGE
+/// «Environment»), как это делает SetEnvironmentVariable.
+///
+/// Сначала рабочему столу Проводника, с ожиданием до секунды: он
+/// перечитывает переменные, и всё, что запущено из Пуска, с панели задач и
+/// ярлыков после возврата, получает новые значения. Затем всем окнам с
+/// коротким ожиданием: сообщение медленное окно получит и так, мы просто не
+/// ждём его ответа. SetEnvironmentVariable ждёт каждое окно до секунды и без
+/// пропуска зависших - из-за этого стоил 15-20 секунд на переменную.
+pub fn broadcast_environment_change() {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, HWND_BROADCAST};
+    let class: Vec<u16> = "Progman".encode_utf16().chain(Some(0)).collect();
+    // SAFETY: имя класса с нулём на конце; заголовок не важен.
+    let desktop = unsafe { FindWindowW(class.as_ptr(), std::ptr::null()) };
+    if !desktop.is_null() {
+        send_environment_change(desktop, 1000);
+    }
+    send_environment_change(HWND_BROADCAST, 200);
+}
+
+/// WM_SETTINGCHANGE «Environment» окну (или всем - HWND_BROADCAST).
+/// Зависшие окна пропускаем, остальные ждём не дольше `timeout_ms` на окно.
+fn send_environment_change(window: windows_sys::Win32::Foundation::HWND, timeout_ms: u32) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SendMessageTimeoutW, SMTO_ABORTIFHUNG, WM_SETTINGCHANGE,
+    };
+    let area: Vec<u16> = "Environment".encode_utf16().chain(Some(0)).collect();
+    let mut answer: usize = 0;
+    // SAFETY: lParam - строка с нулём на конце, живая на время вызова.
+    unsafe {
+        SendMessageTimeoutW(
+            window,
+            WM_SETTINGCHANGE,
+            0,
+            area.as_ptr() as isize,
+            SMTO_ABORTIFHUNG,
+            timeout_ms,
+            &mut answer,
+        )
+    };
+}
+
 /// Правило брандмауэра Windows по имени (InstanceID) - строка вида
 /// «v2.33|Action=Block|Active=TRUE|Dir=Out|…». Читается без прав
 /// администратора. Err - нет доступа к хранилищу правил.

@@ -5,10 +5,13 @@ import { ArrowRight, Check, Download, Loader2, RotateCw, ShieldCheck, Sparkles, 
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { Button } from "./Button";
+import { LogoTile } from "./LogoTile";
+export { LogoTile } from "./LogoTile";
 import { autoUpdateGet, updateInstall } from "../lib/api";
 import { formatMb, onOpenUpdateDialog } from "../lib/updateBus";
 import { cn } from "../lib/cn";
 import type { UpdateInfo, UpdateProgress } from "../lib/types";
+import { useDialogFocus } from "../lib/useDialogFocus";
 
 const RELEASES = "https://github.com/iimperium-dev/ClodHelper/releases/latest";
 /** Текст ошибки бэкенда, когда установка уже идёт (автоматическая или из другого окна). */
@@ -67,12 +70,17 @@ export function UpdateDialog() {
     setProgress(null);
   };
 
+  // Фокус на «Обновить», Tab внутри окна, Esc закрывает (кроме установки),
+  // после закрытия - туда, откуда открыли.
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const primaryRef = useRef<HTMLButtonElement>(null);
+  useDialogFocus(!!info, dialogRef, primaryRef, phase === "installing" ? null : close);
+  // Установка упала - фокус на «Повторить» (кнопка «Обновить» уже исчезла).
   useEffect(() => {
-    if (!info) return;
-    const esc = (e: KeyboardEvent) => e.key === "Escape" && close();
-    window.addEventListener("keydown", esc);
-    return () => window.removeEventListener("keydown", esc);
-  });
+    if (phase !== "error") return;
+    const t = window.setTimeout(() => primaryRef.current?.focus({ preventScroll: true }), 250);
+    return () => window.clearTimeout(t);
+  }, [phase]);
 
   const install = async () => {
     if (!info) return;
@@ -110,7 +118,9 @@ export function UpdateDialog() {
             exit={{ opacity: 0, scale: 0.96, y: 8 }}
             transition={{ type: "spring", bounce: 0.2, duration: 0.45 }}
             onMouseDown={(e) => e.stopPropagation()}
+            ref={dialogRef}
             role="dialog"
+            aria-modal="true"
             aria-label="Обновление Clod Helper"
             className="relative flex max-h-full w-full max-w-[420px] flex-col overflow-hidden rounded-2xl border border-vb-border bg-vb-surface shadow-[0_24px_64px_rgba(0,0,0,0.6)]"
           >
@@ -206,11 +216,11 @@ export function UpdateDialog() {
                         Позже
                       </Button>
                       {manualOnly ? (
-                        <Button variant="primary" size="sm" onClick={() => void openPage(page)}>
+                        <Button ref={primaryRef} variant="primary" size="sm" onClick={() => void openPage(page)}>
                           Открыть страницу
                         </Button>
                       ) : (
-                        <Button variant="primary" size="sm" onClick={install}>
+                        <Button ref={primaryRef} variant="primary" size="sm" onClick={install}>
                           <Download className="h-3.5 w-3.5" />
                           Обновить
                         </Button>
@@ -255,11 +265,11 @@ export function UpdateDialog() {
                           Скачать вручную
                         </Button>
                         {already ? (
-                          <Button variant="secondary" size="sm" onClick={close}>
+                          <Button ref={primaryRef} variant="secondary" size="sm" onClick={close}>
                             Закрыть
                           </Button>
                         ) : (
-                          <Button variant="secondary" size="sm" onClick={install}>
+                          <Button ref={primaryRef} variant="secondary" size="sm" onClick={install}>
                             <RotateCw className="h-3.5 w-3.5" />
                             Повторить
                           </Button>
@@ -313,24 +323,6 @@ function PulseLogo() {
       ))}
       <LogoTile size={64} />
     </div>
-  );
-}
-
-/** C-монограмма (как BrandMark, но без статуса - не нужен StatusProvider). */
-export function LogoTile({ size }: { size: number }) {
-  return (
-    <svg viewBox="0 0 32 32" width={size} height={size} aria-hidden className="relative">
-      <rect width="32" height="32" rx="7.5" fill="oklch(21% 0.012 160)" />
-      <rect x="0.5" y="0.5" width="31" height="31" rx="7" fill="none" stroke="oklch(100% 0 0 / 0.08)" />
-      <path
-        d="M 23.09 21.54 A 9 9 0 1 1 23.09 10.46"
-        fill="none"
-        stroke="var(--color-vb-emerald)"
-        strokeWidth="3.1"
-        strokeLinecap="round"
-      />
-      <circle cx="25.2" cy="16" r="2.3" fill="var(--color-vb-emerald-bright)" />
-    </svg>
   );
 }
 

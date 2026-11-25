@@ -1,6 +1,5 @@
-import React from "react";
+import React, { type ComponentType } from "react";
 import ReactDOM from "react-dom/client";
-import App from "./App";
 import "./index.css";
 import { startUiWatchdog } from "./lib/uiWatchdog";
 
@@ -24,8 +23,33 @@ window.addEventListener("contextmenu", (e) => {
 // Сторож окна: чёрный экран после долгой работы → журнал + восстановление.
 startUiWatchdog();
 
-ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
+/*
+  Каждое окно грузит только свой код. Трей-попап, уведомление и заставка
+  обновления - те же index.html с ?view=..., но без страниц главного окна,
+  мастера и диалогов: им достаётся небольшой отдельный кусок JS.
+*/
+function loadRoot(): Promise<ComponentType> {
+  if (view === "tray") return import("./TrayRoot").then((m) => m.TrayRoot);
+  if (view === "toast") return import("./pages/UpdateToast").then((m) => m.UpdateToast);
+  if (view === "updating") return import("./pages/UpdateSplash").then((m) => m.UpdateSplash);
+  return import("./App").then((m) => m.default);
+}
+
+const root = ReactDOM.createRoot(document.getElementById("root") as HTMLElement);
+loadRoot().then(
+  (Root) =>
+    root.render(
+      <React.StrictMode>
+        <Root />
+      </React.StrictMode>,
+    ),
+  (err) => {
+    // Свой файл окна не загрузился (повреждена установка) - честно говорим.
+    console.error(err);
+    root.render(
+      <div className="grid h-screen place-items-center p-6 text-center text-[13px] text-vb-silver">
+        Окно не открылось. Перезапустите программу.
+      </div>,
+    );
+  },
 );

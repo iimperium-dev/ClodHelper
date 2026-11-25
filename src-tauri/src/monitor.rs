@@ -3,6 +3,8 @@
 //! Фоновый поток раз в 5 секунд:
 //!   - жив ли мост (лёгкий TCP-чек порта, без скана процессов);
 //!   - /healthz нового моста (мини-HTTP-клиент на std::net, без async);
+//!     остальные входы моста - каждый тик, пока окно на экране, и раз в ~30с,
+//!     когда программа в трее; событие bridge-health - только при окне на экране;
 //!   - раз в ~60с - латентность TCP-коннекта до upstream-прокси.
 //!
 //! Результат: иконка трея меняет цвет (зелёная/жёлтая/красная точка),
@@ -86,6 +88,10 @@ fn tray_icon_for(state: BridgeState) -> (&'static [u8], bool, u8) {
 }
 
 const TICK: Duration = Duration::from_secs(5);
+/// Все окна скрыты: остальные входы моста (Claude, сайты, закреплённые)
+/// опрашиваем раз в столько тиков (~30с). Общий вход - каждый тик: от него
+/// зависят значок трея, оповещения и перезапуск моста.
+const HIDDEN_EXTRA_EVERY_TICKS: u32 = 6;
 /// Пинг до upstream: раз в 12 тиков (~60с); «высоким» считаем > 1500 мс.
 const LATENCY_EVERY_TICKS: u32 = 12;
 const LATENCY_WARN_MS: u128 = 1500;
@@ -167,24 +173,51 @@ fn run(app: AppHandle, h: TrayHandles) {
     // TCP-коннекте - это повтор SYN через 1-2с, а не «медленный прокси».
     let mut ping_high_streak: u32 = 0;
     let mut upstream_bad_ticks: u32 = 0;
+    // Последние ответы остальных входов моста (см. other_health_ports) и
+    // относятся ли они к живому мосту. Пока окна скрыты, входы опрашиваются
+    // реже, а между опросами в счётчики идут эти ответы.
+    let mut extra: Vec<serde_json::Value> = Vec::new();
+    let mut extra_fresh = false;
+    // Время работы основного входа на прошлом тике: уменьшилось - мост
+    // перезапустился, прежние ответы остальных входов к нему не относятся.
+    let mut last_uptime: Option<u64> = None;
 
     loop {
         let listening = port_listening();
+        let on_screen = any_window_on_screen(&app);
 
         // healthz - только если порт жив и мы не в «легаси-паузе».
         let health: Option<Health> = if listening
             && skip_healthz_until.map(|t| Instant::now() > t).unwrap_or(true)
         {
-            match fetch_healthz() {
+            let poll_extra = extra_poll_due(on_screen, extra_fresh, tick);
+            match fetch_healthz(&mut extra, poll_extra) {
                 Some((x, raw)) => {
                     healthz_fail_streak = 0;
                     skip_healthz_until = None;
+                    let uptime = raw.get("uptime_sec").and_then(|v| v.as_u64());
+                    let restarted = matches!((last_uptime, uptime), (Some(a), Some(b)) if b < a);
+                    last_uptime = uptime;
+                    if restarted && !poll_extra {
+                        // Остальные входы опросим на следующем тике, а пока не
+                        // прибавляем ответы прежнего процесса.
+                        extra.clear();
+                        extra_fresh = false;
+                    } else {
+                        extra_fresh = true;
+                    }
                     // Один опрос моста на всё приложение: окна получают
                     // свежий /healthz событием и сами мост не опрашивают.
-                    let _ = app.emit("bridge-health", raw);
+                    // Скрытым окнам событие не нужно: при показе окно само
+                    // берёт полный статус (visibilitychange в StatusProvider),
+                    // а перерисовка спрятанного интерфейса - пустая работа.
+                    if on_screen {
+                        let _ = app.emit("bridge-health", raw);
+                    }
                     Some(x)
                 }
                 None => {
+                    extra_fresh = false;
                     healthz_fail_streak += 1;
                     if healthz_fail_streak >= 2 {
                         // Легаси-мост: не мусорить GET'ами через upstream.
@@ -194,6 +227,9 @@ fn run(app: AppHandle, h: TrayHandles) {
                 }
             }
         } else {
+            // Мост перезапустится со счётчиками с нуля: прежние ответы
+            // входов к нему уже не относятся.
+            extra_fresh = false;
             None
         };
 
@@ -361,14 +397,40 @@ fn port_listening() -> bool {
     TcpStream::connect_timeout(&addr, Duration::from_millis(600)).is_ok()
 }
 
+/// Хоть одно окно программы на экране: видно и не свёрнуто. Главное окно в
+/// трее и спрятанный трей-попап не в счёт.
+fn any_window_on_screen(app: &AppHandle) -> bool {
+    use tauri::Manager;
+    app.webview_windows()
+        .values()
+        .any(|w| w.is_visible().unwrap_or(true) && !w.is_minimized().unwrap_or(false))
+}
+
+/// Опрашивать ли на этом тике остальные входы моста. Окно на экране - каждый
+/// тик: «Обзор» показывает живые счётчики. Все окна скрыты - раз в
+/// HIDDEN_EXTRA_EVERY_TICKS: эти счётчики нужны только подсказке трея и
+/// статистике. Прежних ответов нет или мост перезапускался - сразу.
+fn extra_poll_due(on_screen: bool, extra_fresh: bool, tick: u32) -> bool {
+    on_screen || !extra_fresh || tick % HIDDEN_EXTRA_EVERY_TICKS == 0
+}
+
 /// GET /healthz мини-клиентом на std::net (монитор - обычный поток, не tokio).
-/// Счётчики соединений - по всему мосту (см. merge_listener).
-fn fetch_healthz() -> Option<(Health, serde_json::Value)> {
+/// Счётчики соединений - по всему мосту (см. merge_listener). `poll_extra` -
+/// заново опросить остальные входы; иначе к общему входу добавляются их
+/// прошлые ответы из `extra`.
+fn fetch_healthz(
+    extra: &mut Vec<serde_json::Value>,
+    poll_extra: bool,
+) -> Option<(Health, serde_json::Value)> {
     let mut raw = fetch_healthz_port(LISTEN_PORT, Duration::from_millis(800))?;
-    for port in other_health_ports() {
-        if let Some(other) = fetch_healthz_port(port, Duration::from_millis(300)) {
-            merge_listener(&mut raw, &other);
-        }
+    if poll_extra {
+        *extra = other_health_ports()
+            .into_iter()
+            .filter_map(|port| fetch_healthz_port(port, Duration::from_millis(300)))
+            .collect();
+    }
+    for other in extra.iter() {
+        merge_listener(&mut raw, other);
     }
     let h = serde_json::from_value::<Health>(raw.clone()).ok()?;
     Some((h, raw))
@@ -392,11 +454,61 @@ pub(crate) fn fetch_healthz_port(port: u16, connect: Duration) -> Option<serde_j
 /// закреплённые за прокси пула (по одному на прокси). SOCKS-вход Telegram
 /// (8891) не HTTP - его статистики в /healthz нет.
 pub(crate) fn other_health_ports() -> Vec<u16> {
-    let pool = crate::settings::effective_proxies(&crate::settings::load()).len() as u16;
+    let pool = pool_len() as u16;
     [crate::claude_desktop::PROXY_PORT, crate::tasks::SITES_PORT]
         .into_iter()
         .chain((0..pool.min(5)).map(|i| crate::tasks::PIN_PORT_BASE + i))
         .collect()
+}
+
+/// Метка файла настроек (время изменения, размер): меняется при каждой записи
+/// (save пишет новый файл и подменяет им старый). None - файла нет.
+type SettingsStamp = Option<(std::time::SystemTime, u64)>;
+
+fn settings_stamp() -> SettingsStamp {
+    // Тот же путь, что у settings::load (settings_path).
+    let path = dirs::config_dir()?.join("Clod Helper").join("settings.json");
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.modified().ok()?, meta.len()))
+}
+
+/// Длина пула прокси. Раньше на каждом тике монитора (и каждом запросе
+/// здоровья из окна) settings.json читался и разбирался целиком ради одного
+/// числа. Теперь - одно чтение метки файла, разбор только после записи.
+fn pool_len() -> usize {
+    use std::sync::Mutex;
+    static CACHE: Mutex<Option<(SettingsStamp, usize)>> = Mutex::new(None);
+    let stamp = settings_stamp();
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((s, n)) = cache.as_ref() {
+        if *s == stamp {
+            return *n;
+        }
+    }
+    let n = crate::settings::effective_proxies(&crate::settings::load()).len();
+    *cache = Some((stamp, n));
+    n
+}
+
+/// Общий HTTP-клиент для запросов к самому мосту на 127.0.0.1 («Подсмотреть»
+/// раз в 1,5 с, проверка входа Claude раз в 200 мс при запуске). Сборка
+/// клиента reqwest (TLS-настройки, корневые сертификаты) не бесплатная, а
+/// раньше шла на каждый запрос. Без системного прокси и редиректов; простаивающие
+/// соединения не держим (мост всё равно закрывает их после ответа). Таймаут -
+/// у каждого запроса свой.
+pub(crate) fn loopback_client() -> Result<&'static reqwest::Client, String> {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    if let Some(c) = CLIENT.get() {
+        return Ok(c);
+    }
+    let c = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .pool_max_idle_per_host(0)
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("client: {e}"))?;
+    Ok(CLIENT.get_or_init(|| c))
 }
 
 /// Добавить к /healthz общего входа счётчики другого входа моста: у каждого
@@ -460,8 +572,19 @@ fn measure_connect_ms(addr: &str) -> Option<u128> {
 
 #[cfg(test)]
 mod tests {
-    use super::merge_listener;
+    use super::{extra_poll_due, merge_listener, HIDDEN_EXTRA_EVERY_TICKS};
     use serde_json::json;
+
+    #[test]
+    fn extra_listeners_polled_rarely_only_in_tray() {
+        // Окно на экране - каждый тик.
+        assert!((0..20).all(|t| extra_poll_due(true, true, t)));
+        // Все окна скрыты - раз в HIDDEN_EXTRA_EVERY_TICKS (~30с).
+        let polled = (0..60).filter(|&t| extra_poll_due(false, true, t)).count();
+        assert_eq!(polled, 60 / HIDDEN_EXTRA_EVERY_TICKS as usize);
+        // Прошлых ответов нет (старт, перезапуск моста) - сразу.
+        assert!(extra_poll_due(false, false, 1));
+    }
 
     #[test]
     fn overview_counts_every_bridge_listener() {

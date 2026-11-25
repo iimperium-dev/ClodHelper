@@ -279,7 +279,18 @@ pub fn stop() -> Result<usize, String> {
 pub fn start() -> Result<(), String> {
     // Явный запуск снимает ручную остановку - watchdog снова сторожит.
     MANUALLY_STOPPED.store(false, Ordering::Relaxed);
+    // Человек сам запустил мост (или сменил настройки): у watchdog'а
+    // сбрасывается пауза, а самовосстановление задачи снова разрешено.
+    WATCHDOG_KICK.store(true, Ordering::Relaxed);
+    SELF_HEAL_REGISTERED.store(false, Ordering::Relaxed);
+    start_inner()
+}
 
+/// Самовосстановление задачи из start() уже было в этом запуске программы.
+/// Без этого флага watchdog на каждом круге пересоздавал задачу заново.
+static SELF_HEAL_REGISTERED: AtomicBool = AtomicBool::new(false);
+
+fn start_inner() -> Result<(), String> {
     // Уже запущенный вручную мост тоже считается успехом. Настройку задачи
     // отдельно выполняет кнопка «Исправить» и фоновая миграция.
     if status().running {
@@ -305,7 +316,11 @@ pub fn start() -> Result<(), String> {
 
     // Самовосстановление: если старый .vbs удалён или задача устарела,
     // регистрируем актуальное действие из установленного exe и settings.
-    if bridge_exe_path().is_some_and(|exe| exe.exists()) {
+    // Один раз за запуск программы (или за действие человека): если и
+    // свежая задача не помогла, пересоздавать её по кругу бесполезно.
+    if bridge_exe_path().is_some_and(|exe| exe.exists())
+        && !SELF_HEAL_REGISTERED.swap(true, Ordering::Relaxed)
+    {
         if let Some(proxy_url) = crate::settings::load().proxy_url {
             match crate::tasks::register(&proxy_url) {
                 Ok(()) => match crate::tasks::start() {
@@ -384,10 +399,21 @@ fn start_legacy(task_error: Option<String>) -> Result<(), String> {
 
 /// Дождаться появления процесса после запуска через Планировщик. Его команда
 /// может вернуть успех даже когда вложенный wscript не нашёл runner-vbs.
+/// Порт проверяется часто (дёшево), полный скан процессов - раз в секунду:
+/// мост мог подняться, но ещё не открыть порт. Ждём не больше 5 секунд
+/// (на Windows отказ в подключении к закрытому порту сам длится до 0,5 с).
 fn wait_for_bridge_process() -> bool {
-    for _ in 0..20 {
-        if status().running {
+    let started = std::time::Instant::now();
+    let mut scanned = started;
+    while started.elapsed() < Duration::from_secs(5) {
+        if port_alive() {
             return true;
+        }
+        if scanned.elapsed() >= Duration::from_secs(1) {
+            if status().running {
+                return true;
+            }
+            scanned = std::time::Instant::now();
         }
         std::thread::sleep(Duration::from_millis(250));
     }
@@ -418,6 +444,49 @@ fn should_report_bridge(seen_alive: bool, proxy_set: bool, restarting: bool) -> 
 /// Интервал опроса живости шима. 5с - баланс: быстро поднять после падения,
 /// но не дёргать sysinfo слишком часто.
 const WATCHDOG_INTERVAL_SEC: u64 = 5;
+/// Потолок паузы между неудачными попытками поднять мост.
+/// Не больше минуты: пока моста нет, переменные прокси ведут в никуда, и
+/// вернувшийся файл моста (например, из карантина) должен подняться быстро.
+const WATCHDOG_MAX_BACKOFF_SEC: u64 = 60;
+
+/// Человек сам запустил мост или сменил настройки (любой вызов start()):
+/// watchdog забывает накопленную паузу и пробует сразу.
+static WATCHDOG_KICK: AtomicBool = AtomicBool::new(false);
+
+/// Пауза после `failures` неудачных попыток подряд: 5, 10, 20, 40, 60 с.
+/// Без неё мост, который не поднимается (нет файла, битая задача), каждые
+/// 5 с стоил два скана процессов, перерегистрацию задачи и запись в журнал.
+fn watchdog_backoff(failures: u32) -> Duration {
+    let secs = WATCHDOG_INTERVAL_SEC
+        .saturating_mul(1u64 << failures.saturating_sub(1).min(16))
+        .min(WATCHDOG_MAX_BACKOFF_SEC);
+    Duration::from_secs(secs)
+}
+
+/// Неудачные попытки watchdog'а подряд.
+#[derive(Default)]
+struct Retry {
+    failures: u32,
+    /// Раньше этого времени не пробовать снова.
+    next_at: Option<std::time::Instant>,
+    /// Последняя ошибка: одну и ту же не пишем в журнал на каждом круге.
+    last_error: Option<String>,
+}
+
+impl Retry {
+    fn due(&self, now: std::time::Instant) -> bool {
+        self.next_at.map_or(true, |t| now >= t)
+    }
+
+    /// Попытка не удалась. true - ошибка новая, о ней стоит написать.
+    fn failed(&mut self, error: &str, now: std::time::Instant) -> bool {
+        self.failures = self.failures.saturating_add(1);
+        self.next_at = Some(now + watchdog_backoff(self.failures));
+        let fresh = self.last_error.as_deref() != Some(error);
+        self.last_error = Some(error.to_string());
+        fresh
+    }
+}
 
 /// Фоновый супервайзер: раз в WATCHDOG_INTERVAL_SEC проверяет, жив ли шим, и
 /// если упал - поднимает через start(). Это закрывает корневую боль: при пике
@@ -429,20 +498,28 @@ const WATCHDOG_INTERVAL_SEC: u64 = 5;
 /// нужен надёжный бесконечный цикл, переживающий любые ошибки start().
 /// Анти-флаппинг: после успешного подъёма ждём дольше, чтобы не штормить
 /// рестартами, если шим падает сразу (например, занят порт / битый upstream).
+/// Не поднимается совсем - пауза растёт до 5 минут (watchdog_backoff) и
+/// сбрасывается, как только мост жив или человек сам нажал «Запустить».
+/// Прокси не настроен (до мастера) - поднимать нечего, start() не зовём.
 pub fn spawn_watchdog() {
     std::thread::spawn(|| {
         // дать инсталлятору/автозапуску время на первый старт, чтобы watchdog
         // не пытался поднять параллельно поднимающийся при логине шим.
         std::thread::sleep(Duration::from_secs(WATCHDOG_INTERVAL_SEC));
         let mut consecutive_revivals: u32 = 0;
+        let mut retry = Retry::default();
         // Переменные прокси, снятые «Остановить мост», возвращаем, как только
         // мост снова жив (автозапуск, перезагрузка) - один раз на подъём.
         let mut env_checked = false;
         loop {
+            if WATCHDOG_KICK.swap(false, Ordering::Relaxed) {
+                retry = Retry::default();
+            }
             // Уважаем ручную остановку: «Остановить» значит остановить,
             // а не «поживи 5 секунд».
             if MANUALLY_STOPPED.load(Ordering::Relaxed) {
                 env_checked = false;
+                retry = Retry::default();
                 std::thread::sleep(Duration::from_secs(WATCHDOG_INTERVAL_SEC));
                 continue;
             }
@@ -451,22 +528,33 @@ pub fn spawn_watchdog() {
                 std::thread::sleep(Duration::from_secs(WATCHDOG_INTERVAL_SEC));
                 continue;
             }
+            let now = std::time::Instant::now();
             // Порт отвечает - мост жив, скан процессов не нужен.
-            if port_alive() || status().running {
+            let port_up = port_alive();
+            let proxy_set = !port_up
+                && !crate::settings::effective_proxies(&crate::settings::load()).is_empty();
+            // Пора ли что-то делать с мёртвым мостом. Скан процессов - только
+            // тогда: в паузе и без прокси он ничего не решает.
+            let act = proxy_set && retry.due(now);
+            if port_up || (act && status().running) {
                 SEEN_ALIVE.store(true, Ordering::Relaxed);
                 consecutive_revivals = 0;
+                if retry.last_error.is_some() {
+                    tracing::info!("watchdog: мост снова работает");
+                }
+                retry = Retry::default();
                 if !env_checked {
                     env_checked = true;
                     crate::env_proxy::resume_after_start();
                 }
-            } else {
+            } else if act {
                 let report = should_report_bridge(
                     SEEN_ALIVE.load(Ordering::Relaxed),
-                    !crate::settings::effective_proxies(&crate::settings::load()).is_empty(),
+                    proxy_set,
                     RESTARTING.load(Ordering::Relaxed),
                 );
-                // шим мёртв - пытаемся поднять. start() идемпотентен (через .vbs).
-                match start() {
+                // шим мёртв - пытаемся поднять. start() идемпотентен.
+                match start_inner() {
                     Ok(()) => {
                         consecutive_revivals += 1;
                         tracing::warn!(
@@ -476,21 +564,29 @@ pub fn spawn_watchdog() {
                         if report {
                             crate::telemetry::report_bridge("Мост не отвечал, поднят заново", "watchdog:revived");
                         }
-                    }
-                    Err(e) => {
-                        tracing::error!("watchdog: не смог поднять шим: {e}");
-                        if report {
-                            crate::telemetry::report_bridge(
-                                &format!("Мост не отвечал, поднять не вышло: {e}"),
-                                "watchdog:start_failed",
-                            );
+                        retry = Retry::default();
+                        // анти-флаппинг: шим поднимается и сразу падает (битый
+                        // конфиг/порт) - тормозим, чтобы не штормить запусками.
+                        if consecutive_revivals >= 3 {
+                            retry.next_at = Some(now + Duration::from_secs(30));
                         }
                     }
-                }
-                // анти-флаппинг: если шим падает раз за разом (битый конфиг/порт),
-                // тормозим, чтобы не штормить wscript-запусками. Иначе обычный темп.
-                if consecutive_revivals >= 3 {
-                    std::thread::sleep(Duration::from_secs(30));
+                    Err(e) => {
+                        let pause = watchdog_backoff(retry.failures.saturating_add(1)).as_secs();
+                        if retry.failed(&e, std::time::Instant::now()) {
+                            tracing::error!(
+                                "watchdog: не смог поднять шим: {e} (следующая попытка через {pause} с)"
+                            );
+                            if report {
+                                crate::telemetry::report_bridge(
+                                    &format!("Мост не отвечал, поднять не вышло: {e}"),
+                                    "watchdog:start_failed",
+                                );
+                            }
+                        } else {
+                            tracing::debug!("watchdog: та же ошибка, следующая попытка через {pause} с");
+                        }
+                    }
                 }
             }
             std::thread::sleep(Duration::from_secs(WATCHDOG_INTERVAL_SEC));
@@ -646,5 +742,28 @@ mod tests {
         assert!(!should_report_bridge(true, false, false), "прокси не настроен");
         assert!(!should_report_bridge(true, true, true), "идёт перезапуск");
         assert!(should_report_bridge(true, true, false));
+    }
+
+    #[test]
+    fn watchdog_pause_doubles_up_to_a_minute() {
+        let got: Vec<u64> = (1..=9).map(|n| watchdog_backoff(n).as_secs()).collect();
+        assert_eq!(got, [5, 10, 20, 40, 60, 60, 60, 60, 60]);
+        assert_eq!(watchdog_backoff(0).as_secs(), 5, "до первой ошибки - обычный темп");
+        assert_eq!(watchdog_backoff(u32::MAX).as_secs(), 60, "без переполнения");
+    }
+
+    #[test]
+    fn watchdog_waits_after_failure_and_logs_each_error_once() {
+        let t0 = std::time::Instant::now();
+        let mut r = Retry::default();
+        assert!(r.due(t0), "первая попытка - сразу");
+        assert!(r.failed("нет файла", t0), "новая ошибка - в журнал");
+        assert!(!r.due(t0 + Duration::from_secs(4)));
+        assert!(r.due(t0 + Duration::from_secs(5)));
+        assert!(!r.failed("нет файла", t0), "та же ошибка - молча");
+        assert!(!r.due(t0 + Duration::from_secs(9)), "вторая пауза - 10 с");
+        assert!(r.due(t0 + Duration::from_secs(10)));
+        assert!(r.failed("порт занят", t0), "другая ошибка - снова в журнал");
+        assert!(Retry::default().due(t0), "мост жив или «Запустить» - пауза сброшена");
     }
 }

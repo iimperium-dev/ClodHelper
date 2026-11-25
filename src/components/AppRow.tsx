@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   AlertCircle,
@@ -42,6 +42,8 @@ interface Props {
   onRemove?: () => void;
   /** Открыть настройки приложения (шестерёнка при наведении). */
   onSettings?: () => void;
+  /** Под строкой: подтверждение «Убрать из списка». */
+  below?: ReactNode;
 }
 
 /*
@@ -59,10 +61,27 @@ export function AppRow({
   editing,
   onRemove,
   onSettings,
+  below,
 }: Props) {
   const [hover, setHover] = useState(false);
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState<{ ok: boolean; text: string } | null>(null);
+  // Один таймер на строку: новая подпись не гаснет по таймеру прежней.
+  const flashTimer = useRef<number | null>(null);
+  const showFlash = (f: { ok: boolean; text: string }, ms: number) => {
+    if (flashTimer.current !== null) window.clearTimeout(flashTimer.current);
+    setFlash(f);
+    flashTimer.current = window.setTimeout(() => {
+      flashTimer.current = null;
+      setFlash(null);
+    }, ms);
+  };
+  useEffect(
+    () => () => {
+      if (flashTimer.current !== null) window.clearTimeout(flashTimer.current);
+    },
+    [],
+  );
 
   // Дополнительные действия (ярлыки, «Отключить прокси Claude»…) - в окне
   // настроек приложения (шестерёнка на иконке), не в меню «…» строки.
@@ -71,13 +90,9 @@ export function AppRow({
     try {
       const res = await fn();
       const text = okText ?? (typeof res === "string" ? res : null);
-      if (text) {
-        setFlash({ ok: true, text });
-        window.setTimeout(() => setFlash(null), 4000);
-      }
+      if (text) showFlash({ ok: true, text }, 4000);
     } catch (e) {
-      setFlash({ ok: false, text: String(e) });
-      window.setTimeout(() => setFlash(null), 6000);
+      showFlash({ ok: false, text: String(e) }, 6000);
     } finally {
       setBusy(false);
     }
@@ -174,7 +189,7 @@ export function AppRow({
                 title="Настройки"
                 className={cn(
                   "group/gear rounded-lg p-1.5 transition-colors duration-150 hover:bg-vb-emerald/10 hover:text-vb-emerald active:scale-[0.95]",
-                  hover ? "text-vb-silver" : "text-vb-silver-faint/70",
+                  hover ? "text-vb-silver" : "text-vb-silver-faint",
                 )}
               >
                 <Settings2 className="h-4 w-4 transition-transform duration-300 group-hover/gear:rotate-45" />
@@ -205,6 +220,7 @@ export function AppRow({
           </motion.div>
         )}
       </AnimatePresence>
+      {below}
     </motion.div>
   );
 }

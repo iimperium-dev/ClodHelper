@@ -74,6 +74,13 @@ pub fn cli_mode() -> Option<i32> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Из Dock/Finder приложение получает PATH без Homebrew/nvm - node, npm и
+    // claude не нашлись бы. Сразу ставим PATH из кэша прошлого запуска (без
+    // шелла: окно и трей его не ждут), шелл спрашиваем в фоне из setup.
+    // Первой строкой: set_var безопасен, пока других потоков нет.
+    #[cfg(not(target_os = "windows"))]
+    macos::init_path_env();
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -83,11 +90,6 @@ pub fn run() {
 
     // Сбои Rust: запись на диск до аварийного выхода, отправка при старте.
     telemetry::install_panic_hook();
-
-    // Из Dock/Finder приложение получает PATH без Homebrew/nvm - node, npm и
-    // claude не нашлись бы. Чиним до любых спавнов.
-    #[cfg(not(target_os = "windows"))]
-    macos::fix_path_env();
 
     // Контекст (с ресурсами фронтенда) создаётся один раз: второй вызов
     // generate_context! вшил бы фронтенд в exe повторно.
@@ -265,6 +267,8 @@ pub fn run() {
             commands::system_pac_set,
             commands::proxy_labels_get,
             commands::proxy_label_set,
+            commands::proxy_alerts_muted_get,
+            commands::proxy_alert_mute,
             commands::claude_telemetry_get,
             commands::claude_telemetry_set,
             commands::google_ads_get,
@@ -285,6 +289,10 @@ pub fn run() {
             shop::shop_renew,
         ])
         .setup(|app| {
+            // PATH из login-шелла - в фоне; запуски node/npm ждут его барьер.
+            #[cfg(not(target_os = "windows"))]
+            macos::spawn_path_resolver();
+
             let handles = setup_tray(app.handle())?;
 
             setup_deep_link(app.handle());

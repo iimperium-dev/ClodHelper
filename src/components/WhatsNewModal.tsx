@@ -1,11 +1,12 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { Check } from "lucide-react";
 import { Button } from "./Button";
-import { LogoTile } from "./UpdateDialog";
+import { LogoTile } from "./LogoTile";
 import { playChime } from "../lib/api";
 import { whatsNewItems } from "../lib/updateBus";
+import { useDialogFocus } from "../lib/useDialogFocus";
 
 /*
   «Что нового» - первый запуск после обновления. Логотип с вспышкой искр,
@@ -16,12 +17,12 @@ export function WhatsNewModal({ version, onClose }: { version: string | null; on
   const items = version ? whatsNewItems(version) : [];
 
   useEffect(() => {
-    if (!version) return;
-    void playChime().catch(() => {});
-    const esc = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", esc);
-    return () => window.removeEventListener("keydown", esc);
-  }, [version, onClose]);
+    if (version) void playChime().catch(() => {});
+  }, [version]);
+  // Фокус на «Отлично», Tab внутри окна, Esc закрывает, потом фокус - обратно.
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const okRef = useRef<HTMLButtonElement>(null);
+  useDialogFocus(!!version, dialogRef, okRef, onClose);
 
   return createPortal(
     <AnimatePresence>
@@ -41,7 +42,9 @@ export function WhatsNewModal({ version, onClose }: { version: string | null; on
             exit={{ opacity: 0, scale: 0.96, y: 8 }}
             transition={{ type: "spring", bounce: 0.28, duration: 0.55 }}
             onMouseDown={(e) => e.stopPropagation()}
+            ref={dialogRef}
             role="dialog"
+            aria-modal="true"
             aria-label="Что нового"
             className="relative flex max-h-full w-full max-w-[400px] flex-col overflow-hidden rounded-2xl border border-vb-border bg-vb-surface shadow-[0_24px_64px_rgba(0,0,0,0.6)]"
           >
@@ -89,7 +92,7 @@ export function WhatsNewModal({ version, onClose }: { version: string | null; on
             </div>
 
             <div className="relative flex justify-end px-5 pb-5 pt-5">
-              <Button variant="primary" size="sm" onClick={onClose}>
+              <Button ref={okRef} variant="primary" size="sm" onClick={onClose}>
                 Отлично
               </Button>
             </div>

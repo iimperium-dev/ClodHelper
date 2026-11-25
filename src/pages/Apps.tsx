@@ -6,6 +6,10 @@ import { type RowAction, type RowStatus } from "../components/AppRow";
 import { AppSearchAdd } from "../components/AppSearchAdd";
 import { AppsBoard } from "../components/AppsBoard";
 import { AppSettingsModal } from "../components/AppSettingsModal";
+import { LaunchNotice } from "../components/LaunchNotice";
+import { ConfirmStrip } from "../components/ConfirmStrip";
+import { removeConsequences } from "../lib/removeApp";
+import { isRestartOffer } from "../lib/launch";
 import { moveApp } from "../lib/appLayout";
 import { reconcile, type AppsLayout, type AppsView } from "../lib/appLayout";
 import {
@@ -71,6 +75,7 @@ function trafficStatus(t: AppTraffic | undefined, idle: string): RowStatus {
 export function Apps() {
   const [apps, setApps] = useState<AppProfileStatus[] | null>(null);
   const [adding, setAdding] = useState(false);
+  const [launchNote, setLaunchNote] = useState<{ id: string; text: string; restart: boolean } | null>(null);
 
   const [traffic, setTraffic] = useState<Record<string, AppTraffic>>({});
   const [claude, setClaude] = useState<ClaudeProxyStatus | null>(null);
@@ -212,7 +217,7 @@ export function Apps() {
       ...r,
       menu: [
         ...r.menu.filter((m) => m.label !== "Удалить из списка"),
-        { label: "Убрать из списка", run: () => removeApp(app.id), danger: true },
+        { label: "Убрать из списка", run: () => askRemove(app.id), danger: true },
       ],
     };
   };
@@ -222,7 +227,7 @@ export function Apps() {
   ): { status: RowStatus | null; action: RowAction | null; menu: RowAction[] } => {
     const remove: RowAction[] = app.builtin
       ? []
-      : [{ label: "Удалить из списка", run: () => removeApp(app.id), danger: true }];
+      : [{ label: "Удалить из списка", run: () => askRemove(app.id), danger: true }];
     const t = traffic[app.id];
     const relaunch: RowAction = {
       label: "Перезапустить через мост",
@@ -333,15 +338,96 @@ export function Apps() {
     return { status: st, action: st.tone === "warn" ? relaunch : null, menu: [...shortcutMenu(app), ...remove] };
   };
 
+  /** Убрать из списка. Ошибку отдаёт тому, кто спрашивал подтверждение. */
   const removeApp = async (id: string) => {
     try {
       setApps(await appsRemove(id));
       // Telegram и Claude теряют и защиту от утечек - перечитать их статус.
       void loadSetup();
-    } catch {
-      await load();
+    } catch (e) {
+      void load();
+      throw e;
     }
   };
+
+  // «Убрать из списка» - в два клика, как удаление прокси: сначала вопрос
+  // полосой под приложением, с тем, что ещё снимется (защита, политика).
+  const [removeAsk, setRemoveAsk] = useState<{
+    id: string;
+    name: string;
+    note: string | null;
+    busy: boolean;
+    error: string | null;
+  } | null>(null);
+  const askSeq = useRef(0);
+  const removing = useRef(false);
+  const askRemove = async (id: string) => {
+    const app = apps?.find((a) => a.id === id);
+    if (!app) return;
+    const seq = ++askSeq.current;
+    // Вопрос - сразу; что ещё снимется, дописываем, когда узнаем (статус
+    // защиты может идти секунду: он проверяет соединение).
+    setRemoveAsk({ id, name: app.name, note: null, busy: false, error: null });
+    const note = await removeConsequences(id);
+    if (seq !== askSeq.current || !note) return;
+    setRemoveAsk((r) => (r?.id === id ? { ...r, note } : r));
+  };
+  const cancelRemove = () => {
+    if (removing.current) return;
+    askSeq.current++;
+    setRemoveAsk(null);
+  };
+  const confirmRemove = async () => {
+    const ask = removeAsk;
+    // Ref, а не state: два быстрых клика не уберут дважды.
+    if (!ask || removing.current) return;
+    removing.current = true;
+    setRemoveAsk({ ...ask, busy: true, error: null });
+    try {
+      await removeApp(ask.id);
+      setRemoveAsk((r) => (r?.id === ask.id ? null : r));
+    } catch (e) {
+      setRemoveAsk((r) => (r?.id === ask.id ? { ...r, busy: false, error: String(e) } : r));
+    } finally {
+      removing.current = false;
+    }
+  };
+  /** Полоса подтверждения - под строкой (список) или под папкой (сетка).
+      Пока полоса уезжает, AnimatePresence держит её с прежним текстом. */
+  const renderConfirm = (ids: string[], className?: string) => {
+    const view = removeAsk && ids.includes(removeAsk.id) ? removeAsk : null;
+    return (
+      <ConfirmStrip
+        open={!!view}
+        text={view ? `Убрать ${view.name} из списка?` : ""}
+        note={view?.note}
+        confirmLabel="Убрать"
+        busy={view?.busy}
+        error={view?.error}
+        onConfirm={() => void confirmRemove()}
+        onCancel={cancelRemove}
+        className={className}
+      />
+    );
+  };
+
+  // «Открыть» у Claude Desktop, открытого без прокси: вопрос с кнопкой
+  // «Перезапустить» над списком (в обоих видах). В виде плитками здесь же -
+  // причина, почему приложение не открылось (у строки списка она своя).
+  const launch = async (id: string) => {
+    try {
+      await after(appsLaunch(id));
+      setLaunchNote((n) => (n?.id === id ? null : n));
+    } catch (e) {
+      if (isRestartOffer(e)) {
+        setLaunchNote({ id, text: String(e), restart: true });
+        return;
+      }
+      throw e;
+    }
+  };
+  const onBoardError = (id: string, e: unknown) =>
+    setLaunchNote({ id, text: String(e), restart: isRestartOffer(e) });
 
   return (
     <motion.div
@@ -398,6 +484,17 @@ export function Apps() {
         />
       )}
 
+      {launchNote && (
+        <LaunchNotice
+          key={`${launchNote.id}:${launchNote.text}`}
+          className="mt-4"
+          text={launchNote.text}
+          restart={launchNote.restart}
+          onRestart={() => after(appsRelaunch(launchNote.id))}
+          onClose={() => setLaunchNote(null)}
+        />
+      )}
+
       {/* Список - одна поверхность, hairline-разделители */}
       <motion.section variants={fadeInUp} className="mt-5">
         {apps === null ? (
@@ -418,8 +515,10 @@ export function Apps() {
             onEditing={setEditing}
             describe={describe}
             icons={icons}
-            onLaunch={(id) => after(appsLaunch(id))}
-            onRemove={(id) => void removeApp(id)}
+            onLaunch={launch}
+            onError={onBoardError}
+            onRemove={(id) => void askRemove(id)}
+            renderConfirm={renderConfirm}
             onSettings={setSettingsId}
           />
         )}
@@ -434,8 +533,9 @@ export function Apps() {
             actions={app ? describe(app).menu.filter((m) => m.label !== "Убрать из списка") : []}
             folders={layout.folders}
             onMoveToFolder={(fid) => app && updateLayout(moveApp(layout, app.id, { folder: fid }))}
-            onRemove={() => {
-              if (app) void removeApp(app.id);
+            onRemove={async () => {
+              if (!app) return;
+              await removeApp(app.id);
               setSettingsId(null);
             }}
             onRelaunch={() =>
