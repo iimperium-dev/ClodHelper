@@ -4,7 +4,8 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Check, Loader2, RotateCw, X } from "lucide-react";
 import { Toggle } from "./Toggle";
 import { CountryFlag } from "./CountryFlag";
-import { CopyIp, hostOnly, hostPort, loadGeoCache, saveGeoCache } from "../pages/Proxies";
+import { CopyIp } from "./CopyIp";
+import { hostOnly, hostPort, loadGeoCache, saveGeoCache } from "../lib/proxyGeo";
 import { AppIcon } from "./AppTile";
 import type { RowAction, RowStatus } from "./AppRow";
 import {

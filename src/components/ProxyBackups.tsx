@@ -9,7 +9,8 @@ import { cn } from "../lib/cn";
 import { useStatus, type ProxyState } from "../lib/status";
 import { MutedLine } from "./ProxyPoolViews";
 import type { ProxyCheckResult } from "../lib/types";
-import { CopyIp, hostOnly, hostPort } from "../pages/Proxies";
+import { CopyIp } from "./CopyIp";
+import { hostOnly, hostPort } from "../lib/proxyGeo";
 
 /** Сколько резервов можно привязать к одному прокси (как в Rust). */
 export const MAX_BACKUPS = 5;

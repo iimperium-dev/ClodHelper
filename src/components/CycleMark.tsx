@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { LogoTile } from "./UpdateDialog";
+import { LogoTile } from "./LogoTile";
 import { cn } from "../lib/cn";
 
 /*

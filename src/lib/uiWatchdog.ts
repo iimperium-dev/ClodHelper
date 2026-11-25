@@ -79,6 +79,13 @@ function heal(page: HTMLElement) {
   }
 }
 
+/** Ошибку поймал PageBoundary (раздел не открылся) - в журнал и отчёты, как необработанную. */
+export function reportCaughtUiError(err: unknown) {
+  const [msg, stack] = reasonText(err);
+  log("error", `page: ${msg}`);
+  reportUi(msg, stack);
+}
+
 export function startUiWatchdog() {
   const tick = () => {
     rafTicks++;

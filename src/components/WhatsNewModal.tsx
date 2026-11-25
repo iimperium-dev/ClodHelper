@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { Check } from "lucide-react";
 import { Button } from "./Button";
-import { LogoTile } from "./UpdateDialog";
+import { LogoTile } from "./LogoTile";
 import { playChime } from "../lib/api";
 import { whatsNewItems } from "../lib/updateBus";
 
