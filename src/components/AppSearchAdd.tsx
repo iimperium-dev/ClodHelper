@@ -198,7 +198,6 @@ export function AppSearchAdd({ existing, onAdd, onClose }: Props) {
                             : r.path.replace(/[\\/][^\\/]+$/, "") || "/"}
                         </span>
                       </span>
-                      {i === active && <span className="text-[11px] text-vb-silver-faint">↵</span>}
                     </button>
                   </li>
                 );

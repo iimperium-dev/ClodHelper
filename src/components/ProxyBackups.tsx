@@ -140,7 +140,7 @@ export function ProxyBackups({
           tone: "loss",
           title: (
             <span className="inline-flex flex-wrap items-center gap-1.5">
-              Другая страна: <Country g={parentGeo} /> → <Country g={r ?? undefined} />
+              Другая страна: <Country g={parentGeo} />, у резерва <Country g={r ?? undefined} />
             </span>
           ),
           text: `Через этот прокси работают ${who}. Если он упадёт, они продолжат с IP другой страны - Claude и другие сервисы ИИ считают такие скачки подозрительными и могут заблокировать аккаунт. Берите резерв из той же страны.`,

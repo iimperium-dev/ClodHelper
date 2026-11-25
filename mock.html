@@ -36,6 +36,9 @@
   прокси-переменные. window.__replaced - вызовы proxy_replace.
   ?down=1&oldname - у неработающего третьего прокси есть имя «CD - old2»; ?muted - предупреждение
   о нём скрыто (proxy_alerts_muted_get).
+  ?notask - задача автозапуска моста пропала (?taskfail - «Исправить» падает); ?checkfail - проверка
+  приватности падает, связь есть; ?testfail - тест соединения не прошёл; ?removefail - «Убрать из
+  списка» падает. Остановка моста идёт 0,7 с (видно спиннер).
   Используется тестами tests/ui (Playwright).
 -->
 <script>
@@ -157,7 +160,7 @@
     shim_status: { running: true, pid: 1, uptime_sec: 28000, listen: "127.0.0.1:8889" },
     shim_test: { ok: true, latency_ms: 420, external_ip: "185.68.187.138", error: null },
     bridge_health: health,
-    bridge_task_status: { registered: true, state: "Running" },
+    bridge_task_status: params.has("notask") ? { registered: false, state: null } : { registered: true, state: "Running" },
     bridge_exe_legacy: false,
     bridge_versions: { installed: "1.8.0", bundled: "1.8.0", outdated: false },
     global_proxy_env: params.get("vpn") === "sota"
@@ -307,6 +310,24 @@
     unregisterCallback: () => {},
     convertFileSrc: (p) => p,
     invoke: async (cmd, args) => {
+      // Остановка и запуск моста: остановка идёт заметное время (кнопка со спиннером).
+      if (cmd === "shim_stop") { await wait(700); R.shim_status = { ...R.shim_status, running: false }; return 0; }
+      if (cmd === "shim_start") { await wait(300); R.shim_status = { ...R.shim_status, running: true }; return 1; }
+      // ?notask - задача автозапуска моста пропала; ?taskfail - «Исправить» не вышло.
+      if (cmd === "bridge_task_register") {
+        await wait(params.has("still") ? 200 : 600);
+        if (params.has("taskfail")) throw "Планировщик заданий отказал: нет прав администратора";
+        return (R.bridge_task_status = { registered: true, state: "Ready" });
+      }
+      // ?checkfail - проверка приватности падает, связь через мост есть.
+      if (cmd === "privacy_check" && params.has("checkfail")) { await wait(100); throw "Сервис проверки не ответил"; }
+      // ?testfail - тест соединения не прошёл (длинный текст ошибки).
+      if (cmd === "shim_test" && params.has("testfail")) {
+        await wait(100);
+        return { ok: false, error: "Прокси 185.68.187.138:8000 не ответил за 10 секунд: соединение сброшено удалённой стороной" };
+      }
+      // ?removefail - убрать приложение из списка не вышло.
+      if (cmd === "apps_remove" && params.has("removefail")) { await wait(100); throw "Нет прав, чтобы снять защиту от прямого соединения"; }
       if (cmd === "proxy_speedtest") {
         await new Promise((r) => setTimeout(r, 1500));
         return args.url.startsWith("socks5") ? { mbps: 7.4, bytes: 7400000, secs: 8 } : { mbps: 46.3, bytes: 25000000, secs: 4.3 };

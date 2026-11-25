@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
   animate,
@@ -33,7 +33,10 @@ interface Props {
   onLaunch: (id: string) => Promise<void>;
   /** Плитки и меню: у них нет своей строки для ошибки - её показывает страница. */
   onError?: (id: string, e: unknown) => void;
+  /** «Убрать из списка»: спросить подтверждение (полоса - renderConfirm). */
   onRemove: (id: string) => void;
+  /** Полоса подтверждения для приложений ids (открыта, если вопрос про одно из них). */
+  renderConfirm?: (ids: string[], className?: string) => ReactNode;
   onSettings: (id: string) => void;
 }
 
@@ -92,6 +95,7 @@ export function AppsBoard({
   onLaunch,
   onError,
   onRemove,
+  renderConfirm,
   onSettings,
 }: Props) {
   // Действие с плитки или из меню: ошибка - странице, а не в пустоту
@@ -364,6 +368,7 @@ export function AppsBoard({
         onRemove={() => onRemove(app.id)}
         onSettings={ghost ? undefined : () => onSettings(app.id)}
         onLaunch={() => onLaunch(app.id)}
+        below={ghost ? undefined : renderConfirm?.([app.id], "ml-11 mt-2.5")}
       />
     );
 
@@ -462,6 +467,8 @@ export function AppsBoard({
                   );
                 })}
               </div>
+              {/* Сетка: под плиткой места нет - вопрос под папкой. */}
+              {grid && renderConfirm?.(items.map((a) => a.id), "mt-2")}
             </motion.section>
           );
         })}

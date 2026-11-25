@@ -328,7 +328,6 @@ export function Proxies() {
   const [tagInput, setTagInput] = useState("");
 
   const [confirmDel, setConfirmDel] = useState<number | null>(null);
-  const confirmTimer = useRef<number | null>(null);
 
   const load = useCallback(async () => {
     setPool(await proxiesGet().catch(() => []));
@@ -508,11 +507,8 @@ export function Proxies() {
       return next;
     });
 
-  const askDelete = (i: number) => {
-    setConfirmDel(i);
-    if (confirmTimer.current) window.clearTimeout(confirmTimer.current);
-    confirmTimer.current = window.setTimeout(() => setConfirmDel(null), 4000);
-  };
+  // Вопрос висит, пока не ответили: клик мимо или Esc - отмена (ConfirmStrip).
+  const askDelete = (i: number) => setConfirmDel(i);
 
   const handleRemove = async (i: number) => {
     if (!pool || pool.length === 0) return;

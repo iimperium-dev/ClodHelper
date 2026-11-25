@@ -9,6 +9,7 @@ import { autoUpdateGet, updateInstall } from "../lib/api";
 import { formatMb, onOpenUpdateDialog } from "../lib/updateBus";
 import { cn } from "../lib/cn";
 import type { UpdateInfo, UpdateProgress } from "../lib/types";
+import { useDialogFocus } from "../lib/useDialogFocus";
 
 const RELEASES = "https://github.com/iimperium-dev/ClodHelper/releases/latest";
 /** Текст ошибки бэкенда, когда установка уже идёт (автоматическая или из другого окна). */
@@ -67,12 +68,17 @@ export function UpdateDialog() {
     setProgress(null);
   };
 
+  // Фокус на «Обновить», Tab внутри окна, Esc закрывает (кроме установки),
+  // после закрытия - туда, откуда открыли.
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const primaryRef = useRef<HTMLButtonElement>(null);
+  useDialogFocus(!!info, dialogRef, primaryRef, phase === "installing" ? null : close);
+  // Установка упала - фокус на «Повторить» (кнопка «Обновить» уже исчезла).
   useEffect(() => {
-    if (!info) return;
-    const esc = (e: KeyboardEvent) => e.key === "Escape" && close();
-    window.addEventListener("keydown", esc);
-    return () => window.removeEventListener("keydown", esc);
-  });
+    if (phase !== "error") return;
+    const t = window.setTimeout(() => primaryRef.current?.focus({ preventScroll: true }), 250);
+    return () => window.clearTimeout(t);
+  }, [phase]);
 
   const install = async () => {
     if (!info) return;
@@ -110,7 +116,9 @@ export function UpdateDialog() {
             exit={{ opacity: 0, scale: 0.96, y: 8 }}
             transition={{ type: "spring", bounce: 0.2, duration: 0.45 }}
             onMouseDown={(e) => e.stopPropagation()}
+            ref={dialogRef}
             role="dialog"
+            aria-modal="true"
             aria-label="Обновление Clod Helper"
             className="relative flex max-h-full w-full max-w-[420px] flex-col overflow-hidden rounded-2xl border border-vb-border bg-vb-surface shadow-[0_24px_64px_rgba(0,0,0,0.6)]"
           >
@@ -206,11 +214,11 @@ export function UpdateDialog() {
                         Позже
                       </Button>
                       {manualOnly ? (
-                        <Button variant="primary" size="sm" onClick={() => void openPage(page)}>
+                        <Button ref={primaryRef} variant="primary" size="sm" onClick={() => void openPage(page)}>
                           Открыть страницу
                         </Button>
                       ) : (
-                        <Button variant="primary" size="sm" onClick={install}>
+                        <Button ref={primaryRef} variant="primary" size="sm" onClick={install}>
                           <Download className="h-3.5 w-3.5" />
                           Обновить
                         </Button>
@@ -255,11 +263,11 @@ export function UpdateDialog() {
                           Скачать вручную
                         </Button>
                         {already ? (
-                          <Button variant="secondary" size="sm" onClick={close}>
+                          <Button ref={primaryRef} variant="secondary" size="sm" onClick={close}>
                             Закрыть
                           </Button>
                         ) : (
-                          <Button variant="secondary" size="sm" onClick={install}>
+                          <Button ref={primaryRef} variant="secondary" size="sm" onClick={install}>
                             <RotateCw className="h-3.5 w-3.5" />
                             Повторить
                           </Button>

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   AlertCircle,
+  Check,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -386,13 +387,15 @@ export function Overview({ onOpenProxies }: Props) {
             {loading ? "Проверяю…" : running ? "Мост активен" : "Мост остановлен"}
           </h1>
           <p className="tnum text-[12px] text-vb-silver-faint">
-            {running
-              ? `работает ${formatUptime(health?.uptime_sec ?? status?.uptime_sec)}`
-              : loading
-                ? " "
-                : bridgeFile && bridgeFile.kind !== "restored"
-                  ? "Антивирус удалил файл моста"
-                  : "Трафик не проксируется"}
+            {busy === "stop"
+              ? "Останавливаю…"
+              : running
+                ? `работает ${formatUptime(health?.uptime_sec ?? status?.uptime_sec)}`
+                : loading
+                  ? " "
+                  : bridgeFile && bridgeFile.kind !== "restored"
+                    ? "Антивирус удалил файл моста"
+                    : "Приложения идут напрямую"}
           </p>
         </div>
         {!loading &&
@@ -412,9 +415,13 @@ export function Overview({ onOpenProxies }: Props) {
                 onClick={() => bridgeAction("stop", shimStop)}
                 disabled={busy !== null}
                 title="Остановить мост"
-                className="rounded-lg p-2 text-vb-silver-faint transition-colors hover:bg-vb-surface-2 hover:text-vb-silver active:scale-[0.94] disabled:opacity-40"
+                aria-label={busy === "stop" ? "Останавливаю мост" : "Остановить мост"}
+                className={cn(
+                  "rounded-lg p-2 text-vb-silver-faint transition-colors hover:bg-vb-surface-2 hover:text-vb-silver active:scale-[0.94] disabled:opacity-40",
+                  busy === "stop" && "disabled:opacity-100",
+                )}
               >
-                <Pause className="h-4 w-4" />
+                {busy === "stop" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Pause className="h-4 w-4" />}
               </button>
             </div>
           ) : (
@@ -478,7 +485,7 @@ export function Overview({ onOpenProxies }: Props) {
               />
               <span className="min-w-0">
                 <span className="block text-[11px] text-vb-silver-faint">
-                  Выход через мост{allMode ? " · весь трафик" : spare > 0 ? ` · +${spare} запасн.` : ""}
+                  Выход через мост{allMode ? " · весь трафик" : spare > 0 ? ` · ещё ${spare} в запасе` : ""}
                 </span>
                 <span className="flex items-baseline gap-2">
                   <span className="truncate font-mono text-[14px] text-vb-fg">
@@ -513,8 +520,24 @@ export function Overview({ onOpenProxies }: Props) {
             )}
           </AnimatePresence>
           {!report && testResult?.error && (
-            <p className="border-t border-vb-border/70 px-4 py-2.5 text-[12px] leading-snug text-vb-loss">
+            <p role="status" className="border-t border-vb-border/70 px-4 py-2.5 text-[12px] leading-snug text-vb-loss">
               {testResult.error}
+            </p>
+          )}
+          {/* Проверка приватности не ответила, а связь есть - не молчим.
+              IP уже выше (он из этой же проверки), здесь - время ответа:
+              это не пинг прокси, поэтому «ответ за», а не просто «мс». */}
+          {!report && testResult?.ok && (
+            <p
+              role="status"
+              className="tnum flex flex-wrap items-center gap-x-1.5 gap-y-0.5 border-t border-vb-border/70 px-4 py-2.5 text-[12px] leading-snug"
+            >
+              <span className="flex items-center gap-1.5 text-vb-emerald">
+                <Check className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                Связь есть
+                {typeof testResult.latency_ms === "number" && `, ответ за ${testResult.latency_ms} мс`}
+              </span>
+              <span className="text-vb-silver-faint">· проверка утечек не ответила</span>
             </p>
           )}
           {/* Прокси с проблемами: одна тихая строка на прокси. Вторая строка -
@@ -775,7 +798,7 @@ export function Overview({ onOpenProxies }: Props) {
       <PromoBanner className="mt-3" />
 
       {health && (
-        <p className="mt-4 text-center font-mono text-[10px] text-vb-silver-faint/70">
+        <p className="mt-4 text-center font-mono text-[10px] text-vb-silver-faint">
           мост {health.version}
         </p>
       )}
