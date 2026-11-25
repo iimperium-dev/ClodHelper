@@ -147,7 +147,9 @@ function Slide({
       <div className="relative flex h-full w-full flex-col items-center justify-center gap-3 bg-black px-6 text-center">
         {poster && <img src={poster} alt="" className="absolute inset-0 h-full w-full object-contain opacity-30" />}
         <p className="relative max-w-[340px] text-[13px] leading-relaxed text-white/85">
-          {m.kind === "video" ? "Видео не загрузилось." : "Фото не загрузилось."} Проверьте интернет или запустите мост и попробуйте ещё раз.
+          {m.kind === "video"
+            ? "Видео не загрузилось. Проверьте интернет и попробуйте ещё раз."
+            : "Фото не загрузилось. Проверьте интернет или запустите мост и попробуйте ещё раз."}
         </p>
         {onRetry && (
           <button

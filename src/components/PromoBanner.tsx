@@ -56,7 +56,7 @@ export function PromoBanner({ className, place = "overview" }: { className?: str
   const b = list.find((x) => !gone.includes(x.id) && bannerFits(x, place, poolDownSince, Date.now())) ?? null;
   const shown = useRef<string | null>(null);
   const [srcs, setSrcs] = useState<Record<string, string>>({});
-  // Файлы, которые не скачались ни через мост, ни напрямую: вместо вечной
+  // Файлы, которые не скачались ни одним путём: вместо вечной
   // загрузки баннер без обложки, а в окне просмотра - понятный текст.
   const [failed, setFailed] = useState<Record<string, true>>({});
   const [viewer, setViewer] = useState(false);
