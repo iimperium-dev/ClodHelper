@@ -300,8 +300,10 @@ pub fn write_rules_file_if_changed() -> Result<(PathBuf, bool), String> {
 }
 
 /// Зарегистрирована ли задача (быстрая проверка для ветвления start/stop).
+/// Только ключ реестра, без скана процессов: состояние тут не нужно.
+#[cfg(target_os = "windows")]
 pub fn is_registered() -> bool {
-    status().registered
+    registered_in_cache().unwrap_or_else(|| status_via_powershell().registered)
 }
 
 /// Все прокси пула → повторяемые `--upstream`. ПОРЯДОК СВЯЩЕНЕН: индексы
@@ -330,17 +332,22 @@ fn pin_count(upstreams: &[String]) -> usize {
 /// Задача - по её ключу в кэше Планировщика (HKLM): сам ключ закрыт для
 /// чтения, но «нет доступа» ≠ «нет ключа», а этого достаточно. Без
 /// PowerShell: Get-ScheduledTask стоил ~2 с, а проверка нужна при каждом
-/// запуске моста. Состояние - по файлу задачи и живому процессу моста.
+/// запуске моста. None - реестр не ответил ни так, ни так.
 #[cfg(target_os = "windows")]
-pub fn status() -> BridgeTaskStatus {
+fn registered_in_cache() -> Option<bool> {
     let tree = format!(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tree\{TASK_NAME}");
-    let registered = match crate::win::hklm().open_subkey(&tree) {
+    match crate::win::hklm().open_subkey(&tree) {
         Ok(_) => Some(true),
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => Some(true),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(false),
         Err(_) => None,
-    };
-    match registered {
+    }
+}
+
+/// Состояние задачи - по её файлу и живому процессу моста.
+#[cfg(target_os = "windows")]
+pub fn status() -> BridgeTaskStatus {
+    match registered_in_cache() {
         Some(false) => BridgeTaskStatus { registered: false, state: None },
         Some(true) => BridgeTaskStatus {
             registered: true,
@@ -397,6 +404,82 @@ fn status_via_powershell() -> BridgeTaskStatus {
     }
 }
 
+/// Ответ exe моста на пробы. Общий кэш для всех проверок: раньше каждое
+/// открытие окна и трей-попапа запускало установленный и встроенный мост
+/// с `--version`, а регистрация задачи - ещё 4-5 раз.
+#[derive(Clone, Default)]
+struct ExeProbe {
+    /// `--version` отработал с кодом 0 (Rust-мост).
+    rust: bool,
+    /// "1.5.0" из "clod-bridge 1.5.0".
+    version: Option<String>,
+    /// Проба `--supervise --version`; None - ещё не делали. Только Windows.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    supervise: Option<bool>,
+}
+
+/// Ключ - путь, mtime и размер: после «Обновить мост» или восстановления
+/// файла хотя бы одно меняется, и проба повторяется сама.
+type ExeKey = (std::time::SystemTime, u64);
+
+static EXE_PROBES: std::sync::Mutex<Option<std::collections::HashMap<PathBuf, (ExeKey, ExeProbe)>>> =
+    std::sync::Mutex::new(None);
+
+fn exe_key(exe: &std::path::Path) -> Option<ExeKey> {
+    let m = std::fs::metadata(exe).ok()?;
+    Some((m.modified().ok()?, m.len()))
+}
+
+/// Запустить exe моста без окна. None - не удалось даже запустить (файл
+/// занят антивирусом и т.п.): такой ответ не кэшируем.
+fn run_exe(exe: &std::path::Path, args: &[&str]) -> Option<std::process::Output> {
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args(args);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd.output().ok()
+}
+
+fn cached_probe(exe: &std::path::Path, key: ExeKey) -> Option<ExeProbe> {
+    let guard = EXE_PROBES.lock().ok()?;
+    guard
+        .as_ref()?
+        .get(exe)
+        .filter(|(k, _)| *k == key)
+        .map(|(_, p)| p.clone())
+}
+
+fn store_probe(exe: &std::path::Path, key: ExeKey, probe: &ExeProbe) {
+    if let Ok(mut guard) = EXE_PROBES.lock() {
+        guard
+            .get_or_insert_with(Default::default)
+            .insert(exe.to_path_buf(), (key, probe.clone()));
+    }
+}
+
+/// Проба `--version` с кэшем. Лок на время запуска не держим: процесс
+/// мог бы зависнуть и встали бы все проверки сразу.
+fn probe(exe: &std::path::Path) -> ExeProbe {
+    let key = exe_key(exe);
+    if let Some(p) = key.and_then(|k| cached_probe(exe, k)) {
+        return p;
+    }
+    let Some(out) = run_exe(exe, &["--version"]) else { return ExeProbe::default() };
+    let rust = out.status.success();
+    let version = rust
+        .then(|| String::from_utf8_lossy(&out.stdout).split_whitespace().nth(1).map(String::from))
+        .flatten();
+    let p = ExeProbe { rust, version, supervise: None };
+    if let Some(k) = key {
+        store_probe(exe, k, &p);
+    }
+    p
+}
+
 /// Понимает ли установленный мост новые флаги (--rules)?
 ///
 /// КРИТИЧНО: старый PyInstaller-мост на неизвестный аргумент падает (argparse
@@ -404,33 +487,13 @@ fn status_via_powershell() -> BridgeTaskStatus {
 /// НАМЕРТВО. Проба: `--version` есть только у Rust-моста (exit 0); старый
 /// на него падает → пишем легаси-набор аргументов без --rules.
 fn bridge_supports_rules(exe: &std::path::Path) -> bool {
-    let mut cmd = std::process::Command::new(exe);
-    cmd.arg("--version");
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    cmd.output().map(|o| o.status.success()).unwrap_or(false)
+    probe(exe).rust
 }
 
 /// Версия моста по `--version` ("clod-bridge 1.5.0" → "1.5.0"). None -
 /// легаси-python или exe не запускается.
 pub fn exe_version(exe: &std::path::Path) -> Option<String> {
-    let mut cmd = std::process::Command::new(exe);
-    cmd.arg("--version");
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    let out = cmd.output().ok().filter(|o| o.status.success())?;
-    String::from_utf8_lossy(&out.stdout)
-        .split_whitespace()
-        .nth(1)
-        .map(String::from)
+    probe(exe).version
 }
 
 /// "1.5.0" → (1, 5, 0) для сравнения версий.
@@ -489,52 +552,41 @@ fn bridge_supports_upstream_file(exe: &std::path::Path) -> bool {
         .is_some_and(|v| v >= (1, 5, 0))
 }
 
-/// Кэш пробы установленного exe. Ключ - mtime файла: после «Обновить мост»
-/// mtime меняется и кэш сбрасывается сам. Проба PyInstaller-exe стоит
-/// секунды (распаковка onefile) - без кэша UI-поллинг был бы болью.
-static EXE_PROBE_CACHE: std::sync::Mutex<Option<(std::time::SystemTime, bool)>> =
-    std::sync::Mutex::new(None);
-
-/// Понимает ли мост режим `--supervise` (1.3.0+)? Проба: `--supervise
-/// --version` - новый мост ставит флаг и выходит 0 на --version, старый
-/// падает на неизвестном аргументе. Если да - задача Планировщика вешается
-/// ПРЯМО на exe (без VBS/wscript: малварь-паттерн для антивирусов, WSH
-/// отключаем политиками, VBScript депрекейтнут в Win11 24H2+).
+/// Понимает ли мост режим `--supervise` (1.3.0+)? Если да - задача
+/// Планировщика вешается ПРЯМО на exe (без VBS/wscript: малварь-паттерн для
+/// антивирусов, WSH отключаем политиками, VBScript депрекейтнут в Win11 24H2+).
+/// Флаг появился в 1.3.0, так что обычно хватает версии. Если её не
+/// разобрать - проба `--supervise --version`: новый мост ставит флаг и
+/// выходит 0 на --version, старый падает на неизвестном аргументе.
 #[cfg(target_os = "windows")]
 fn bridge_supports_supervise(exe: &std::path::Path) -> bool {
-    let mut cmd = std::process::Command::new(exe);
-    cmd.args(["--supervise", "--version"]);
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
+    let p = probe(exe);
+    if !p.rust {
+        return false;
     }
-    cmd.output().map(|o| o.status.success()).unwrap_or(false)
+    if let Some(v) = p.version.as_deref().and_then(parse_version) {
+        return v >= (1, 3, 0);
+    }
+    if let Some(s) = p.supervise {
+        return s;
+    }
+    let Some(out) = run_exe(exe, &["--supervise", "--version"]) else { return false };
+    let s = out.status.success();
+    if let Some(k) = exe_key(exe) {
+        store_probe(exe, k, &ExeProbe { supervise: Some(s), ..p });
+    }
+    s
 }
 
 /// Установленный мост - легаси (старый PyInstaller-python, без /healthz и
 /// --rules)? По этому флагу UI показывает «Обновить мост» вместо вечного
-/// спиннера. false, если exe не найден вовсе.
+/// спиннера. false, если exe не найден вовсе. Проба PyInstaller-exe стоит
+/// секунды (распаковка onefile), её ответ берётся из общего кэша.
 pub fn bridge_exe_is_legacy() -> bool {
     let Some(exe) = shim::bridge_exe_path().filter(|p| p.exists()) else {
         return false;
     };
-    let mtime = std::fs::metadata(&exe)
-        .and_then(|m| m.modified())
-        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-    if let Ok(guard) = EXE_PROBE_CACHE.lock() {
-        if let Some((t, legacy)) = guard.as_ref() {
-            if *t == mtime {
-                return *legacy;
-            }
-        }
-    }
-    let legacy = !bridge_supports_rules(&exe);
-    if let Ok(mut guard) = EXE_PROBE_CACHE.lock() {
-        *guard = Some((mtime, legacy));
-    }
-    legacy
+    !bridge_supports_rules(&exe)
 }
 
 /// Зарегистрировать (или перерегистрировать) задачу автозапуска моста.
@@ -604,10 +656,7 @@ pub fn register(proxy_url: &str) -> Result<(), String> {
         if vbs_path.exists() {
             let _ = std::fs::remove_file(&vbs_path);
         }
-        (
-            exe.to_string_lossy().replace('\'', "''"),
-            parts.join(" ").replace('\'', "''"),
-        )
+        (exe.to_string_lossy().to_string(), parts.join(" "))
     } else {
         // Легаси: runner-СУПЕРВИЗОР на VBS - скрытый запуск, перезапуск через
         // 5с. --rules только для Rust-моста (см. bridge_supports_rules).
@@ -651,29 +700,10 @@ pub fn register(proxy_url: &str) -> Result<(), String> {
             .collect();
         std::fs::write(&vbs_path, vbs_utf16)
             .map_err(|e| format!("write {}: {e}", vbs_path.display()))?;
-        (
-            "wscript.exe".to_string(),
-            format!("\"{}\"", vbs_path.to_string_lossy()).replace('\'', "''"),
-        )
+        ("wscript.exe".to_string(), format!("\"{}\"", vbs_path.to_string_lossy()))
     };
 
-    let script = format!(
-        "$user = \"$env:USERDOMAIN\\$env:USERNAME\"; \
-         $action = New-ScheduledTaskAction -Execute '{execute_e}' -Argument '{argument_e}'; \
-         $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user; \
-         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries \
-           -StartWhenAvailable -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) \
-           -ExecutionTimeLimit (New-TimeSpan) -MultipleInstances IgnoreNew; \
-         $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited; \
-         Register-ScheduledTask -TaskName '{TASK_NAME}' -Action $action -Trigger $trigger \
-           -Settings $settings -Principal $principal -Force | Out-Null; \
-         Write-Output 'TASK_REGISTERED'"
-    );
-    let out = run_ps(&script)
-        .ok_or_else(|| "powershell.exe не выполнил регистрацию задачи".to_string())?;
-    if !out.contains("TASK_REGISTERED") {
-        return Err(format!("Не удалось зарегистрировать задачу: {out}"));
-    }
+    register_task(TASK_NAME, &execute_e, &argument_e)?;
 
     // Миграция: легаси-автозапуск из Startup больше не нужен.
     if let Some(legacy) = shim::startup_vbs_path() {
@@ -683,6 +713,14 @@ pub fn register(proxy_url: &str) -> Result<(), String> {
     }
     Ok(())
 }
+
+/// Регистрация задачи: XML через schtasks (доли секунды), при отказе - как
+/// раньше через PowerShell (~2 с): он же даёт понятный текст ошибки.
+#[cfg(target_os = "windows")]
+#[path = "tasks_xml.rs"]
+mod xml;
+#[cfg(target_os = "windows")]
+pub(crate) use xml::register_task;
 
 /// Запустить задачу (мост поднимется скрыто). schtasks - десятки
 /// миллисекунд против ~2 с у Start-ScheduledTask; при отказе - PowerShell
@@ -776,7 +814,7 @@ fn run_ps(script: &str) -> Option<String> {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub use launchd::{migrate_from_startup_vbs, register, start, status, stop_ignore_errors, unregister};
+pub use launchd::{is_registered, migrate_from_startup_vbs, register, start, status, stop_ignore_errors, unregister};
 
 /// Прокси не осталось: мост без них не запускается, и автозапуск крутил бы
 /// его по кругу. Снимаем задачу и затираем файл пула (там были логины и
@@ -806,8 +844,13 @@ mod launchd {
         macos::launch_agents_dir().map(|d| d.join(format!("{LABEL}.plist")))
     }
 
+    /// Есть plist агента (без launchctl: состояние тут не нужно).
+    pub fn is_registered() -> bool {
+        plist_path().is_some_and(|p| p.exists())
+    }
+
     pub fn status() -> BridgeTaskStatus {
-        let registered = plist_path().is_some_and(|p| p.exists());
+        let registered = is_registered();
         BridgeTaskStatus {
             registered,
             state: registered
