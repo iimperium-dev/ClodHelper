@@ -423,6 +423,7 @@ function App() {
           <Titlebar bell={false} />
           <div className="min-h-0 flex-1">
             <WizardShell step={step} steps={wizSteps}>
+              <PageBoundary>
               <Suspense fallback={<LoadingScreen label="Загружаю…" />}>
                 {step === "proxy" && (
                   <StepProxy
@@ -474,6 +475,7 @@ function App() {
                   />
                 )}
               </Suspense>
+              </PageBoundary>
             </WizardShell>
           </div>
         </div>
@@ -537,7 +539,7 @@ function App() {
                 className="view-enter min-h-full"
                 style={{ "--view-dir": direction } as React.CSSProperties}
               >
-                <PageBoundary resetKey={view}>
+                <PageBoundary>
                   <Suspense fallback={<LoadingScreen label="Загружаю…" />}>
                     {view === "overview" ? (
                       <Overview onOpenProxies={() => navigate("proxies")} />
@@ -579,8 +581,14 @@ function App() {
   return (
     <StatusProvider>
       {content}
-      {/* Вне веток: просьба открыть обновление во время запуска не теряется. */}
-      {!isWizard && <UpdateDialogHost />}
+      {/* Вне веток: просьба открыть обновление во время запуска не теряется
+          (в мастере окна обновления нет, как и раньше). Сбой его загрузки
+          не трогает остальное окно. */}
+      {!isWizard && (
+        <PageBoundary silent>
+          <UpdateDialogHost />
+        </PageBoundary>
+      )}
     </StatusProvider>
   );
 }

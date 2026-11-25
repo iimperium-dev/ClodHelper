@@ -2,6 +2,7 @@ import { Component, useEffect, useRef, useState, type ReactNode } from "react";
 import { BrandMark } from "./BrandMark";
 import { Button } from "./Button";
 import { reportCaughtUiError } from "../lib/uiWatchdog";
+import { resetFailedViews } from "../lazyViews";
 
 /** Не показывать «Проверяю…», если ответ пришёл быстрее. */
 const SHOW_AFTER_MS = 150;
@@ -69,7 +70,7 @@ export function LoadingScreen({ label = "Проверяю…", brand = false, im
  * Раздел не загрузился (повреждённая установка, сбой в разделе): вместо
  * пустого окна - понятная строка и «Повторить». Остальное окно работает.
  */
-export class PageBoundary extends Component<{ children: ReactNode; resetKey?: unknown }, { failed: boolean }> {
+export class PageBoundary extends Component<{ children: ReactNode; silent?: boolean }, { failed: boolean }> {
   state = { failed: false };
   static getDerivedStateFromError() {
     return { failed: true };
@@ -77,16 +78,17 @@ export class PageBoundary extends Component<{ children: ReactNode; resetKey?: un
   componentDidCatch(error: unknown) {
     reportCaughtUiError(error);
   }
-  componentDidUpdate(prev: { resetKey?: unknown }) {
-    // Ушли в другой раздел - пробуем заново.
-    if (prev.resetKey !== this.props.resetKey && this.state.failed) this.setState({ failed: false });
-  }
   render() {
     if (!this.state.failed) return this.props.children;
+    // Невидимая часть окна (окно обновления) - просто не показываем.
+    if (this.props.silent) return null;
     return (
       <div role="alert" className="flex min-h-full flex-col items-center justify-center gap-3 p-6 text-center">
         <span className="text-[13px] text-vb-silver">Раздел не открылся</span>
-        <Button size="sm" variant="secondary" onClick={() => this.setState({ failed: false })}>
+        <Button size="sm" variant="secondary" onClick={() => {
+            resetFailedViews();
+            this.setState({ failed: false });
+          }}>
           Повторить
         </Button>
       </div>

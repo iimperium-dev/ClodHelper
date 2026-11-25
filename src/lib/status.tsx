@@ -11,6 +11,7 @@ import {
   type ReactNode,
 } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { isMac } from "./platform";
 import {
   bridgeExeLegacy,
   bridgeFileIssue,
@@ -247,9 +248,10 @@ function useSameSkippingState<T>(initial: T): [T, (v: T) => void] {
   return [v, setIfChanged];
 }
 
-/** Окно скрыто (свёрнуто в трей, попап закрыт). Фокус - на случай WebKit,
-    который иногда считает видимое окно скрытым. */
-const windowHidden = () => document.hidden && !document.hasFocus();
+/** Окно скрыто (свёрнуто в трей, попап закрыт) - перерисовку можно отложить.
+    Только Windows: WebKit на macOS иногда считает видимое окно скрытым, и
+    данные на экране застывали бы; там снимки показываются сразу, как раньше. */
+const windowHidden = () => !isMac && document.hidden && !document.hasFocus();
 
 /** Перерыв в снимках дольше этого (скрытым окнам монитор снимки не шлёт,
     компьютер спал) - снимок считаем первым: дельту за перерыв в историю не
@@ -267,8 +269,8 @@ const HIDDEN_FLUSH_MS = 30_000;
 
   Перерисовки: одинаковые ответы состояние не меняют; каждый useStatus()
   перерисовывается, только когда меняется то, что он сам читает (например,
-  «Сайты» не трогает новый снимок счётчиков моста). Скрытое окно копит
-  снимки без перерисовки и показывает их, когда его откроют.
+  «Сайты» не трогает новый снимок счётчиков моста). Скрытое окно (Windows)
+  копит снимки без перерисовки и показывает их, когда его откроют.
 */
 export function StatusProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useSameSkippingState<ShimStatus | null>(null);
@@ -404,7 +406,8 @@ export function StatusProvider({ children }: { children: ReactNode }) {
     pending.current = null;
     setHealth(p.health);
     setQuality(p.quality);
-    setHistory(historyBuf.current.slice());
+    // Буфер не меняется на месте: нет новых столбиков - та же ссылка, без перерисовки.
+    setHistory(historyBuf.current);
     setHealthErr(null);
   }, [setQuality]);
 
@@ -446,8 +449,8 @@ export function StatusProvider({ children }: { children: ReactNode }) {
     const un = listen<BridgeHealth>("bridge-health", (e) => {
       lastEvent.current = Date.now();
       // Снимок принимаем всегда (история и качество не рвутся), а в скрытом
-      // окне откладываем только перерисовку. WebKit иногда считает видимое
-      // окно скрытым - тогда показ догонит фокус, мышь или таймер.
+      // окне (Windows) откладываем только перерисовку: её догонят фокус,
+      // мышь над окном или таймер.
       applyHealth(e.payload);
     });
     return () => {
@@ -639,6 +642,9 @@ export function StatusProvider({ children }: { children: ReactNode }) {
  * Статус для компонента. Компонент перерисовывается, только когда меняется
  * одно из полей, которые он читает (запоминаем их при чтении): например,
  * «Сайты» читают только pac - снимок счётчиков моста их не трогает.
+ * Поэтому поля берём деструктуризацией в рендере, как везде:
+ * const { a, b } = useStatus(). Поле, впервые прочитанное только в эффекте
+ * или обработчике, отдаётся свежим, но перерисовку по нему компонент не ждёт.
  */
 export function useStatus(): StatusContextValue {
   const store = useContext(StatusContext);

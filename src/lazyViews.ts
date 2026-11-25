@@ -18,15 +18,31 @@ export type LazyView<P> = ComponentType<P> & {
   loaded: () => boolean;
 };
 
+/** Сбросы неудачных загрузок: «Повторить» в PageBoundary пробует снова. */
+const resets = new Set<() => void>();
+
+/** Забыть неудачные загрузки (кнопка «Повторить»). */
+export function resetFailedViews() {
+  for (const r of resets) r();
+}
+
 function lazyNamed<P extends object>(load: () => Promise<ComponentType<P>>): LazyView<P> {
   let C: ComponentType<P> | undefined;
   let p: Promise<ComponentType<P>> | undefined;
+  // Неудачу помним до «Повторить»: иначе рендер после заглушки начинал бы
+  // загрузку заново, и вместо ошибки крутилось бы «Загружаю…».
+  let failed = false;
+  resets.add(() => {
+    if (failed) {
+      failed = false;
+      p = undefined;
+    }
+  });
   const preload = () =>
     (p ??= load().then(
       (c) => (C = c),
       (e) => {
-        // Не запоминаем неудачу: «Повторить» попробует загрузить снова.
-        p = undefined;
+        failed = true;
         throw e;
       },
     ));
@@ -80,12 +96,12 @@ export function preloadWizard() {
   for (const s of STEPS) void s.preload().catch(() => {});
 }
 
-/** Колбэк, когда браузер свободен (WebKit на macOS без requestIdleCallback). */
-export function whenIdle(fn: () => void, timeout = 1500): () => void {
-  if (typeof window.requestIdleCallback === "function") {
-    const id = window.requestIdleCallback(fn, { timeout });
-    return () => window.cancelIdleCallback(id);
-  }
-  const id = window.setTimeout(fn, 300);
+/**
+ * Колбэк чуть позже, когда окно уже нарисовано и первые ответы пришли.
+ * Простой таймер, не requestIdleCallback: его нет в WebKit на macOS, а
+ * подменённые часы в тестах стенда с ним сбоят.
+ */
+export function whenIdle(fn: () => void, delay = 800): () => void {
+  const id = window.setTimeout(fn, delay);
   return () => window.clearTimeout(id);
 }

@@ -23,7 +23,9 @@ export function UpdateDialogHost() {
       setMounted(true);
     };
     const offBus = onOpenUpdateDialog(ask);
-    const un = listen<UpdateInfo>("update:open", (e) => ask(e.payload));
+    // Своя подписка UpdateDialog на событие Tauri ставится не сразу -
+    // пересылаем его в шину и после монтирования (повтор безвреден).
+    const un = listen<UpdateInfo>("update:open", (e) => (ready.current ? openUpdateDialog(e.payload) : ask(e.payload)));
     const cancel = whenIdle(() => setMounted(true), 3000);
     return () => {
       offBus();
