@@ -24,7 +24,7 @@ use super::*;
 /// Прочитать глобальные HTTP(S)_PROXY (User scope) - состояние тумблера.
 #[tauri::command]
 pub async fn global_proxy_env() -> Result<GlobalProxyEnv, String> {
-    // Внутри спавн PowerShell - с главного потока это фриз окна.
+    // На macOS внутри запуски launchctl - с главного потока это фриз окна.
     tokio::task::spawn_blocking(env_proxy::read)
         .await
         .map_err(|e| format!("Внутренняя ошибка: {e}"))
