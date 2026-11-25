@@ -19,7 +19,7 @@ import { UpdateBanner } from "../components/UpdateBanner";
 import { PromoBanner } from "../components/PromoBanner";
 import { BridgeFileNotice } from "../components/BridgeFileNotice";
 import { VpnNotice } from "../components/VpnNotice";
-import { hostPort, loadGeoCache } from "./Proxies";
+import { hostPort, loadGeoCache } from "../lib/proxyGeo";
 import { ACTION_LABEL, causeOf, isAuthReason, setProxyIntent, type CauseAction } from "../lib/proxyCause";
 import {
   bridgeTaskRegister,

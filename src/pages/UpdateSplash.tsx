@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Check } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { LogoTile } from "../components/UpdateDialog";
+import { LogoTile } from "../components/LogoTile";
 
 type State = "installing" | "starting" | "started" | "failed";
 

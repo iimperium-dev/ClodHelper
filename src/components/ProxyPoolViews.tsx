@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { AnimatePresence, animate, motion, useMotionValue, useReducedMotion, useTransform } from "framer-motion";
 import { ChevronDown, Gauge, Loader2, Pencil, RefreshCw, Star, Trash2 } from "lucide-react";
 import { CountryFlag } from "./CountryFlag";
-import { CopyIp } from "../pages/Proxies";
+import { CopyIp } from "./CopyIp";
 import type { ProxyLive } from "../lib/status";
 import { cn } from "../lib/cn";
 import { ConfirmStrip as SharedConfirmStrip } from "./ConfirmStrip";

@@ -5,7 +5,7 @@ import { Check, ChevronDown, Eye, FolderOpen, Loader2, Pencil, Plus, RotateCw, T
 import { Button } from "../components/Button";
 import { Toggle } from "../components/Toggle";
 import { ProgramIcon, useProgramIcons } from "../components/ProgramIcon";
-import { ProxySelect } from "./Proxies";
+import { ProxySelect } from "../components/ProxySelect";
 import {
   appsSettingsSet,
   bridgeUpdate,

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { X } from "lucide-react";
-import { LogoTile } from "../components/UpdateDialog";
+import { LogoTile } from "../components/LogoTile";
 import { noticeEvent, noticesList, updateLatest, updateToastClose, updateToastOpen } from "../lib/api";
 import { isMac } from "../lib/platform";
 
