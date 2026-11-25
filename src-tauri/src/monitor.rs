@@ -178,6 +178,9 @@ fn run(app: AppHandle, h: TrayHandles) {
     // реже, а между опросами в счётчики идут эти ответы.
     let mut extra: Vec<serde_json::Value> = Vec::new();
     let mut extra_fresh = false;
+    // Время работы основного входа на прошлом тике: уменьшилось - мост
+    // перезапустился, прежние ответы остальных входов к нему не относятся.
+    let mut last_uptime: Option<u64> = None;
 
     loop {
         let listening = port_listening();
@@ -192,7 +195,17 @@ fn run(app: AppHandle, h: TrayHandles) {
                 Some((x, raw)) => {
                     healthz_fail_streak = 0;
                     skip_healthz_until = None;
-                    extra_fresh = true;
+                    let uptime = raw.get("uptime_sec").and_then(|v| v.as_u64());
+                    let restarted = matches!((last_uptime, uptime), (Some(a), Some(b)) if b < a);
+                    last_uptime = uptime;
+                    if restarted && !poll_extra {
+                        // Остальные входы опросим на следующем тике, а пока не
+                        // прибавляем ответы прежнего процесса.
+                        extra.clear();
+                        extra_fresh = false;
+                    } else {
+                        extra_fresh = true;
+                    }
                     // Один опрос моста на всё приложение: окна получают
                     // свежий /healthz событием и сами мост не опрашивают.
                     // Скрытым окнам событие не нужно: при показе окно само

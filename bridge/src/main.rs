@@ -2696,58 +2696,15 @@ fn next_restart_delay(prev: Option<Duration>, lived: Duration) -> Duration {
 }
 
 /// Выход при ошибке запуска. Под --supervise паузу держит супервизор. На
-/// macOS мост без супервизора: его поднимает launchd (KeepAlive) через 5 с,
-/// поэтому растущую паузу выдерживаем сами, перед выходом.
+/// macOS мост поднимает launchd (KeepAlive) со своим ограничением частоты:
+/// процесс выходит сразу, чтобы программа видела, что мост не работает, и
+/// «Запустить» сразу пробовал снова.
 fn exit_on_startup_error(code: i32) -> ! {
-    #[cfg(target_os = "macos")]
-    launchd_pause();
     std::process::exit(code)
-}
-
-/// Когда процесс стартовал (для паузы под launchd).
-#[cfg(target_os = "macos")]
-static BOOT: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
-
-/// Пауза под launchd по прошлой паузе из файла рядом с exe: «секунды
-/// паузы, время записи (unix)». Прошлая пауза в счёт, только если запись
-/// свежая: между прошлым отказом и этим прошли та пауза и жизнь этого
-/// процесса (плюс запас). Иначе это новое падение - 5 с.
-#[cfg(any(target_os = "macos", test))]
-fn launchd_delay(saved: Option<(u64, u64)>, now_unix: u64, lived: Duration) -> Duration {
-    let prev = saved
-        .filter(|&(pause, at)| now_unix.saturating_sub(at) <= pause + lived.as_secs() + SHORT_LIFE.as_secs())
-        .map(|(pause, _)| Duration::from_secs(pause));
-    next_restart_delay(prev, lived)
-}
-
-#[cfg(target_os = "macos")]
-fn launchd_pause() {
-    // Родитель - launchd (pid 1): запуск из терминала или программой не ждёт.
-    // SAFETY: getppid без аргументов и побочных эффектов.
-    if unsafe { libc::getppid() } != 1 {
-        return;
-    }
-    let Ok(exe) = std::env::current_exe() else { return };
-    let file = exe.with_extension("restarts");
-    let saved = std::fs::read_to_string(&file).ok().and_then(|t| {
-        let mut it = t.split_whitespace().map(|n| n.parse::<u64>().ok());
-        Some((it.next()??, it.next()??))
-    });
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let lived = BOOT.get().map(|b| b.elapsed()).unwrap_or_default();
-    let pause = launchd_delay(saved, now, lived);
-    let _ = std::fs::write(&file, format!("{} {now}", pause.as_secs()));
-    eprintln!("мост не запустился - следующая попытка через {}с", pause.as_secs());
-    std::thread::sleep(pause);
 }
 
 #[tokio::main]
 async fn main() {
-    #[cfg(target_os = "macos")]
-    BOOT.get_or_init(Instant::now);
     let args = match parse_args() {
         Ok(a) => a,
         Err(e) => {
@@ -4095,19 +4052,6 @@ mod tests {
         assert_eq!(next_restart_delay(Some(s(120)), s(31)), s(5));
         assert_eq!(next_restart_delay(Some(s(5)), quick), s(10));
         assert_eq!(next_restart_delay(Some(s(120)), s(29)), s(120));
-    }
-
-    #[test]
-    fn launchd_pause_grows_only_for_fresh_record() {
-        let s = Duration::from_secs;
-        assert_eq!(launchd_delay(None, 1000, s(0)), s(5), "первый отказ");
-        // Прошлая пауза 20 с записана 21 с назад: это тот же ряд отказов.
-        assert_eq!(launchd_delay(Some((20, 979)), 1000, s(1)), s(40));
-        assert_eq!(launchd_delay(Some((120, 870)), 1000, s(0)), s(120));
-        // Запись давняя (мост с тех пор работал) - начинаем с 5 с.
-        assert_eq!(launchd_delay(Some((80, 0)), 10_000, s(0)), s(5));
-        // Часы ушли назад - не ломаемся.
-        assert_eq!(launchd_delay(Some((10, 5000)), 1000, s(0)), s(20));
     }
 
     #[test]

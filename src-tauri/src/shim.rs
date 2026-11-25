@@ -445,13 +445,15 @@ fn should_report_bridge(seen_alive: bool, proxy_set: bool, restarting: bool) -> 
 /// но не дёргать sysinfo слишком часто.
 const WATCHDOG_INTERVAL_SEC: u64 = 5;
 /// Потолок паузы между неудачными попытками поднять мост.
-const WATCHDOG_MAX_BACKOFF_SEC: u64 = 300;
+/// Не больше минуты: пока моста нет, переменные прокси ведут в никуда, и
+/// вернувшийся файл моста (например, из карантина) должен подняться быстро.
+const WATCHDOG_MAX_BACKOFF_SEC: u64 = 60;
 
 /// Человек сам запустил мост или сменил настройки (любой вызов start()):
 /// watchdog забывает накопленную паузу и пробует сразу.
 static WATCHDOG_KICK: AtomicBool = AtomicBool::new(false);
 
-/// Пауза после `failures` неудачных попыток подряд: 5, 10, 20 ... 300 с.
+/// Пауза после `failures` неудачных попыток подряд: 5, 10, 20, 40, 60 с.
 /// Без неё мост, который не поднимается (нет файла, битая задача), каждые
 /// 5 с стоил два скана процессов, перерегистрацию задачи и запись в журнал.
 fn watchdog_backoff(failures: u32) -> Duration {
@@ -743,11 +745,11 @@ mod tests {
     }
 
     #[test]
-    fn watchdog_pause_doubles_up_to_five_minutes() {
+    fn watchdog_pause_doubles_up_to_a_minute() {
         let got: Vec<u64> = (1..=9).map(|n| watchdog_backoff(n).as_secs()).collect();
-        assert_eq!(got, [5, 10, 20, 40, 80, 160, 300, 300, 300]);
+        assert_eq!(got, [5, 10, 20, 40, 60, 60, 60, 60, 60]);
         assert_eq!(watchdog_backoff(0).as_secs(), 5, "до первой ошибки - обычный темп");
-        assert_eq!(watchdog_backoff(u32::MAX).as_secs(), 300, "без переполнения");
+        assert_eq!(watchdog_backoff(u32::MAX).as_secs(), 60, "без переполнения");
     }
 
     #[test]
