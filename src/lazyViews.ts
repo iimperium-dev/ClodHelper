@@ -1,26 +1,40 @@
-import { lazy, type ComponentType } from "react";
+import { createElement, use, type ComponentType } from "react";
+import type { AppView } from "./lib/types";
 
 /*
   Разделы, шаги мастера и редкие окна грузятся отдельными кусками JS, когда
   нужны. Главное окно открывается быстрее, а трей и уведомления их вообще
-  не грузят. preload() - взять кусок заранее (раздел будет нужен вот-вот):
-  переход тогда без пустого кадра.
+  не грузят. preload() - взять кусок заранее (раздел будет нужен вот-вот).
+
+  Не React.lazy: тот даже уже загруженный кусок при первом показе
+  «подвешивает» на кадр, и раздел рисуется отложенным рендером, который
+  может начаться заново - а разделы забирают одноразовые просьбы («сразу
+  открыть замену пароля») в первом рендере и при повторе их теряли.
+  Здесь загруженный раздел рисуется сразу, как обычный компонент.
 */
 
-type Lazy<P> = ReturnType<typeof lazy<ComponentType<P>>> & { preload: () => Promise<unknown> };
+export type LazyView<P> = ComponentType<P> & {
+  preload: () => Promise<unknown>;
+  loaded: () => boolean;
+};
 
-function lazyNamed<P>(load: () => Promise<ComponentType<P>>): Lazy<P> {
-  let p: Promise<{ default: ComponentType<P> }> | undefined;
+function lazyNamed<P extends object>(load: () => Promise<ComponentType<P>>): LazyView<P> {
+  let C: ComponentType<P> | undefined;
+  let p: Promise<ComponentType<P>> | undefined;
   const preload = () =>
     (p ??= load().then(
-      (c) => ({ default: c }),
+      (c) => (C = c),
       (e) => {
         // Не запоминаем неудачу: «Повторить» попробует загрузить снова.
         p = undefined;
         throw e;
       },
     ));
-  return Object.assign(lazy(preload), { preload });
+  function View(props: P) {
+    const Comp = C ?? use(preload());
+    return createElement(Comp, props);
+  }
+  return Object.assign(View, { preload, loaded: () => C !== undefined });
 }
 
 export const Overview = lazyNamed(() => import("./pages/Overview").then((m) => m.Overview));
@@ -37,12 +51,29 @@ export const StepDone = lazyNamed(() => import("./wizard/StepDone").then((m) => 
 
 export const UpdateDialog = lazyNamed(() => import("./components/UpdateDialog").then((m) => m.UpdateDialog));
 
-const PAGES = [Overview, Proxies, Apps, Sites, Tools, Settings];
+const PAGES: Partial<Record<AppView, LazyView<never>>> = {
+  overview: Overview as LazyView<never>,
+  proxies: Proxies as LazyView<never>,
+  apps: Apps as LazyView<never>,
+  sites: Sites as LazyView<never>,
+  tools: Tools as LazyView<never>,
+  settings: Settings as LazyView<never>,
+};
 const STEPS = [StepProxy, StepInstall, StepApps, StepDone];
+
+/** Код раздела уже загружен (или это не раздел) - его можно показать сразу. */
+export function pageReady(view: AppView): boolean {
+  return PAGES[view]?.loaded() ?? true;
+}
+
+/** Загрузить код раздела; ошибку покажет PageBoundary при показе. */
+export function loadPage(view: AppView): Promise<unknown> {
+  return PAGES[view]?.preload().catch(() => {}) ?? Promise.resolve();
+}
 
 /** Взять все разделы заранее, когда окно уже нарисовано и свободно. */
 export function preloadPages() {
-  for (const p of PAGES) void p.preload().catch(() => {});
+  for (const p of Object.values(PAGES)) void p.preload().catch(() => {});
 }
 
 export function preloadWizard() {

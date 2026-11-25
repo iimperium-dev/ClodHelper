@@ -38,7 +38,8 @@
   о нём скрыто (proxy_alerts_muted_get).
   ?live - мост каждые 5 с шлёт событие bridge-health с растущими счётчиками (как монитор
   программы); ?live=same - один и тот же снимок; ?livems=1000 - другой период.
-  window.__healthEvents - сколько событий отправлено.
+  window.__healthEvents - сколько событий отправлено. ?slowboot - settings_get отвечает 1,5 с
+  (заставка «Проверяю…» при запуске).
   Используется тестами tests/ui (Playwright).
 -->
 <script>
@@ -529,6 +530,7 @@
         return null;
       }
       if (cmd === "reveal_in_folder") return null;
+      if (cmd === "settings_get" && params.has("slowboot")) await wait(1500);
       if (cmd === "plugin:event|listen") {
         const id = listenId++;
         listeners.push({ id, event: args.event, handler: args.handler });

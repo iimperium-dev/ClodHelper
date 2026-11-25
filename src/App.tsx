@@ -15,6 +15,8 @@ import {
   StepInstall,
   StepProxy,
   Tools,
+  loadPage,
+  pageReady,
   preloadPages,
   preloadWizard,
   whenIdle,
@@ -148,9 +150,9 @@ function App() {
           shimStatus().catch(() => null),
         ]);
         const installed = !!s?.proxy_url || !!scriptPath || !!status?.running;
-        setView(installed ? "overview" : "wizard");
+        showView(installed ? "overview" : "wizard");
       } catch {
-        setView("wizard");
+        showView("wizard");
       }
     })();
   }, []);
@@ -161,12 +163,27 @@ function App() {
     setOfferAuto(false);
   }, []);
 
+  // Раздел показываем, когда его код уже загружен (обычно он взят заранее):
+  // тогда он рисуется сразу, без заглушки. Нажали другой раздел, пока
+  // грузился первый, - покажется последний.
+  const navToken = useRef(0);
+  const showView = useCallback((next: AppView) => {
+    const t = ++navToken.current;
+    if (pageReady(next)) {
+      setView(next);
+      return;
+    }
+    void loadPage(next).then(() => {
+      if (navToken.current === t) setView(next);
+    });
+  }, []);
+
   const navigate = (next: AppView) => {
     const nextIdx = NAV_ORDER.indexOf(next);
     const prevIdx = prevIndex.current;
     setDirection(nextIdx >= prevIdx ? 1 : -1);
     prevIndex.current = nextIdx;
-    setView(next);
+    showView(next);
   };
 
   // ─── Wizard state: 3 шага (прокси → установка → готово) ──────
@@ -356,7 +373,7 @@ function App() {
         setWizProxyUrl(url);
         setWizFill((n) => n + 1);
         setStep("proxy");
-        setView("wizard");
+        showView("wizard");
       }}
       onOpenProxies={
         view === "proxies"
@@ -379,7 +396,10 @@ function App() {
   const viewKnown = view !== null;
   useEffect(() => {
     if (!viewKnown) return;
-    return whenIdle(isWizard ? preloadWizard : preloadPages);
+    return whenIdle(() => {
+      if (isWizard) preloadWizard();
+      preloadPages();
+    });
   }, [viewKnown, isWizard]);
 
   /*
@@ -411,7 +431,7 @@ function App() {
                     onSkipToTools={() => {
                       setNoProxy(true);
                       prevIndex.current = NAV_ORDER.indexOf("tools");
-                      setView("tools");
+                      showView("tools");
                     }}
                     onNext={(url) => {
                       setWizProxyUrl(url);
@@ -449,7 +469,7 @@ function App() {
                       markWizard();
                       setNoProxy(false);
                       setOfferAuto(false);
-                      setView("overview");
+                      showView("overview");
                     }}
                   />
                 )}
@@ -476,7 +496,7 @@ function App() {
                 size="sm"
                 onClick={() => {
                   setStep("proxy");
-                  setView("wizard");
+                  showView("wizard");
                 }}
               >
                 Добавить прокси
