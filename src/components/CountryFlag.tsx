@@ -10,7 +10,7 @@ interface Props {
 const FLAGS = import.meta.glob<string>("../assets/flags/*.png", {
   eager: true,
   import: "default",
-  query: "?url",
+  query: "?url&no-inline",
 });
 
 function flagUrl(code: string): string | undefined {
