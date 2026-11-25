@@ -881,6 +881,10 @@ fn launch_exe(p: &AppProfile, extra: &[&str]) -> Result<(), String> {
     cmd.env("https_proxy", &proxy);
     // NO_PROXY: локалхост и служебные - не гонять через мост.
     cmd.env("NO_PROXY", "localhost,127.0.0.1,::1");
+    // macOS: программа не из бандла (CLI и т.п.) - с полным PATH шелла,
+    // чтобы её дочерние node/git находились.
+    #[cfg(not(target_os = "windows"))]
+    cmd.env("PATH", crate::macos::user_path());
     apply_no_window(&mut cmd);
     cmd.spawn()
         .map_err(|e| format!("Не удалось запустить {}: {e}", p.name))?;
