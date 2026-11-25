@@ -206,7 +206,8 @@ fn build(redact: bool) -> String {
     if let Ok(c) = crate::system_pac::read() {
         let _ = writeln!(
             r,
-            "Системный прокси Windows: флаги={} PAC={} прокси={}",
+            "Системный прокси {}: флаги={} PAC={} прокси={}",
+            if cfg!(target_os = "macos") { "macOS" } else { "Windows" },
             c.flags,
             c.pac_url
                 .as_deref()
