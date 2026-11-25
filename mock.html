@@ -554,7 +554,17 @@
       if (cmd === "banner_media") {
         (window.__mediaAsked ||= []).push(...args.keys);
         await wait(params.has("mediaslow") ? 4000 : 150);
+        // ?mediafail - ни один файл не скачался (провайдер душит, моста нет).
+        if (params.has("mediafail")) return {};
         return Object.fromEntries(args.keys.filter((k) => MOCK_FILES[k]).map((k) => [k, "/mock-assets/" + MOCK_FILES[k]]));
+      }
+      if (cmd === "notices_refresh") {
+        // Как бэкенд: проверил рассылки и сообщил окну. window.__bannerGone -
+        // баннер сняли в админке, сервер его больше не отдаёт.
+        (window.__noticesRefreshed ||= []).push(Date.now());
+        if (window.__bannerGone) R.notices_banners = [];
+        window.__emit("notices:changed", 0);
+        return null;
       }
       if (cmd === "notices_banner_dismiss") {
         R.notices_banners = R.notices_banners.filter((x) => x.id !== args.id);

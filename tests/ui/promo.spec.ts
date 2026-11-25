@@ -80,6 +80,45 @@ test("без обложки - кнопка «Посмотреть», файлы 
   await expect(dlg).toHaveCount(0);
 });
 
+test("файлы не скачались - баннер без обложки, в окне понятный текст вместо вечной загрузки", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.setViewportSize({ width: 700, height: 720 });
+  await page.goto("/mock.html?still&promo&media&mediafail");
+  const banner = page.getByRole("region", { name: "Свой прокси за 5 минут" });
+  await expect(banner).toBeVisible({ timeout: 20_000 });
+  // Обложка не пришла: её место не крутит загрузку, вместо неё кнопка «Посмотреть».
+  await expect(banner.getByRole("button", { name: "Посмотреть" })).toBeVisible();
+  await expect(banner.getByRole("button", { name: "Фото и видео" })).toHaveCount(0);
+  await expect(banner.locator(".animate-pulse")).toHaveCount(0);
+
+  await banner.getByRole("button", { name: "Посмотреть" }).click();
+  const dlg = page.getByRole("dialog", { name: "Свой прокси за 5 минут" });
+  await expect(dlg.getByText("Фото не загрузилось.", { exact: false })).toBeVisible();
+  await expect(dlg.getByLabel("Загружаю")).toHaveCount(0);
+  await page.keyboard.press("ArrowRight");
+  await expect(dlg.getByText("Видео не загрузилось.", { exact: false })).toBeVisible();
+  // «Попробовать ещё раз» снова просит файлы у программы.
+  const before = await page.evaluate(() => ((window as any).__mediaAsked ?? []).length);
+  await dlg.getByRole("button", { name: "Попробовать ещё раз" }).click();
+  await expect.poll(() => page.evaluate(() => ((window as any).__mediaAsked ?? []).length)).toBeGreaterThan(before);
+  await expect(dlg.getByText("Видео не загрузилось.", { exact: false })).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("открытый «Обзор» раз в 5 минут просит проверить рассылки, снятый баннер пропадает сам", async ({ page }) => {
+  await page.clock.install();
+  await page.goto("/mock.html?still&promo");
+  const banner = page.getByRole("region", { name: "Свой прокси за 5 минут" });
+  await expect(banner).toBeVisible({ timeout: 20_000 });
+  await page.evaluate(() => ((window as any).__bannerGone = true));
+  await page.clock.fastForward(4 * 60_000);
+  await expect(banner).toBeVisible();
+  await page.clock.fastForward(60_000 + 1000);
+  await expect(banner).toHaveCount(0);
+  expect(await page.evaluate(() => ((window as any).__noticesRefreshed ?? []).length)).toBeGreaterThan(0);
+});
+
 test("баннер по ситуации: только пока не работает ни один прокси", async ({ page }) => {
   await page.goto("/mock.html?still&promo&when=proxy_down");
   await expect(page.getByText("Мост активен").first()).toBeVisible({ timeout: 20_000 });

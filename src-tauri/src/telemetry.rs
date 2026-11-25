@@ -216,33 +216,92 @@ pub async fn get_anon(path_and_query: &str) -> Result<Option<String>, String> {
     .await
 }
 
-/// Файл с сервера статистики (фото и видео баннеров): только при включённой
-/// статистике или для баннера мастера (`setup`), не больше max байт.
-/// Напрямую, нет связи - через мост.
-pub async fn get_bytes(path: &str, max: usize, timeout: Duration, setup: bool) -> Result<Vec<u8>, String> {
-    let base = base().ok_or("сервер не задан")?;
-    let on = setup || tokio::task::spawn_blocking(load_if_stats_on).await.ok().flatten().is_some();
-    if !on {
-        return Err("статистика выключена".into());
+/// Сколько можно ждать новых байт, прежде чем считать загрузку зависшей.
+/// Российские провайдеры душат большие ответы зарубежного хостинга: заголовки
+/// и первые ~25 КБ приходят, дальше тишина до тайм-аута.
+const STALL: Duration = Duration::from_secs(8);
+
+/// Порядок путей для файла (None - напрямую, Some - через мост). Всегда
+/// сначала напрямую: через мост идёт трафик прокси человека, а он бывает
+/// платным и ограниченным (мобильный). Мост - только если прямая загрузка
+/// зависла или оборвалась, и только для картинок: видео до 24 МБ через мост
+/// не качаем вовсе. Картинка после первой загрузки лежит в кэше, так что
+/// лишние секунды ожидания бывают один раз.
+fn media_routes(video: bool, bridge: &str) -> Vec<Option<String>> {
+    if video {
+        vec![None]
+    } else {
+        vec![None, Some(bridge.to_string())]
     }
-    let url = format!("{base}{path}");
-    let body = with_fallback_cfg(timeout, &bridge_proxy(), should_try_bridge, |c| {
-        let url = url.clone();
-        async move {
-            let mut r = c.get(url).send().await?.error_for_status()?;
-            let mut out: Vec<u8> = Vec::new();
-            while let Some(chunk) = r.chunk().await? {
-                out.extend_from_slice(&chunk);
-                if out.len() > max {
-                    // Сервер отдал больше обещанного: дальше не читаем.
-                    return Ok(None);
-                }
-            }
-            Ok(Some(out))
+}
+
+/// Почему не скачалось одним путём.
+#[derive(Debug, PartialEq, Eq)]
+enum FetchErr {
+    /// Сеть, зависание, тайм-аут, ответ не 2xx: можно пробовать другой путь.
+    Retry(String),
+    /// Файл больше допустимого: другим путём он меньше не станет.
+    TooBig,
+}
+
+/// Скачать одним путём. Нет новых байт дольше `stall` (и пока ждём
+/// заголовки) - загрузка зависла, дальше не ждём.
+async fn fetch_once(c: reqwest::Client, url: &str, max: usize, stall: Duration) -> Result<Vec<u8>, FetchErr> {
+    let net = |e: reqwest::Error| FetchErr::Retry(e.to_string());
+    let hung = |_| FetchErr::Retry(format!("нет новых данных {} с", stall.as_secs()));
+    let r = tokio::time::timeout(stall, c.get(url).send()).await.map_err(hung)?.map_err(net)?;
+    let mut r = r.error_for_status().map_err(net)?;
+    let mut out: Vec<u8> = Vec::new();
+    while let Some(chunk) = tokio::time::timeout(stall, r.chunk()).await.map_err(hung)?.map_err(net)? {
+        out.extend_from_slice(&chunk);
+        if out.len() > max {
+            // Сервер отдал больше обещанного: дальше не читаем.
+            return Err(FetchErr::TooBig);
         }
-    })
-    .await?;
-    body.ok_or_else(|| "файл больше допустимого".to_string())
+    }
+    Ok(out)
+}
+
+/// Скачать, перебирая пути по порядку. GET файла по его сумме повторять
+/// безопасно, поэтому другой путь пробуем при любой сетевой беде: обрыв,
+/// зависание, общий тайм-аут, ошибка сервера.
+async fn fetch_routes(
+    url: &str,
+    routes: &[Option<String>],
+    max: usize,
+    timeout: Duration,
+    stall: Duration,
+) -> Result<Vec<u8>, String> {
+    let mut errs = Vec::new();
+    for route in routes {
+        let how = if route.is_some() { "через мост" } else { "напрямую" };
+        match fetch_once(client(route.as_deref(), timeout)?, url, max, stall).await {
+            Ok(v) => return Ok(v),
+            Err(FetchErr::TooBig) => return Err("файл больше допустимого".into()),
+            Err(FetchErr::Retry(e)) => errs.push(format!("{how}: {e}")),
+        }
+    }
+    Err(errs.join("; "))
+}
+
+/// Файл с сервера (фото и видео баннеров), не больше max байт.
+///
+/// Это не статистика: файл нужен баннеру, который программа уже получила, а
+/// сервер видит только запрос файла по его сумме. Поэтому флаг статистики
+/// здесь не проверяется (иначе у выключивших её баннер грузился бы вечно).
+/// Как и для самих баннеров, нужно лишь, чтобы человек уже видел уведомление
+/// о данных; файлам баннеров мастера (`setup`) - и до него.
+/// `video` - только напрямую, без моста (см. media_routes).
+pub async fn get_bytes(path: &str, max: usize, timeout: Duration, setup: bool, video: bool) -> Result<Vec<u8>, String> {
+    let base = base().ok_or("сервер не задан")?;
+    if !setup {
+        let seen = tokio::task::spawn_blocking(|| settings::load_checked().is_ok_and(|s| s.privacy_notice_seen)).await;
+        if !matches!(seen, Ok(true)) {
+            return Err("уведомление о данных ещё не показано".into());
+        }
+    }
+    let routes = media_routes(video, &bridge_proxy());
+    fetch_routes(&format!("{base}{path}"), &routes, max, timeout, STALL).await
 }
 
 // ---------------------------------------------------------------- даты
@@ -1410,6 +1469,128 @@ mod tests {
         assert_eq!((d.len(), b.len()), (1, 1), "ровно два вызова: напрямую и через мост");
         assert_eq!(nonce_of(&d[0]), nonce);
         assert_eq!(nonce_of(&b[0]), nonce, "тот же nonce");
+    }
+
+    /// Сервер файла: отдаёт `body` целиком, а с `stall_after` - только
+    /// столько байт и замолкает (как провайдер, душащий большие ответы).
+    /// Годится и как «мост»: прокси для http-адреса получает обычный GET.
+    /// Возвращает порт и счётчик соединений.
+    fn serve_file(body: Vec<u8>, stall_after: Option<usize>) -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::io::{Read, Write};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let hits = std::sync::Arc::new(AtomicUsize::new(0));
+        let hits2 = hits.clone();
+        std::thread::spawn(move || {
+            for s in l.incoming().flatten() {
+                hits2.fetch_add(1, Ordering::SeqCst);
+                let body = body.clone();
+                std::thread::spawn(move || {
+                    let mut s = s;
+                    let mut buf = [0u8; 4096];
+                    let _ = s.read(&mut buf);
+                    let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                    let _ = s.write_all(head.as_bytes());
+                    let n = stall_after.unwrap_or(body.len()).min(body.len());
+                    let _ = s.write_all(&body[..n]);
+                    let _ = s.flush();
+                    if stall_after.is_some() {
+                        std::thread::sleep(Duration::from_secs(10));
+                    }
+                });
+            }
+        });
+        (port, hits)
+    }
+
+    fn closed_port() -> u16 {
+        std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+    }
+
+    #[test]
+    fn media_goes_direct_first_and_video_never_via_bridge() {
+        let b = "http://127.0.0.1:8890";
+        assert_eq!(media_routes(false, b), vec![None, Some(b.to_string())], "картинка: напрямую, потом мост");
+        assert_eq!(media_routes(true, b), vec![None], "видео: только напрямую, трафик прокси не тратим");
+    }
+
+    #[tokio::test]
+    async fn media_stalled_direct_switches_to_bridge_fast() {
+        use std::sync::atomic::Ordering;
+        let file: Vec<u8> = (0..77_000u32).map(|i| (i % 251) as u8).collect();
+        // Напрямую: заголовки и 25 КБ, дальше тишина.
+        let (dp, dhits) = serve_file(file.clone(), Some(25_000));
+        let (bp, bhits) = serve_file(file.clone(), None);
+        let url = format!("http://127.0.0.1:{dp}/v1/media/x");
+        let routes = [None, Some(format!("http://127.0.0.1:{bp}"))];
+        let t = std::time::Instant::now();
+        let r = fetch_routes(&url, &routes, MAX, Duration::from_secs(60), Duration::from_millis(400)).await;
+        assert_eq!(r.as_deref(), Ok(&file[..]), "через мост файл целиком");
+        assert!(t.elapsed() < Duration::from_secs(5), "зависание замечено за секунды, а не за общий тайм-аут: {:?}", t.elapsed());
+        assert_eq!((dhits.load(Ordering::SeqCst), bhits.load(Ordering::SeqCst)), (1, 1));
+    }
+
+    const MAX: usize = 1024 * 1024;
+
+    #[tokio::test]
+    async fn media_direct_ok_never_touches_bridge() {
+        use std::sync::atomic::Ordering;
+        let file = b"image-bytes".to_vec();
+        let (dp, dhits) = serve_file(file.clone(), None);
+        let (bp, bhits) = serve_file(file.clone(), None);
+        let url = format!("http://127.0.0.1:{dp}/f");
+        let r = fetch_routes(&url, &media_routes(false, &format!("http://127.0.0.1:{bp}")), MAX, Duration::from_secs(10), Duration::from_millis(400)).await;
+        assert_eq!(r, Ok(file));
+        assert_eq!(dhits.load(Ordering::SeqCst), 1);
+        assert_eq!(bhits.load(Ordering::SeqCst), 0, "напрямую скачалось - мост не трогаем");
+    }
+
+    #[tokio::test]
+    async fn media_stalled_video_is_not_retried_via_bridge() {
+        use std::sync::atomic::Ordering;
+        let (dp, _) = serve_file(vec![7; 50_000], Some(1000));
+        let (bp, bhits) = serve_file(vec![7; 50_000], None);
+        let url = format!("http://127.0.0.1:{dp}/v.mp4");
+        let r = fetch_routes(&url, &media_routes(true, &format!("http://127.0.0.1:{bp}")), MAX, Duration::from_secs(10), Duration::from_millis(300)).await;
+        assert!(r.unwrap_err().contains("напрямую: нет новых данных"));
+        assert_eq!(bhits.load(Ordering::SeqCst), 0, "видео через мост не качаем");
+    }
+
+    #[tokio::test]
+    async fn media_dead_bridge_falls_back_to_direct() {
+        let file = b"poster".to_vec();
+        let (dp, _) = serve_file(file.clone(), None);
+        let url = format!("http://127.0.0.1:{dp}/f");
+        let routes = [Some(format!("http://127.0.0.1:{}", closed_port())), None];
+        let r = fetch_routes(&url, &routes, MAX, Duration::from_secs(10), Duration::from_millis(400)).await;
+        assert_eq!(r, Ok(file));
+    }
+
+    #[tokio::test]
+    async fn media_both_routes_fail_with_both_reasons() {
+        let (dp, _) = serve_file(vec![1; 1000], Some(10));
+        let url = format!("http://127.0.0.1:{dp}/f");
+        let routes = [None, Some(format!("http://127.0.0.1:{}", closed_port()))];
+        let e = fetch_routes(&url, &routes, MAX, Duration::from_secs(10), Duration::from_millis(300)).await.unwrap_err();
+        assert!(e.contains("напрямую: нет новых данных") && e.contains("через мост:"), "{e}");
+        // Общий тайм-аут клиента меньше паузы: тоже переход на другой путь.
+        let (bp, _) = serve_file(vec![2; 10], None);
+        let routes = [None, Some(format!("http://127.0.0.1:{bp}"))];
+        let r = fetch_routes(&url, &routes, MAX, Duration::from_millis(500), Duration::from_secs(5)).await;
+        assert_eq!(r, Ok(vec![2; 10]));
+    }
+
+    #[tokio::test]
+    async fn media_too_big_is_not_retried() {
+        use std::sync::atomic::Ordering;
+        let (dp, _) = serve_file(vec![0; 5000], None);
+        let (bp, bhits) = serve_file(vec![0; 10], None);
+        let url = format!("http://127.0.0.1:{dp}/f");
+        let routes = [None, Some(format!("http://127.0.0.1:{bp}"))];
+        let r = fetch_routes(&url, &routes, 1000, Duration::from_secs(10), Duration::from_millis(400)).await;
+        assert_eq!(r, Err("файл больше допустимого".to_string()));
+        assert_eq!(bhits.load(Ordering::SeqCst), 0);
     }
 
     #[test]
