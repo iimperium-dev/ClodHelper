@@ -97,6 +97,12 @@ function loadDismissed(): Set<string> {
   }
 }
 
+/** Сколько держать подсказку: ~15 знаков в секунду плюс запас на «заметить»,
+    не меньше 6 с (ошибку - 8 с) и не больше 20 с. */
+function readMs(text: string, error: boolean): number {
+  return Math.min(20_000, Math.max(error ? 8000 : 6000, 2500 + text.length * 65));
+}
+
 function newId(): string {
   return `site-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 }
@@ -117,7 +123,14 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
   const [labels, setLabels] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [note, setNote] = useState<string | null>(null);
+  /** Подсказка снизу. sticky - инструкция с действием («перезапустите…»):
+      висит, пока её не закроют крестиком или не придёт новая подсказка. */
+  const [noteState, setNoteState] = useState<{ text: string; sticky: boolean } | null>(null);
+  const note = noteState?.text ?? null;
+  const setNote = useCallback(
+    (text: string | null, sticky = false) => setNoteState(text ? { text, sticky } : null),
+    [],
+  );
   const [adding, setAdding] = useState(false);
   const [addInput, setAddInput] = useState("");
   const [open, setOpen] = useState<string | null>(null);
@@ -151,7 +164,7 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
     try {
       applyScopeState(await sitesScopeSet(false, []));
       setPac(await systemPacStatus().catch(() => null));
-      setNote("Сайты снова во всех браузерах - перезапустите браузеры, где они были выбраны");
+      setNote("Сайты снова во всех браузерах. Перезапустите браузеры, где они были выбраны", true);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -165,7 +178,7 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
     try {
       applyScopeState(await sitesScopeSet(true, [...draft]));
       setPac(await systemPacStatus().catch(() => null));
-      setNote("Готово - перезапустите выбранные браузеры. Остальные работают без Clod Helper");
+      setNote("Готово. Перезапустите выбранные браузеры, остальные работают без Clod Helper", true);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -259,15 +272,23 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
     }
   };
 
-  // Подсказка - всплывающая плашка: сама уходит и не двигает страницу.
+  // Подсказка - всплывающая плашка: не двигает страницу и уходит сама, когда
+  // её успели прочитать (время - по длине текста). Инструкция с действием
+  // ждёт крестика: её читают, пока делают.
   useEffect(() => {
-    if (!note && !error) return;
+    const text = error ?? noteState?.text;
+    if (!text || (!error && noteState?.sticky)) return;
     const t = window.setTimeout(() => {
-      setNote(null);
+      // Ошибка поверх инструкции: уходит только ошибка, инструкция остаётся.
+      if (!noteState?.sticky) setNote(null);
       setError(null);
-    }, error ? 8000 : 3500);
+    }, readMs(text, error !== null));
     return () => window.clearTimeout(t);
-  }, [note, error]);
+  }, [noteState, error, setNote]);
+  const closeNote = () => {
+    setNote(null);
+    setError(null);
+  };
 
   const addSite = async (name: string, domains: string[]) => {
     if (!sites) return;
@@ -324,7 +345,7 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
         await browserPolicySet(id, true);
       }
       await loadStatus();
-      setNote("Готово - перезапустите браузер через мост («Приложения» → «Перезапустить»)");
+      setNote("Готово. Перезапустите браузер через мост: в «Приложениях» нажмите у него «Перезапустить»", true);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -492,7 +513,7 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
                     setError(null);
                     try {
                       await sitesOpenExtension(b.path, e.id);
-                      setNote(`Открыл «${e.name}» в ${b.name} - отключите его и вернитесь сюда`);
+                      setNote(`Открыл «${e.name}» в ${b.name}. Отключите его и вернитесь сюда`, true);
                     } catch (err) {
                       setError(String(err));
                     }
@@ -577,13 +598,21 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 6 }}
               transition={{ duration: 0.18 }}
-              role="status"
+              role={error ? "alert" : "status"}
               className={cn(
-                "pointer-events-none fixed bottom-5 left-1/2 z-[60] max-w-[420px] -translate-x-1/2 rounded-xl border px-4 py-2.5 text-center text-[12px] leading-snug shadow-[0_12px_32px_rgba(0,0,0,0.5)]",
+                "fixed bottom-5 left-1/2 z-[60] flex w-max max-w-[min(420px,calc(100vw-32px))] -translate-x-1/2 items-start gap-2 rounded-xl border py-2.5 pl-4 pr-2 text-[12px] leading-snug shadow-[0_12px_32px_rgba(0,0,0,0.5)]",
                 error ? "border-vb-loss/40 bg-vb-surface text-vb-loss" : "border-vb-border bg-vb-surface text-vb-silver",
               )}
             >
-              {error ?? note}
+              <span className="min-w-0 flex-1 py-0.5">{error ?? note}</span>
+              <button
+                type="button"
+                onClick={closeNote}
+                aria-label="Закрыть подсказку"
+                className="-my-0.5 shrink-0 rounded-md p-1 text-vb-silver-faint transition-colors hover:bg-vb-surface-2 hover:text-vb-silver"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
             </motion.div>
           )}
         </AnimatePresence>,

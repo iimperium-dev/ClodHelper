@@ -401,6 +401,12 @@ test("Telegram без связи из-за защиты - видно в стро
   const row = page.getByText("Telegram", { exact: true });
   await row.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Убрать из списка" }).click();
+  // Сначала вопрос - и предупреждение, что защита снимется.
+  const ask = page.getByRole("group", { name: "Подтверждение" });
+  await expect(ask.getByText("Убрать Telegram из списка?")).toBeVisible();
+  await expect(ask.getByText("Защита от прямого соединения снимется")).toBeVisible();
+  await expect(row).toBeVisible();
+  await ask.getByRole("button", { name: "Убрать" }).click();
   await expect(row).toHaveCount(0);
   await page.getByRole("button", { name: "Добавить" }).click();
   await page.getByPlaceholder("Название программы").fill("teleg");
@@ -418,6 +424,7 @@ test("windows: убранный Telegram находится поиском и в
   const row = page.getByText("Telegram", { exact: true });
   await row.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Убрать из списка" }).click();
+  await page.getByRole("group", { name: "Подтверждение" }).getByRole("button", { name: "Убрать" }).click();
   await expect(row).toHaveCount(0);
   // Раньше окно поиска отбрасывало его: путь совпадал с убранной строкой.
   await page.getByRole("button", { name: "Добавить" }).click();

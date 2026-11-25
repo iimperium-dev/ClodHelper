@@ -7,6 +7,9 @@ import { CountryFlag } from "./CountryFlag";
 import { CopyIp } from "./CopyIp";
 import { hostOnly, hostPort, loadGeoCache, saveGeoCache } from "../lib/proxyGeo";
 import { AppIcon } from "./AppTile";
+import { ConfirmStrip } from "./ConfirmStrip";
+import { useDialogFocus } from "../lib/useDialogFocus";
+import { removeConsequences } from "../lib/removeApp";
 import type { RowAction, RowStatus } from "./AppRow";
 import {
   appsCreateShortcut,
@@ -185,7 +188,8 @@ interface Props {
   status: RowStatus | null;
   folders: AppFolder[];
   onMoveToFolder: (folderId: string) => void;
-  onRemove: () => void;
+  /** Убрать из списка (после подтверждения в окне). Ошибка - строкой в окне. */
+  onRemove: () => Promise<void>;
   onRelaunch: () => Promise<void>;
   onChanged: (apps?: AppProfileStatus[]) => void;
   onClose: () => void;
@@ -286,14 +290,49 @@ export function AppSettingsModal({
     // geo намеренно не в deps: проверяем один раз на открытие
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appId, pool]);
-  const closeRef = useRef(onClose);
-  closeRef.current = onClose;
+  // Фокус: на «Закрыть» при открытии, Tab внутри окна, Esc закрывает,
+  // после закрытия - обратно на шестерёнку.
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeBtnRef = useRef<HTMLButtonElement>(null);
+  useDialogFocus(!!appId, dialogRef, closeBtnRef, onClose);
+
+  // «Убрать из списка» - в два клика, с тем, что ещё снимется.
+  const [removeAsk, setRemoveAsk] = useState<{ note: string | null } | null>(null);
+  const [removeBusy, setRemoveBusy] = useState(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
   useEffect(() => {
-    if (!appId) return;
-    const esc = (e: KeyboardEvent) => e.key === "Escape" && closeRef.current();
-    window.addEventListener("keydown", esc);
-    return () => window.removeEventListener("keydown", esc);
+    setRemoveAsk(null);
+    setRemoveBusy(false);
+    setRemoveError(null);
   }, [appId]);
+  // Ответ про защиту приходит позже: не дописываем его в окно другого приложения.
+  const askFor = useRef<string | null>(null);
+  useEffect(() => {
+    askFor.current = null;
+  }, [appId]);
+  const removing = useRef(false);
+  const askRemove = async () => {
+    if (!appId) return;
+    askFor.current = appId;
+    setRemoveError(null);
+    setRemoveAsk({ note: null });
+    const note = await removeConsequences(appId);
+    if (askFor.current === appId && note) setRemoveAsk((r) => (r ? { note } : r));
+  };
+  const confirmRemove = async () => {
+    if (removing.current) return;
+    removing.current = true;
+    setRemoveBusy(true);
+    setRemoveError(null);
+    try {
+      await onRemove();
+    } catch (e) {
+      setRemoveError(String(e));
+    } finally {
+      removing.current = false;
+      setRemoveBusy(false);
+    }
+  };
 
   const group = app ? GROUP_OF[app.id] : undefined;
   const current = !app ? -1 : group ? (assign[group] ?? -1) : (app.proxy ?? -1);
@@ -447,7 +486,9 @@ export function AppSettingsModal({
             exit={{ opacity: 0, scale: 0.96, y: 8 }}
             transition={{ type: "spring", bounce: 0.18, duration: 0.42 }}
             onMouseDown={(e) => e.stopPropagation()}
+            ref={dialogRef}
             role="dialog"
+            aria-modal="true"
             aria-label={`Настройки ${app.name}`}
             className="relative flex max-h-full w-full max-w-[400px] flex-col overflow-hidden rounded-2xl border border-vb-border bg-vb-surface shadow-[0_24px_64px_rgba(0,0,0,0.6)]"
           >
@@ -475,6 +516,7 @@ export function AppSettingsModal({
                 </div>
               </div>
               <button
+                ref={closeBtnRef}
                 type="button"
                 onClick={onClose}
                 aria-label="Закрыть"
@@ -708,8 +750,19 @@ export function AppSettingsModal({
                       }
                     />
                   ))}
-                <ActionRow label="Убрать из списка" danger onClick={onRemove} />
+                <ActionRow label="Убрать из списка" danger onClick={() => void askRemove()} />
               </Section>
+              <ConfirmStrip
+                open={removeAsk !== null}
+                text={`Убрать ${app.name} из списка?`}
+                note={removeAsk?.note}
+                confirmLabel="Убрать"
+                busy={removeBusy}
+                error={removeError}
+                onConfirm={() => void confirmRemove()}
+                onCancel={() => setRemoveAsk(null)}
+                className="mx-4 mb-3"
+              />
             </div>
 
             {/* Плавающая панель: сохранить выбранный прокси / перезапустить */}

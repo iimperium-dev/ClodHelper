@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Loader2,
@@ -143,7 +143,10 @@ export function Proxies() {
   const [tagInput, setTagInput] = useState("");
 
   const [confirmDel, setConfirmDel] = useState<number | null>(null);
-  const confirmTimer = useRef<number | null>(null);
+  // Вопрос - по номеру в пуле: пул сменился (купили прокси по ссылке, другое
+  // окно) - номер мог уехать на другой прокси, вопрос снимаем.
+  const poolKey = pool?.join("\n");
+  useEffect(() => setConfirmDel(null), [poolKey]);
 
   const load = useCallback(async () => {
     setPool(await proxiesGet().catch(() => []));
@@ -323,11 +326,8 @@ export function Proxies() {
       return next;
     });
 
-  const askDelete = (i: number) => {
-    setConfirmDel(i);
-    if (confirmTimer.current) window.clearTimeout(confirmTimer.current);
-    confirmTimer.current = window.setTimeout(() => setConfirmDel(null), 4000);
-  };
+  // Вопрос висит, пока не ответили: клик мимо или Esc - отмена (ConfirmStrip).
+  const askDelete = (i: number) => setConfirmDel(i);
 
   const handleRemove = async (i: number) => {
     if (!pool || pool.length === 0) return;

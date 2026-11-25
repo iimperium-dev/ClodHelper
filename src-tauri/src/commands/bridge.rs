@@ -103,7 +103,8 @@ pub async fn bridge_exe_legacy() -> Result<bool, String> {
 /// Версии моста: установленного и встроенного в приложение. Если встроенный
 /// новее - UI предлагает «Обновить мост» (иначе после апдейта Clod Helper
 /// пользователь навсегда остался бы на старом мосте: exe копируется только
-/// мастером установки).
+/// мастером установки). Ответы exe берутся из общего кэша проб
+/// (`tasks::exe_version`): окно и трей-попап зовут это при каждом открытии.
 #[derive(Debug, Serialize)]
 pub struct BridgeVersions {
     pub installed: Option<String>,
@@ -430,7 +431,7 @@ pub fn open_windows_security() -> Result<(), String> {
 /// «Обновить мост» (а новые возможности - SOCKS, закреплённые входы -
 /// недоступны).
 pub(crate) async fn auto_update_bridge(app: AppHandle) {
-    if !crate::tasks::is_registered() {
+    if !tokio::task::spawn_blocking(crate::tasks::is_registered).await.unwrap_or(false) {
         return;
     }
     // Правила новой версии (например, новые домены Claude) - сразу в мост.

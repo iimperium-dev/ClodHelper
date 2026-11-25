@@ -69,7 +69,7 @@ pub fn read() -> GlobalProxyEnv {
 /// UPPERCASE нельзя отдельно «удалять lowercase»: это удалит только что
 /// записанное значение и тумблер мгновенно вернётся в состояние «выключен».
 ///
-/// Действует на процессы, запущенные ПОСЛЕ (WM_SETTINGCHANGE рассылается
+/// Действует на процессы, запущенные ПОСЛЕ (WM_SETTINGCHANGE рассылаем
 /// автоматически). Прав администратора не требует (User scope).
 pub fn set(proxy_url: &str) -> Result<(), String> {
     // Чужие значения (корпоративный прокси, свой VPN-тул) сохраняем ПЕРЕД
@@ -154,92 +154,61 @@ mod backend {
     /// PowerShell стоил ~1-2 с, а read() дёргается при каждом обновлении
     /// окна. Реестр регистронезависим - читаем только UPPERCASE-имена.
     pub fn read_values(keys: &[&str]) -> Vec<(String, String)> {
-        let user = crate::win::hkcu();
         keys.iter()
-            .filter_map(|k| {
-                let v = crate::win::string(&user, "Environment", k)?;
-                let v = v.trim();
-                (!v.is_empty()).then(|| (k.to_string(), v.to_string()))
-            })
+            .filter_map(|k| read_user_env(k).map(|v| (k.to_string(), v)))
             .collect()
     }
 
-    /// Записывает HKCU\Environment через [Environment]::SetEnvironmentVariable
-    /// - он же рассылает WM_SETTINGCHANGE, чтобы новые процессы унаследовали.
+    /// Пишет HKCU\Environment напрямую (тип значения сохраняется) и один раз
+    /// рассылает WM_SETTINGCHANGE, чтобы новые процессы унаследовали.
+    /// Раньше это делал PowerShell: 1,5-2 с на запуск плюс рассылка на
+    /// каждую переменную, и шаг мастера с тумблером ждали десятки секунд.
     pub fn enable(proxy_url: &str, no_proxy: &str) -> Result<(), String> {
-        let url_e = proxy_url.replace('\'', "''");
-        let np_e = no_proxy.replace('\'', "''");
-        let script = format!(
-            "[Environment]::SetEnvironmentVariable('HTTP_PROXY', '{url_e}', 'User'); \
-             [Environment]::SetEnvironmentVariable('HTTPS_PROXY', '{url_e}', 'User'); \
-             [Environment]::SetEnvironmentVariable('NO_PROXY', '{np_e}', 'User'); \
-             Write-Output 'ENV_SET'"
-        );
-        let out = run_ps_capture(&script)
-            .ok_or_else(|| "powershell.exe не выполнил запись переменных".to_string())?;
-        if out.contains("ENV_SET") {
-            Ok(())
-        } else {
-            Err(format!("Не удалось записать переменные: {out}"))
-        }
+        write_all(
+            &[
+                ("HTTP_PROXY", Some(proxy_url)),
+                ("HTTPS_PROXY", Some(proxy_url)),
+                ("NO_PROXY", Some(no_proxy)),
+            ],
+            "Не удалось записать переменные",
+        )
     }
 
-    /// `SetEnvironmentVariable(name, $null, 'User')` корректно удаляет из
-    /// HKCU\Environment и рассылает WM_SETTINGCHANGE.
+    /// Возвращает сохранённые чужие значения, остальные наши переменные
+    /// удаляет из HKCU\Environment, и рассылает WM_SETTINGCHANGE.
     pub fn disable(saved: &std::collections::HashMap<String, String>) -> Result<(), String> {
-        let mut script = String::new();
-        for key in ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"] {
-            match saved.get(key) {
-                Some(v) => script.push_str(&format!(
-                    "[Environment]::SetEnvironmentVariable('{key}', '{}', 'User'); ",
-                    v.replace('\'', "''"),
-                )),
-                None => script.push_str(&format!(
-                    "[Environment]::SetEnvironmentVariable('{key}', $null, 'User'); ",
-                )),
+        let changes: Vec<(&str, Option<&str>)> = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"]
+            .into_iter()
+            .map(|key| (key, saved.get(key).map(String::as_str)))
+            .collect();
+        write_all(&changes, "Не удалось очистить переменные")
+    }
+
+    /// Как прежний скрипт: идём по всем переменным по порядку, даже если
+    /// одна не записалась, и рассылаем изменение, если хоть что-то поменяли.
+    fn write_all(changes: &[(&str, Option<&str>)], fail: &str) -> Result<(), String> {
+        let mut errors = Vec::new();
+        let mut changed = false;
+        for (key, value) in changes {
+            match crate::win::set_user_env(key, *value) {
+                Ok(()) => changed = true,
+                Err(e) => errors.push(format!("{key}: {e}")),
             }
         }
-        script.push_str("Write-Output 'ENV_CLEARED'");
-
-        let out = run_ps_capture(&script)
-            .ok_or_else(|| "powershell.exe не выполнил очистку".to_string())?;
-        if out.contains("ENV_CLEARED") {
+        if changed {
+            crate::win::broadcast_environment_change();
+        }
+        if errors.is_empty() {
             Ok(())
         } else {
-            Err(format!("Не удалось очистить переменные: {out}"))
+            Err(format!("{fail}: {}", errors.join("; ")))
         }
     }
 
     pub fn read_user_env(name: &str) -> Option<String> {
-        run_ps_capture(&format!(
-            "[Environment]::GetEnvironmentVariable('{name}', 'User')"
-        ))
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-    }
-
-    fn run_ps_capture(script: &str) -> Option<String> {
-        use std::os::windows::process::CommandExt;
-        use std::process::Command;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        // UTF-8-прелюдия: без неё PS 5.1 пишет в пайп OEM-866 и кириллица в
-        // значениях/ошибках превращается в кашу (см. tasks::run_ps).
-        let script = format!(
-            "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; \
-             $OutputEncoding=[System.Text.Encoding]::UTF8; {script}"
-        );
-        let mut cmd = Command::new("powershell.exe");
-        cmd.args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            script.as_str(),
-        ]);
-        cmd.creation_flags(CREATE_NO_WINDOW);
-        let out = cmd.output().ok()?;
-        Some(String::from_utf8_lossy(&out.stdout).to_string())
+        let v = crate::win::user_env(name)?;
+        let v = v.trim();
+        (!v.is_empty()).then(|| v.to_string())
     }
 }
 

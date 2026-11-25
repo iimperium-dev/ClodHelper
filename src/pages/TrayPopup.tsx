@@ -41,16 +41,25 @@ export function TrayPopup() {
   const [busy, setBusy] = useState<"start" | "stop" | "restart" | "test" | null>(null);
   const [testResult, setTestResult] = useState<ShimTestResult | null>(null);
   /** Ошибка последнего действия: без неё упавшая команда выглядит как
-      «нажал и ничего не произошло». Гаснет сама. */
+      «нажал и ничего не произошло». Держится до следующего действия:
+      попап часто открывают уже после того, как ошибка случилась. */
   const [actionError, setActionError] = useState<string | null>(null);
-  const failFlash = (e: unknown) => {
-    setActionError(String(e));
-    window.setTimeout(() => setActionError(null), 6000);
+  /** Удачный тест гаснет сам; таймер один - новый тест сбрасывает старый. */
+  const okTimer = useRef<number | null>(null);
+  const clearOkTimer = () => {
+    if (okTimer.current !== null) window.clearTimeout(okTimer.current);
+    okTimer.current = null;
   };
+  useEffect(() => clearOkTimer, []);
 
   const loading = status === null;
   const running = status?.running ?? false;
-
+  // Мост запустили или остановили (тут же, в окне, сам) - старая ошибка
+  // уже не про то, что сейчас.
+  useEffect(() => {
+    setActionError(null);
+    setTestResult((r) => (r && !r.ok ? null : r));
+  }, [running]);
 
   const act = async (
     kind: "start" | "stop" | "restart",
@@ -58,11 +67,13 @@ export function TrayPopup() {
   ) => {
     setBusy(kind);
     setActionError(null);
+    clearOkTimer();
+    setTestResult(null);
     try {
       await fn();
       await refresh();
     } catch (e) {
-      failFlash(e);
+      setActionError(String(e));
     } finally {
       setBusy(null);
     }
@@ -70,13 +81,15 @@ export function TrayPopup() {
 
   const handleTest = async () => {
     setBusy("test");
+    clearOkTimer();
     setTestResult(null);
     setActionError(null);
     try {
-      setTestResult(await shimTest());
-      window.setTimeout(() => setTestResult(null), 6000);
+      const r = await shimTest();
+      setTestResult(r);
+      if (r.ok) okTimer.current = window.setTimeout(() => setTestResult(null), 6000);
     } catch (e) {
-      failFlash(e);
+      setActionError(String(e));
     } finally {
       setBusy(null);
     }
@@ -162,9 +175,11 @@ export function TrayPopup() {
               {loading ? "Проверяю…" : running ? "Мост активен" : "Мост остановлен"}
             </div>
             <div className="tnum text-[11px] text-vb-silver-faint">
-              {running
-                ? `работает ${formatUptime(health?.uptime_sec ?? status?.uptime_sec)}`
-                : "трафик не проксируется"}
+              {busy === "stop"
+                ? "Останавливаю…"
+                : running
+                  ? `работает ${formatUptime(health?.uptime_sec ?? status?.uptime_sec)}`
+                  : "приложения идут напрямую"}
             </div>
           </div>
           {running ? (
@@ -182,10 +197,14 @@ export function TrayPopup() {
                 type="button"
                 onClick={() => act("stop", shimStop)}
                 disabled={busy !== null}
-                className="rounded-lg p-2 text-vb-silver-dim transition-colors hover:bg-vb-surface-2 hover:text-vb-loss active:scale-[0.95] disabled:opacity-35"
+                className={cn(
+                  "rounded-lg p-2 text-vb-silver-dim transition-colors hover:bg-vb-surface-2 hover:text-vb-loss active:scale-[0.95] disabled:opacity-35",
+                  busy === "stop" && "disabled:opacity-100",
+                )}
                 title="Остановить мост"
+                aria-label={busy === "stop" ? "Останавливаю мост" : "Остановить мост"}
               >
-                <Pause className="h-4 w-4" />
+                {busy === "stop" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Pause className="h-4 w-4" />}
               </button>
             </div>
           ) : loading ? null : (
@@ -225,7 +244,8 @@ export function TrayPopup() {
               animate={{ opacity: 1, height: "auto" }}
               exit={{ opacity: 0, height: 0 }}
               transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-              className="overflow-hidden px-4 pb-1 text-[11px] leading-snug text-vb-loss"
+              role="alert"
+              className="overflow-hidden break-words px-4 pb-1 text-[11px] leading-snug text-vb-loss"
             >
               {actionError}
             </motion.p>
@@ -239,7 +259,7 @@ export function TrayPopup() {
               <div className="font-mono text-[15px] font-semibold leading-none text-vb-fg">
                 <NumberTicker value={health.via_upstream} />
               </div>
-              <div className="mt-1 text-[9px] uppercase tracking-[0.05em] text-vb-silver-faint">
+              <div className="mt-1 text-[11px] text-vb-silver-faint">
                 прокси
               </div>
             </div>
@@ -247,7 +267,7 @@ export function TrayPopup() {
               <div className="font-mono text-[15px] font-semibold leading-none text-vb-fg">
                 <NumberTicker value={health.via_direct} />
               </div>
-              <div className="mt-1 text-[9px] uppercase tracking-[0.05em] text-vb-silver-faint">
+              <div className="mt-1 text-[11px] text-vb-silver-faint">
                 напрямую
               </div>
             </div>
@@ -255,7 +275,7 @@ export function TrayPopup() {
               <div className="font-mono text-[15px] font-semibold leading-none text-vb-emerald">
                 <NumberTicker value={health.active} />
               </div>
-              <div className="mt-1 text-[9px] uppercase tracking-[0.05em] text-vb-silver-faint">
+              <div className="mt-1 text-[11px] text-vb-silver-faint">
                 активных
               </div>
             </div>
@@ -268,7 +288,7 @@ export function TrayPopup() {
               >
                 <NumberTicker value={health.errors} />
               </div>
-              <div className="mt-1 text-[9px] uppercase tracking-[0.05em] text-vb-silver-faint">
+              <div className="mt-1 text-[11px] text-vb-silver-faint">
                 ошибок
               </div>
             </div>
@@ -300,8 +320,9 @@ export function TrayPopup() {
                 className="overflow-hidden"
               >
                 <div
+                  role="status"
                   className={cn(
-                    "tnum mt-1.5 flex items-center gap-2 rounded-lg px-3 py-1.5 text-[12px]",
+                    "tnum mt-1.5 flex items-start gap-2 rounded-lg px-3 py-1.5 text-[12px] leading-snug",
                     testResult.ok
                       ? "bg-vb-emerald/[0.08] text-vb-emerald"
                       : "bg-vb-loss/[0.08] text-vb-loss",
@@ -309,15 +330,17 @@ export function TrayPopup() {
                 >
                   <span
                     className={cn(
-                      "h-1.5 w-1.5 shrink-0 rounded-full",
+                      "mt-[6px] h-1.5 w-1.5 shrink-0 rounded-full",
                       testResult.ok ? "bg-vb-emerald" : "bg-vb-loss",
                     )}
                   />
-                  <span className="truncate font-mono">
-                    {testResult.ok
-                      ? `${testResult.external_ip ?? "OK"} · ${testResult.latency_ms ?? "-"} мс`
-                      : testResult.error ?? "ошибка"}
-                  </span>
+                  {testResult.ok ? (
+                    <span className="min-w-0 truncate font-mono">
+                      {`${testResult.external_ip ?? "OK"} · ${testResult.latency_ms ?? "-"} мс`}
+                    </span>
+                  ) : (
+                    <span className="min-w-0 break-words">{testResult.error || "Соединение не прошло"}</span>
+                  )}
                 </div>
               </motion.div>
             )}

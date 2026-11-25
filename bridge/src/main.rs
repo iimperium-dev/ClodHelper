@@ -26,7 +26,8 @@
 //! что пришло туда, идёт ТОЛЬКО через upstream (как строгий вход), без DIRECT.
 //!
 //! --supervise: режим самосупервизии - процесс перезапускает сам себя как
-//! воркер и поднимает упавшего через 5с. Задача Планировщика вешается прямо
+//! воркер и поднимает упавшего через 5с (падает сразу после старта - пауза
+//! растёт до 2 минут). Задача Планировщика вешается прямо
 //! на exe: VBS/wscript-цикл (малварь-паттерн для антивирусов + депрекация
 //! VBScript в Win11 24H2+) больше не нужен. windows_subsystem="windows" -
 //! окна консоли нет ни у супервизора, ни у воркера.
@@ -223,12 +224,30 @@ fn parse_bypass(text: &str) -> Result<Vec<String>, String> {
     Ok(f.bypass_apps.iter().map(|p| norm_dir(p)).filter(|p| p.len() > 3).collect())
 }
 
+/// Сколько живёт запись кэша «pid - путь к exe». PID переиспользуются, но не
+/// за секунды: короткий срок защищает от чужой программы на старом номере.
+#[cfg(any(windows, target_os = "macos"))]
+const PID_PATH_TTL: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Снимок «соединение - pid» годится для соединения, если снят не раньше,
+/// чем начался поиск: к этому моменту соединение уже принято и есть в
+/// таблице ОС. Более старый снимок нового соединения не знает - перечитать.
+#[cfg(any(windows, test))]
+fn snapshot_covers(taken: std::time::Instant, lookup_started: std::time::Instant) -> bool {
+    taken >= lookup_started
+}
+
 /// Какой программе (путь к exe, нижний регистр) принадлежит соединение
 /// клиента с портом `client_port` к нашему входу `our_port` на 127.0.0.1.
+///
+/// Таблица TCP читается целиком (поиска по одному порту в WinAPI нет), но
+/// один раз на пачку соединений: кто ждал, пока другой поток читает,
+/// берёт его свежий снимок. Вызывать из spawn_blocking.
 #[cfg(windows)]
 mod procmap {
     use std::collections::HashMap;
     use std::sync::Mutex;
+    use std::time::Instant;
     use windows_sys::Win32::Foundation::{CloseHandle, NO_ERROR};
     use windows_sys::Win32::NetworkManagement::IpHelper::{
         GetExtendedTcpTable, MIB_TCPROW_OWNER_PID, TCP_TABLE_OWNER_PID_CONNECTIONS,
@@ -238,9 +257,33 @@ mod procmap {
         OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
     };
 
-    static CACHE: Mutex<Option<HashMap<u32, String>>> = Mutex::new(None);
+    /// pid - (путь, когда прочитан).
+    static PATHS: Mutex<Option<HashMap<u32, (String, Instant)>>> = Mutex::new(None);
 
-    fn owner_pid(client_port: u16, our_port: u16) -> Option<u32> {
+    /// Последний снимок таблицы: (порт клиента, наш порт) - pid.
+    struct Snapshot {
+        taken: Instant,
+        rows: HashMap<(u16, u16), u32>,
+    }
+    static SNAPSHOT: Mutex<Option<Snapshot>> = Mutex::new(None);
+
+    fn owner_pid(client_port: u16, our_port: u16, started: Instant) -> Option<u32> {
+        // Замок держим и на время чтения: параллельные поиски ждут один
+        // снимок, а не читают таблицу каждый сам.
+        let mut snap = SNAPSHOT.lock().ok()?;
+        if let Some(s) = snap.as_ref().filter(|s| super::snapshot_covers(s.taken, started)) {
+            return s.rows.get(&(client_port, our_port)).copied();
+        }
+        let taken = Instant::now();
+        let rows = read_table()?;
+        let pid = rows.get(&(client_port, our_port)).copied();
+        *snap = Some(Snapshot { taken, rows });
+        pid
+    }
+
+    /// Все TCP-соединения IPv4 с владельцами. Строки без владельца (pid 0,
+    /// TIME_WAIT от закрытого соединения на том же порту) пропускаются.
+    fn read_table() -> Option<HashMap<(u16, u16), u32>> {
         let mut size: u32 = 0;
         // SAFETY: первый вызов только узнаёт размер буфера.
         unsafe { GetExtendedTcpTable(std::ptr::null_mut(), &mut size, 0, AF_INET as u32, TCP_TABLE_OWNER_PID_CONNECTIONS, 0) };
@@ -258,23 +301,32 @@ mod procmap {
             let count = u32::from_ne_bytes(buf[..4].try_into().ok()?) as usize;
             // Строки идут сразу за dwNumEntries (выравнивание - 4 байта).
             let rows = buf[4..].as_ptr().cast::<MIB_TCPROW_OWNER_PID>();
+            let mut map = HashMap::with_capacity(count);
             for i in 0..count {
                 // SAFETY: count строк в пределах буфера, который заполнил WinAPI.
                 let r = unsafe { std::ptr::read_unaligned(rows.add(i)) };
+                if r.dwOwningPid == 0 {
+                    continue;
+                }
                 let local = u16::from_be(r.dwLocalPort as u16);
                 let remote = u16::from_be(r.dwRemotePort as u16);
-                if local == client_port && remote == our_port {
-                    return Some(r.dwOwningPid);
-                }
+                map.entry((local, remote)).or_insert(r.dwOwningPid);
             }
-            return None;
+            return Some(map);
         }
         None
     }
 
     fn exe_path(pid: u32) -> Option<String> {
-        if let Some(p) = CACHE.lock().ok()?.as_ref().and_then(|c| c.get(&pid)).cloned() {
-            return Some(p);
+        let cached = PATHS
+            .lock()
+            .ok()?
+            .as_ref()
+            .and_then(|c| c.get(&pid))
+            .filter(|(_, at)| at.elapsed() < super::PID_PATH_TTL)
+            .map(|(p, _)| p.clone());
+        if cached.is_some() {
+            return cached;
         }
         // SAFETY: открываем процесс только на чтение имени и сразу закрываем.
         let path = unsafe {
@@ -291,19 +343,19 @@ mod procmap {
             }
             String::from_utf16_lossy(&buf[..len as usize]).to_lowercase()
         };
-        if let Ok(mut c) = CACHE.lock() {
+        if let Ok(mut c) = PATHS.lock() {
             let c = c.get_or_insert_with(HashMap::new);
-            // PID переиспользуются - кэш небольшой и время от времени сбрасывается.
             if c.len() > 256 {
-                c.clear();
+                c.retain(|_, (_, at)| at.elapsed() < super::PID_PATH_TTL);
             }
-            c.insert(pid, path.clone());
+            c.insert(pid, (path.clone(), Instant::now()));
         }
         Some(path)
     }
 
-    pub fn client_exe(client_port: u16, our_port: u16) -> Option<String> {
-        exe_path(owner_pid(client_port, our_port)?)
+    /// `started` - когда начался поиск (соединение уже принято).
+    pub fn client_exe(client_port: u16, our_port: u16, started: Instant) -> Option<String> {
+        exe_path(owner_pid(client_port, our_port, started)?)
     }
 }
 
@@ -314,7 +366,10 @@ mod procmap {
 /// arm64 и x86_64 - смещения сверены компилятором.
 #[cfg(target_os = "macos")]
 mod procmap {
+    use std::collections::{HashMap, HashSet};
     use std::ffi::c_void;
+    use std::sync::Mutex;
+    use std::time::Instant;
 
     const PROC_PIDLISTFDS: i32 = 1;
     const PROX_FDTYPE_SOCKET: u32 = 2;
@@ -400,12 +455,60 @@ mod procmap {
         }
     }
 
+    /// pid - (путь, когда прочитан) и pid, у которого нашлось прошлое
+    /// соединение: у Chrome все сокеты держит один сетевой процесс.
+    #[derive(Default)]
+    struct Cache {
+        paths: HashMap<i32, (String, Instant)>,
+        last_hit: Option<i32>,
+    }
+    static CACHE: Mutex<Option<Cache>> = Mutex::new(None);
+
     /// Соединение client_port → our_port открыла программа из папок `dirs`.
+    ///
+    /// Список pid читается на каждое соединение (один вызов), а путь - только
+    /// у новых pid и у записей старше PID_PATH_TTL: только что запущенный
+    /// браузер всегда попадает в проверку. Сокеты перебираются лишь у
+    /// процессов из `dirs`. Вызывать из spawn_blocking.
     pub fn client_in(client_port: u16, our_port: u16, dirs: &[String]) -> bool {
         let me = std::process::id() as i32;
-        pids().into_iter().filter(|&p| p > 0 && p != me).any(|pid| {
-            path(pid).is_some_and(|exe| dirs.iter().any(|d| exe.starts_with(d.as_str()))) && owns(pid, client_port, our_port)
-        })
+        let live = pids();
+        let mut candidates: Vec<i32> = Vec::new();
+        let last_hit = {
+            let Ok(mut guard) = CACHE.lock() else { return false };
+            let cache = guard.get_or_insert_with(Cache::default);
+            let live_set: HashSet<i32> = live.iter().copied().collect();
+            cache.paths.retain(|pid, _| live_set.contains(pid));
+            for &pid in live.iter().filter(|&&p| p > 0 && p != me) {
+                let fresh = cache.paths.get(&pid).filter(|(_, at)| at.elapsed() < super::PID_PATH_TTL);
+                let exe = match fresh {
+                    Some((exe, _)) => Some(exe.clone()),
+                    None => {
+                        // Путь не прочитался - не запоминаем, спросим снова.
+                        let exe = path(pid);
+                        if let Some(exe) = &exe {
+                            cache.paths.insert(pid, (exe.clone(), Instant::now()));
+                        }
+                        exe
+                    }
+                };
+                if exe.is_some_and(|exe| dirs.iter().any(|d| exe.starts_with(d.as_str()))) {
+                    candidates.push(pid);
+                }
+            }
+            cache.last_hit
+        };
+        // Сначала процесс, который владел прошлым соединением.
+        if let Some(hit) = last_hit {
+            if let Some(i) = candidates.iter().position(|&p| p == hit) {
+                candidates.swap(0, i);
+            }
+        }
+        let owner = candidates.into_iter().find(|&pid| owns(pid, client_port, our_port));
+        if let (Some(pid), Ok(mut guard)) = (owner, CACHE.lock()) {
+            guard.get_or_insert_with(Cache::default).last_hit = Some(pid);
+        }
+        owner.is_some()
     }
 
     #[cfg(test)]
@@ -422,7 +525,9 @@ mod procmap {
 }
 
 /// Соединение пришло от исключённой программы (только вход сайтов).
-fn client_bypassed(state: &State, client: &TcpStream) -> bool {
+/// Поиск владельца - системные вызовы на миллисекунды: в отдельном потоке,
+/// чтобы не держать воркер tokio с чужими соединениями.
+async fn client_bypassed(state: &State, client: &TcpStream) -> bool {
     if state.routing_policy != RoutingPolicy::Sites {
         return false;
     }
@@ -431,10 +536,18 @@ fn client_bypassed(state: &State, client: &TcpStream) -> bool {
         return false;
     }
     let (Ok(peer), Ok(local)) = (client.peer_addr(), client.local_addr()) else { return false };
+    let (client_port, our_port) = (peer.port(), local.port());
     #[cfg(windows)]
-    return procmap::client_exe(peer.port(), local.port()).is_some_and(|exe| bypass.iter().any(|dir| exe.starts_with(dir.as_str())));
-    #[cfg(not(windows))]
-    procmap::client_in(peer.port(), local.port(), &bypass)
+    let started = Instant::now();
+    tokio::task::spawn_blocking(move || {
+        #[cfg(windows)]
+        return procmap::client_exe(client_port, our_port, started)
+            .is_some_and(|exe| bypass.iter().any(|dir| exe.starts_with(dir.as_str())));
+        #[cfg(not(windows))]
+        procmap::client_in(client_port, our_port, &bypass)
+    })
+    .await
+    .unwrap_or(false)
 }
 
 /// Хост, к которому ходили через вход сайтов («Подсмотреть»).
@@ -961,7 +1074,7 @@ fn load_rules(path: Option<&str>) -> (Mode, Vec<String>, Vec<String>, Vec<(Strin
     eprintln!(
         "ERROR: rules file {p} {last_err} - отказ запуска: потеря закреплений опаснее простоя"
     );
-    std::process::exit(2);
+    exit_on_startup_error(2);
 }
 
 // ─── Маршрутизация ───────────────────────────────────────────────
@@ -2076,7 +2189,7 @@ async fn handle(mut client: TcpStream, state: Arc<State>, sem: Arc<Semaphore>) {
     // Сайты пользователя - следом за назначениями (см. route_plan).
     // Исключённая программа (антидетект-браузер и т.п.): Clod Helper её не
     // трогает - напрямую, без прокси, закреплений и записи в «Подсмотреть».
-    let (pin, route, site) = if client_bypassed(&state, &client) {
+    let (pin, route, site) = if client_bypassed(&state, &client).await {
         (Pin::None, Route::Direct, None)
     } else {
         let plan = route_plan(&state, &req.host);
@@ -2521,7 +2634,8 @@ fn raise_fd_limit() {
 }
 
 /// Цикл самосупервизии: спавним себя-воркера (те же argv минус --supervise),
-/// ждём завершения, через 5с поднимаем заново. Замена VBS/wscript-циклу.
+/// ждём завершения и поднимаем заново (пауза - next_restart_delay). Замена
+/// VBS/wscript-циклу.
 /// Один супервизор на exe - эксклюзивный lock-файл (share_mode 0).
 fn run_supervisor() -> ! {
     let exe = match std::env::current_exe() {
@@ -2550,17 +2664,90 @@ fn run_supervisor() -> ! {
         .skip(1)
         .filter(|a| a != "--supervise")
         .collect();
+    let mut delay = None;
     loop {
-        match std::process::Command::new(&exe).args(&child_args).status() {
-            Ok(s) => eprintln!("supervisor: мост завершился ({s}) - перезапуск через 5с"),
-            Err(e) => eprintln!("supervisor: не удалось запустить воркер: {e}"),
+        let started = Instant::now();
+        let outcome = std::process::Command::new(&exe).args(&child_args).status();
+        let next = next_restart_delay(delay, started.elapsed());
+        delay = Some(next);
+        match outcome {
+            Ok(s) => eprintln!("supervisor: мост завершился ({s}) - перезапуск через {}с", next.as_secs()),
+            Err(e) => eprintln!("supervisor: не удалось запустить воркер: {e} - повтор через {}с", next.as_secs()),
         }
-        std::thread::sleep(Duration::from_secs(5));
+        std::thread::sleep(next);
     }
+}
+
+/// Воркер, проживший меньше, упал по причине, которая сама не пройдёт:
+/// порт занят, битый файл правил, битый адрес прокси.
+const SHORT_LIFE: Duration = Duration::from_secs(30);
+const RESTART_MIN: Duration = Duration::from_secs(5);
+const RESTART_MAX: Duration = Duration::from_secs(120);
+
+/// Пауза перед следующим запуском воркера: 5 с после долгой работы, а при
+/// падениях сразу после старта - вдвое больше прошлой, до 2 минут. Иначе
+/// постоянная причина давала ~17 тысяч запусков в сутки (и каждый раз
+/// проверку антивирусом).
+fn next_restart_delay(prev: Option<Duration>, lived: Duration) -> Duration {
+    match prev {
+        Some(p) if lived < SHORT_LIFE => (p * 2).clamp(RESTART_MIN, RESTART_MAX),
+        _ => RESTART_MIN,
+    }
+}
+
+/// Выход при ошибке запуска. Под --supervise паузу держит супервизор. На
+/// macOS мост без супервизора: его поднимает launchd (KeepAlive) через 5 с,
+/// поэтому растущую паузу выдерживаем сами, перед выходом.
+fn exit_on_startup_error(code: i32) -> ! {
+    #[cfg(target_os = "macos")]
+    launchd_pause();
+    std::process::exit(code)
+}
+
+/// Когда процесс стартовал (для паузы под launchd).
+#[cfg(target_os = "macos")]
+static BOOT: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+
+/// Пауза под launchd по прошлой паузе из файла рядом с exe: «секунды
+/// паузы, время записи (unix)». Прошлая пауза в счёт, только если запись
+/// свежая: между прошлым отказом и этим прошли та пауза и жизнь этого
+/// процесса (плюс запас). Иначе это новое падение - 5 с.
+#[cfg(any(target_os = "macos", test))]
+fn launchd_delay(saved: Option<(u64, u64)>, now_unix: u64, lived: Duration) -> Duration {
+    let prev = saved
+        .filter(|&(pause, at)| now_unix.saturating_sub(at) <= pause + lived.as_secs() + SHORT_LIFE.as_secs())
+        .map(|(pause, _)| Duration::from_secs(pause));
+    next_restart_delay(prev, lived)
+}
+
+#[cfg(target_os = "macos")]
+fn launchd_pause() {
+    // Родитель - launchd (pid 1): запуск из терминала или программой не ждёт.
+    // SAFETY: getppid без аргументов и побочных эффектов.
+    if unsafe { libc::getppid() } != 1 {
+        return;
+    }
+    let Ok(exe) = std::env::current_exe() else { return };
+    let file = exe.with_extension("restarts");
+    let saved = std::fs::read_to_string(&file).ok().and_then(|t| {
+        let mut it = t.split_whitespace().map(|n| n.parse::<u64>().ok());
+        Some((it.next()??, it.next()??))
+    });
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let lived = BOOT.get().map(|b| b.elapsed()).unwrap_or_default();
+    let pause = launchd_delay(saved, now, lived);
+    let _ = std::fs::write(&file, format!("{} {now}", pause.as_secs()));
+    eprintln!("мост не запустился - следующая попытка через {}с", pause.as_secs());
+    std::thread::sleep(pause);
 }
 
 #[tokio::main]
 async fn main() {
+    #[cfg(target_os = "macos")]
+    BOOT.get_or_init(Instant::now);
     let args = match parse_args() {
         Ok(a) => a,
         Err(e) => {
@@ -2570,7 +2757,7 @@ async fn main() {
                  [--listen 127.0.0.1:8888] [--strict-listen 127.0.0.1:8890] \
                  [--rules FILE] [--log FILE] [--quiet] [--supervise]"
             );
-            std::process::exit(1);
+            exit_on_startup_error(1);
         }
     };
 
@@ -2592,7 +2779,7 @@ async fn main() {
             Ok(u) => upstreams.push(u),
             Err(e) => {
                 eprintln!("ERROR: {e}");
-                std::process::exit(1);
+                exit_on_startup_error(1);
             }
         }
     }
@@ -2689,7 +2876,7 @@ async fn main() {
         Err(e) => {
             eprintln!("ERROR: {e}");
             eprintln!("Is another process already listening on this port?");
-            std::process::exit(1);
+            exit_on_startup_error(1);
         }
     };
 
@@ -3892,6 +4079,62 @@ mod tests {
         assert!(parse_bypass(r#"{"sites":[]}"#).unwrap().is_empty(), "старый файл без поля");
     }
 
+    #[test]
+    fn supervisor_backs_off_on_quick_failures() {
+        let s = Duration::from_secs;
+        let quick = s(1);
+        let mut prev = None;
+        let mut got = Vec::new();
+        for _ in 0..8 {
+            let d = next_restart_delay(prev, quick);
+            got.push(d.as_secs());
+            prev = Some(d);
+        }
+        assert_eq!(got, [5, 10, 20, 40, 80, 120, 120, 120]);
+        // Проработал долго и упал - снова 5 с, а следующий быстрый отказ - 10.
+        assert_eq!(next_restart_delay(Some(s(120)), s(31)), s(5));
+        assert_eq!(next_restart_delay(Some(s(5)), quick), s(10));
+        assert_eq!(next_restart_delay(Some(s(120)), s(29)), s(120));
+    }
+
+    #[test]
+    fn launchd_pause_grows_only_for_fresh_record() {
+        let s = Duration::from_secs;
+        assert_eq!(launchd_delay(None, 1000, s(0)), s(5), "первый отказ");
+        // Прошлая пауза 20 с записана 21 с назад: это тот же ряд отказов.
+        assert_eq!(launchd_delay(Some((20, 979)), 1000, s(1)), s(40));
+        assert_eq!(launchd_delay(Some((120, 870)), 1000, s(0)), s(120));
+        // Запись давняя (мост с тех пор работал) - начинаем с 5 с.
+        assert_eq!(launchd_delay(Some((80, 0)), 10_000, s(0)), s(5));
+        // Часы ушли назад - не ломаемся.
+        assert_eq!(launchd_delay(Some((10, 5000)), 1000, s(0)), s(20));
+    }
+
+    #[test]
+    fn old_snapshot_does_not_cover_new_connection() {
+        let t0 = Instant::now();
+        let t1 = t0 + Duration::from_millis(5);
+        assert!(!snapshot_covers(t0, t1), "снимок до соединения - перечитать");
+        assert!(snapshot_covers(t1, t0));
+        assert!(snapshot_covers(t0, t0));
+    }
+
+    /// Снимок таблицы, снятый для первого соединения, не мешает узнать
+    /// второе, открытое позже: старый снимок перечитывается.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn later_connection_is_found_after_cached_snapshot() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let our = listener.local_addr().unwrap().port();
+        let a = TcpStream::connect(("127.0.0.1", our)).await.unwrap();
+        let _a_srv = listener.accept().await.unwrap();
+        assert!(procmap::client_exe(a.local_addr().unwrap().port(), our, Instant::now()).is_some());
+        let b = TcpStream::connect(("127.0.0.1", our)).await.unwrap();
+        let _b_srv = listener.accept().await.unwrap();
+        let me = std::env::current_exe().unwrap().to_string_lossy().to_lowercase();
+        assert_eq!(procmap::client_exe(b.local_addr().unwrap().port(), our, Instant::now()), Some(me));
+    }
+
     /// Мост узнаёт программу по соединению: тест подключается сам к себе.
     #[cfg(windows)]
     #[tokio::test]
@@ -3900,17 +4143,17 @@ mod tests {
         let our = listener.local_addr().unwrap().port();
         let client = TcpStream::connect(("127.0.0.1", our)).await.unwrap();
         let (server_side, _) = listener.accept().await.unwrap();
-        let exe = procmap::client_exe(client.local_addr().unwrap().port(), our).expect("владелец соединения");
+        let exe = procmap::client_exe(client.local_addr().unwrap().port(), our, Instant::now()).expect("владелец соединения");
         let me = std::env::current_exe().unwrap().to_string_lossy().to_lowercase();
         assert_eq!(exe, me);
 
         let mut st = test_state(RoutingPolicy::Sites, Vec::new());
-        assert!(!client_bypassed(&st, &server_side), "список пуст");
+        assert!(!client_bypassed(&st, &server_side).await, "список пуст");
         let dir = std::path::Path::new(&me).parent().unwrap().to_string_lossy().to_string();
         st.sites.set_bypass(vec![norm_dir(&dir)]);
-        assert!(client_bypassed(&st, &server_side));
+        assert!(client_bypassed(&st, &server_side).await);
         st.routing_policy = RoutingPolicy::Rules;
-        assert!(!client_bypassed(&st, &server_side), "только вход сайтов");
+        assert!(!client_bypassed(&st, &server_side).await, "только вход сайтов");
     }
 
     #[tokio::test]

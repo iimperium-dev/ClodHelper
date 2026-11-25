@@ -30,14 +30,11 @@ pub fn validate_health(value: &serde_json::Value) -> Result<(), String> {
 }
 
 pub async fn check_bridge() -> Result<(), String> {
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(3))
-        .build()
+    let client = crate::monitor::loopback_client()
         .map_err(|_| "Не удалось проверить мост Claude".to_string())?;
     let response = client
         .get(format!("http://127.0.0.1:{PROXY_PORT}/healthz"))
+        .timeout(std::time::Duration::from_secs(3))
         .send()
         .await
         .map_err(|_| format!("Мост Claude не отвечает на порту {PROXY_PORT}"))?
