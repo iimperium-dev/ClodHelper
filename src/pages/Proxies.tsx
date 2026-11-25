@@ -328,6 +328,10 @@ export function Proxies() {
   const [tagInput, setTagInput] = useState("");
 
   const [confirmDel, setConfirmDel] = useState<number | null>(null);
+  // Вопрос - по номеру в пуле: пул сменился (купили прокси по ссылке, другое
+  // окно) - номер мог уехать на другой прокси, вопрос снимаем.
+  const poolKey = pool?.join("\n");
+  useEffect(() => setConfirmDel(null), [poolKey]);
 
   const load = useCallback(async () => {
     setPool(await proxiesGet().catch(() => []));

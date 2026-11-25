@@ -53,6 +53,9 @@ function Strip({ text, note, confirmLabel, busy, disabled, error, onConfirm, onC
   latest.current = { busy, onCancel };
 
   useEffect(() => {
+    const node = ref.current;
+    // Откуда спросили (кнопка «−», корзина, пункт окна) - туда вернём фокус.
+    const opener = document.activeElement as HTMLElement | null;
     // Кадр спустя: меню, из которого пришли, успевает закрыться и вернуть фокус.
     const raf = requestAnimationFrame(() => {
       cancelRef.current?.focus({ preventScroll: true });
@@ -75,6 +78,9 @@ function Strip({ text, note, confirmLabel, busy, disabled, error, onConfirm, onC
       cancelAnimationFrame(raf);
       window.removeEventListener("pointerdown", outside, true);
       window.removeEventListener("keydown", esc, true);
+      const active = document.activeElement;
+      const lost = !active || active === document.body || !!node?.contains(active);
+      if (lost && opener && opener !== document.body && opener.isConnected) opener.focus({ preventScroll: true });
     };
   }, []);
 
@@ -84,6 +90,8 @@ function Strip({ text, note, confirmLabel, busy, disabled, error, onConfirm, onC
       role="group"
       aria-label="Подтверждение"
       data-keep-editing
+      // Нажатие в полосе - не начало перетаскивания строки, в которой она лежит.
+      onPointerDown={(e) => e.stopPropagation()}
       className={cn("scroll-my-4 rounded-xl border border-vb-loss/35 bg-vb-loss/[0.06] px-3 py-2", className)}
     >
       {/* Узко - кнопки уходят строкой ниже, вправо; текст не налезает на них. */}

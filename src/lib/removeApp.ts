@@ -1,6 +1,6 @@
 import { browserPolicyStatus, leakGuardStatus } from "./api";
 
-/** Приложение → сервис защиты от прямого соединения (как guard_service_of в Rust). */
+/** Приложение и его сервис защиты от прямого соединения (как guard_service_of в Rust). */
 const GUARD: Record<string, string> = { telegram: "telegram", "claude-desktop": "claude", codex: "codex" };
 
 /**

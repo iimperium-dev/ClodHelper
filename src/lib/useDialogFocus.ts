@@ -26,6 +26,8 @@ export function useDialogFocus(
       el?.focus({ preventScroll: true });
     }, 60);
     const key = (e: KeyboardEvent) => {
+      // Esc уже обработал кто-то внутри окна (подсказка, список) - окно не трогаем.
+      if (e.defaultPrevented) return;
       if (e.key === "Escape" && escRef.current) {
         e.preventDefault();
         escRef.current();

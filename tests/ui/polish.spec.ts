@@ -73,6 +73,8 @@ test("приложения: окно настроек - убрать в два �
   await page.keyboard.press("Escape");
   await expect(ask(page)).toHaveCount(0);
   await expect(dialog).toBeVisible();
+  // Фокус вернулся туда, откуда спросили.
+  await expect(dialog.getByRole("button", { name: "Убрать из списка" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
   // Фокус вернулся на шестерёнку.

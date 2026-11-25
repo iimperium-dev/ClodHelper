@@ -54,6 +54,12 @@ export function TrayPopup() {
 
   const loading = status === null;
   const running = status?.running ?? false;
+  // Мост запустили или остановили (тут же, в окне, сам) - старая ошибка
+  // уже не про то, что сейчас.
+  useEffect(() => {
+    setActionError(null);
+    setTestResult((r) => (r && !r.ok ? null : r));
+  }, [running]);
 
   const act = async (
     kind: "start" | "stop" | "restart",

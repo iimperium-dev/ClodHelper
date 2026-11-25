@@ -304,13 +304,23 @@ export function AppSettingsModal({
     setRemoveBusy(false);
     setRemoveError(null);
   }, [appId]);
+  // Ответ про защиту приходит позже: не дописываем его в окно другого приложения.
+  const askFor = useRef<string | null>(null);
+  useEffect(() => {
+    askFor.current = null;
+  }, [appId]);
+  const removing = useRef(false);
   const askRemove = async () => {
     if (!appId) return;
-    const note = await removeConsequences(appId);
+    askFor.current = appId;
     setRemoveError(null);
-    setRemoveAsk({ note });
+    setRemoveAsk({ note: null });
+    const note = await removeConsequences(appId);
+    if (askFor.current === appId && note) setRemoveAsk((r) => (r ? { note } : r));
   };
   const confirmRemove = async () => {
+    if (removing.current) return;
+    removing.current = true;
     setRemoveBusy(true);
     setRemoveError(null);
     try {
@@ -318,6 +328,7 @@ export function AppSettingsModal({
     } catch (e) {
       setRemoveError(String(e));
     } finally {
+      removing.current = false;
       setRemoveBusy(false);
     }
   };

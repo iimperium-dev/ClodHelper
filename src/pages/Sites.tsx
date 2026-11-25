@@ -124,7 +124,7 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   /** Подсказка снизу. sticky - инструкция с действием («перезапустите…»):
-      висит, пока её не закроют крестиком или не начнут следующее действие. */
+      висит, пока её не закроют крестиком или не придёт новая подсказка. */
   const [noteState, setNoteState] = useState<{ text: string; sticky: boolean } | null>(null);
   const note = noteState?.text ?? null;
   const setNote = useCallback(
@@ -279,7 +279,8 @@ export function Sites({ onOpenApps }: { onOpenApps: () => void }) {
     const text = error ?? noteState?.text;
     if (!text || (!error && noteState?.sticky)) return;
     const t = window.setTimeout(() => {
-      setNote(null);
+      // Ошибка поверх инструкции: уходит только ошибка, инструкция остаётся.
+      if (!noteState?.sticky) setNote(null);
       setError(null);
     }, readMs(text, error !== null));
     return () => window.clearTimeout(t);

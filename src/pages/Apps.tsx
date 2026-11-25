@@ -360,39 +360,45 @@ export function Apps() {
     error: string | null;
   } | null>(null);
   const askSeq = useRef(0);
+  const removing = useRef(false);
   const askRemove = async (id: string) => {
     const app = apps?.find((a) => a.id === id);
     if (!app) return;
     const seq = ++askSeq.current;
+    // Вопрос - сразу; что ещё снимется, дописываем, когда узнаем (статус
+    // защиты может идти секунду: он проверяет соединение).
+    setRemoveAsk({ id, name: app.name, note: null, busy: false, error: null });
     const note = await removeConsequences(id);
-    if (seq !== askSeq.current) return;
-    setRemoveAsk({ id, name: app.name, note, busy: false, error: null });
+    if (seq !== askSeq.current || !note) return;
+    setRemoveAsk((r) => (r?.id === id ? { ...r, note } : r));
   };
   const cancelRemove = () => {
+    if (removing.current) return;
     askSeq.current++;
     setRemoveAsk(null);
   };
   const confirmRemove = async () => {
     const ask = removeAsk;
-    if (!ask || ask.busy) return;
+    // Ref, а не state: два быстрых клика не уберут дважды.
+    if (!ask || removing.current) return;
+    removing.current = true;
     setRemoveAsk({ ...ask, busy: true, error: null });
     try {
       await removeApp(ask.id);
       setRemoveAsk((r) => (r?.id === ask.id ? null : r));
     } catch (e) {
       setRemoveAsk((r) => (r?.id === ask.id ? { ...r, busy: false, error: String(e) } : r));
+    } finally {
+      removing.current = false;
     }
   };
-  /** Полоса подтверждения - под строкой (список) или под папкой (сетка). */
-  const lastAsk = useRef(removeAsk);
-  if (removeAsk) lastAsk.current = removeAsk;
+  /** Полоса подтверждения - под строкой (список) или под папкой (сетка).
+      Пока полоса уезжает, AnimatePresence держит её с прежним текстом. */
   const renderConfirm = (ids: string[], className?: string) => {
-    // Пока полоса уезжает, в ней тот же текст - высота не скачет.
-    const shown = removeAsk ?? lastAsk.current;
-    const view = shown && ids.includes(shown.id) ? shown : null;
+    const view = removeAsk && ids.includes(removeAsk.id) ? removeAsk : null;
     return (
       <ConfirmStrip
-        open={!!removeAsk && ids.includes(removeAsk.id)}
+        open={!!view}
         text={view ? `Убрать ${view.name} из списка?` : ""}
         note={view?.note}
         confirmLabel="Убрать"
