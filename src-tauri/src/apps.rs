@@ -589,25 +589,11 @@ pub fn browser_mode(p: &AppProfile) -> &'static str {
     }
 }
 
-/// Мост поднимает вход сайтов (≥1.9)? Проба версии exe кэшируется.
+/// Мост поднимает вход сайтов (≥1.9)? Проба версии exe кэшируется в tasks.
 pub fn sites_listener_available() -> bool {
-    use std::sync::Mutex;
-    static CACHE: Mutex<Option<(std::time::SystemTime, bool)>> = Mutex::new(None);
-    let Some(exe) = crate::shim::bridge_exe_path().filter(|p| p.exists()) else {
-        return false;
-    };
-    let mtime = std::fs::metadata(&exe).and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
-    if let Ok(mut c) = CACHE.lock() {
-        if let Some((t, v)) = *c {
-            if t == mtime {
-                return v;
-            }
-        }
-        let v = crate::tasks::bridge_supports_sites(&exe);
-        *c = Some((mtime, v));
-        return v;
-    }
-    false
+    crate::shim::bridge_exe_path()
+        .filter(|p| p.exists())
+        .is_some_and(|exe| crate::tasks::bridge_supports_sites(&exe))
 }
 
 /// WebRTC (звонки, видео в браузере) ходит по UDP к STUN-серверам мимо
@@ -625,25 +611,11 @@ const WEBRTC_FLAGS: [&str; 2] = [
 const WEBRTC_GUARD: &str =
     "--webrtc-ip-handling-policy=disable_non_proxied_udp --force-webrtc-ip-handling-policy=disable_non_proxied_udp";
 
-/// Мост поднимает закреплённые входы (≥1.7)? Проба версии exe кэшируется.
+/// Мост поднимает закреплённые входы (≥1.7)? Проба версии exe кэшируется в tasks.
 fn pinned_listeners_available() -> bool {
-    use std::sync::Mutex;
-    static CACHE: Mutex<Option<(std::time::SystemTime, bool)>> = Mutex::new(None);
-    let Some(exe) = crate::shim::bridge_exe_path().filter(|p| p.exists()) else {
-        return false;
-    };
-    let mtime = std::fs::metadata(&exe).and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
-    if let Ok(mut c) = CACHE.lock() {
-        if let Some((t, v)) = *c {
-            if t == mtime {
-                return v;
-            }
-        }
-        let v = crate::tasks::bridge_supports_pin_listen(&exe);
-        *c = Some((mtime, v));
-        return v;
-    }
-    false
+    crate::shim::bridge_exe_path()
+        .filter(|p| p.exists())
+        .is_some_and(|exe| crate::tasks::bridge_supports_pin_listen(&exe))
 }
 
 /// Строка прокси для локального моста, которую впрыскиваем приложению.
