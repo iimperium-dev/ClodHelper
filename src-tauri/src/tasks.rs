@@ -144,6 +144,15 @@ pub const SERVICE_GROUPS: &[(&str, &[&str])] = &[
             "o1158394.ingest.us.sentry.io",
             "http-intake.logs.us5.datadoghq.com",
             "cdn.growthbook.io",
+            // Антифрод Sift на claude.ai и в Claude Desktop. Сейчас он ходит
+            // через s-cdn.anthropic.com (это имя ведёт на сервер Sift
+            // hexagon-cdn.com) и уже покрыт anthropic.com. Свои домены Sift -
+            // на случай, если скрипт обратится к ним напрямую: иначе отпечаток
+            // устройства ушёл бы с настоящего IP, а не с IP Claude.
+            "sift.com",
+            "siftscience.com",
+            "hexagon-cdn.com",
+            "hexagon-analytics.com",
         ],
     ),
     (
@@ -1009,6 +1018,18 @@ mod block_tests {
         // Кабинеты, куда люди ходят сами, не трогаем; YouTube и Google - тоже.
         for d in ["adsense.com", "analytics.google.com", "youtube.com", "google.com", "googlevideo.com"] {
             assert!(!GOOGLE_ADS_DOMAINS.contains(&d), "{d}");
+        }
+    }
+
+    #[test]
+    fn sift_goes_with_claude_and_is_not_blocked() {
+        let (_, claude) = SERVICE_GROUPS.iter().find(|(g, _)| *g == "anthropic").unwrap();
+        let s = crate::settings::Settings::default();
+        for d in ["sift.com", "siftscience.com", "hexagon-cdn.com", "hexagon-analytics.com"] {
+            // Через прокси Claude, с его IP...
+            assert!(claude.contains(&d), "{d}");
+            // ...но не блокируем: без антифрода вход в Claude выглядит подозрительно.
+            assert!(!block_domains(&s).contains(&d), "{d}");
         }
     }
 }
