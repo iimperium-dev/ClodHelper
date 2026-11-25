@@ -72,6 +72,10 @@ pub fn detect_cursor() -> CursorInfo {
 fn run_silent(program: &str, args: &[&str]) -> Option<String> {
     let mut cmd = Command::new(program);
     cmd.args(args);
+    // macOS: node/npm/python ищутся по PATH login-шелла (Homebrew, nvm);
+    // до его готовности ждём барьер, чтобы мастер не решил «node нет».
+    #[cfg(not(target_os = "windows"))]
+    cmd.env("PATH", crate::macos::user_path());
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
