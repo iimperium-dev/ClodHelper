@@ -722,6 +722,12 @@ pub fn report_bridge(msg: &str, place: &str) {
     spawn_crash("bridge", msg, "", place, place.split(':').next().unwrap_or(""));
 }
 
+/// Не запустилось или не перезапустилось встроенное приложение («… не
+/// закрылся», лаунчер Claude упал). Предложение перезапуска сюда не попадает.
+pub fn report_app(msg: &str, place: &str) {
+    spawn_crash("rust", msg, "", place, place.rsplit("::").next().unwrap_or(""));
+}
+
 /// Ошибка установки обновления.
 pub fn report_update(msg: &str) {
     spawn_crash("update", msg, "", "updater::install", "install");

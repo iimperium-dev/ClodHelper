@@ -227,16 +227,65 @@ pub fn launch() -> Result<(), String> {
     run_script(&launch_args()).map(|_| ())
 }
 
-/// Открыт ли Claude Desktop: главный процесс именно этой установки
-/// (claude.exe Claude Code в терминалах не считается).
+/// Claude Desktop открыт мимо прокси: не ошибка, а предложение. Интерфейс
+/// узнаёт его по точному тексту и показывает кнопку «Перезапустить», в
+/// отчёты об ошибках оно не уходит.
+pub const RESTART_OFFER: &str = "Claude Desktop открыт без прокси. Перезапустить его с прокси?";
+
+/// Лаунчер отказал, потому что Claude Desktop уже открыт (его увидел
+/// скрипт, а детект - нет: например, гонка с запуском).
+pub fn is_already_running_error(e: &str) -> bool {
+    e.contains("Claude Desktop уже запущен")
+}
+
+/// Процесс по этому пути - та же установка Claude Desktop, как в
+/// Test-ClaudeDesktopRunning лаунчера: тот же exe, прежняя версия пакета
+/// Store (обновление из Store оставляет старую версию открытой) или
+/// соседняя папка app-* установщика.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn same_install(installed: &str, msix: bool, process: &str) -> bool {
+    let (installed, process) = (installed.to_lowercase(), process.to_lowercase());
+    if installed == process {
+        return true;
+    }
+    let parts: Vec<&str> = process.split('\\').collect();
+    let n = parts.len();
+    if msix && n >= 3 && parts[n - 1] == "claude.exe" {
+        let pkg = if parts[n - 2] == "app" { parts[n - 3] } else { parts[n - 2] };
+        if pkg.starts_with("anthropicpbc.claude_") || pkg.starts_with("claude_") {
+            return true;
+        }
+    }
+    // Папка exe и всё, что выше неё.
+    let split = |p: &str| -> Option<(String, String)> {
+        let (dir, _) = p.rsplit_once('\\')?;
+        let (root, leaf) = dir.rsplit_once('\\')?;
+        Some((leaf.to_string(), root.to_string()))
+    };
+    match (split(&installed), split(&process)) {
+        (Some((a, ra)), Some((b, rb))) => a.starts_with("app-") && b.starts_with("app-") && ra == rb,
+        _ => false,
+    }
+}
+
+/// PID открытого Claude Desktop этой установки (claude.exe Claude Code в
+/// терминалах не считается: у него другой путь).
+#[cfg(target_os = "windows")]
+pub fn running_pids() -> Vec<u32> {
+    let Some(i) = detect() else { return Vec::new() };
+    let msix = matches!(i.kind, LaunchKind::Msix);
+    crate::apps::pids_where("claude.exe", |path| same_install(&i.exe_path, msix, path))
+}
+
+/// Открыт ли Claude Desktop этой установки, в том числе прежняя версия.
 pub fn running() -> bool {
-    let Some(i) = detect() else { return false };
     #[cfg(target_os = "windows")]
     {
-        !crate::apps::main_pids("claude.exe", Some(&i.exe_path)).is_empty()
+        !running_pids().is_empty()
     }
     #[cfg(not(target_os = "windows"))]
     {
+        let Some(i) = detect() else { return false };
         let app = i.exe_path.trim_end_matches('/');
         Command::new("/usr/bin/pgrep")
             .args(["-f", &format!("{app}/Contents/MacOS/Claude")])
@@ -294,6 +343,21 @@ pub fn install_launcher() -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn same_install_matches_launcher_rules() {
+        let store = r"C:\Program Files\WindowsApps\AnthropicPBC.Claude_1.2.0.0_x64__fnn82j28hfe8t\app\Claude.exe";
+        let old = r"C:\Program Files\WindowsApps\AnthropicPBC.Claude_1.1.0.0_x64__fnn82j28hfe8t\app\claude.exe";
+        assert!(same_install(store, true, store));
+        assert!(same_install(store, true, old), "прежняя версия пакета Store");
+        assert!(!same_install(store, true, r"C:\Users\u\.local\bin\claude.exe"), "Claude Code в терминале");
+        let sq = r"C:\Users\u\AppData\Local\AnthropicClaude\app-0.9.3\claude.exe";
+        assert!(same_install(sq, false, r"C:\Users\u\AppData\Local\AnthropicClaude\app-0.9.2\Claude.exe"));
+        assert!(!same_install(sq, false, r"C:\Users\u\AppData\Local\Other\app-1\claude.exe"));
+        assert!(!same_install(sq, false, old), "у установщика пакет Store не считается");
+        assert!(is_already_running_error("Claude Desktop уже запущен. Полностью закройте его"));
+        assert!(!is_already_running_error(RESTART_OFFER));
+    }
 
     #[test]
     fn accepts_store_manifest_identity_and_legacy_installation() {

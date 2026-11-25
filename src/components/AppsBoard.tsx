@@ -31,6 +31,8 @@ interface Props {
   describe: (app: AppProfileStatus) => RowInfo;
   icons: Record<string, string>;
   onLaunch: (id: string) => Promise<void>;
+  /** Плитки и меню: у них нет своей строки для ошибки - её показывает страница. */
+  onError?: (id: string, e: unknown) => void;
   onRemove: (id: string) => void;
   onSettings: (id: string) => void;
 }
@@ -88,9 +90,14 @@ export function AppsBoard({
   describe,
   icons,
   onLaunch,
+  onError,
   onRemove,
   onSettings,
 }: Props) {
+  // Действие с плитки или из меню: ошибка - странице, а не в пустоту
+  // (необработанная ушла бы в отчёты как сбой интерфейса).
+  const fire = (id: string, p: Promise<unknown> | unknown) =>
+    void Promise.resolve(p).catch((e) => onError?.(id, e));
   const reduced = !!useReducedMotion();
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   const byId = new Map(apps.map((a) => [a.id, a]));
@@ -110,8 +117,8 @@ export function AppsBoard({
   const raf = useRef<number | null>(null);
 
   // Последние значения - для слушателей окна, живущих дольше одного рендера.
-  const latest = useRef({ layout, grid, editing, onLayout, onEditing, apps, describe, onLaunch, reduced });
-  latest.current = { layout, grid, editing, onLayout, onEditing, apps, describe, onLaunch, reduced };
+  const latest = useRef({ layout, grid, editing, onLayout, onEditing, apps, describe, onLaunch, fire, reduced });
+  latest.current = { layout, grid, editing, onLayout, onEditing, apps, describe, onLaunch, fire, reduced };
 
   /** Куда встанет приложение, если отпустить в точке (x, y). null - оставить как есть. */
   const targetAt = (x: number, y: number, id: string, cur: AppsLayout): Target | null => {
@@ -226,7 +233,7 @@ export function AppsBoard({
         const app = L.apps.find((a) => a.id === p.id);
         if (app?.installed) {
           const info = L.describe(app);
-          void (info.action ? info.action.run() : L.onLaunch(app.id));
+          L.fire(app.id, info.action ? info.action.run() : L.onLaunch(app.id));
         }
       }
       return;
@@ -302,11 +309,11 @@ export function AppsBoard({
     if (app.installed) {
       items.push(
         info.action
-          ? { label: info.action.label, run: () => void info.action!.run() }
-          : { label: "Открыть", run: () => void onLaunch(app.id) },
+          ? { label: info.action.label, run: () => fire(app.id, info.action!.run()) }
+          : { label: "Открыть", run: () => fire(app.id, onLaunch(app.id)) },
       );
       for (const m of info.menu.filter((m) => !m.danger || !/Удалить|Убрать/.test(m.label))) {
-        items.push({ label: m.label, run: () => void m.run(), danger: m.danger });
+        items.push({ label: m.label, run: () => fire(app.id, m.run()), danger: m.danger });
       }
     }
     items.push({ divider: true, label: "", run: () => {} });
