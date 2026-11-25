@@ -6,7 +6,8 @@ import { CountryFlag } from "./CountryFlag";
 import { ProxyInputField, useProxyInput } from "./ProxyInput";
 import { checkProxy } from "../lib/api";
 import { cn } from "../lib/cn";
-import type { ProxyState } from "../lib/status";
+import { useStatus, type ProxyState } from "../lib/status";
+import { MutedLine } from "./ProxyPoolViews";
 import type { ProxyCheckResult } from "../lib/types";
 import { CopyIp, hostOnly, hostPort } from "../pages/Proxies";
 
@@ -90,6 +91,7 @@ export function ProxyBackups({
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmDel, setConfirmDel] = useState<string | null>(null);
+  const { setAlertMuted } = useStatus();
 
   const parentState = states[parentIndex];
   const parentGeo = geo[hostPort(parent)];
@@ -242,6 +244,7 @@ export function ProxyBackups({
                   )
                 )}
               </div>
+              {st?.muted && live === "down" && <MutedLine onUnmute={() => void setAlertMuted(url, false).catch(() => {})} />}
             </div>
             {confirmDel === url ? (
               <div className="flex shrink-0 items-center gap-1.5 rounded-lg border border-vb-loss/40 bg-vb-loss/[0.06] px-2 py-1">

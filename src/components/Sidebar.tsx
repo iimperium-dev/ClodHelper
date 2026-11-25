@@ -83,17 +83,18 @@ interface Props {
 /** Короткая подпись проблемы с прокси: какой именно и что с ним. */
 function proxyProblemLabel(proxies: ProxyState[]): string | null {
   const pool = poolOnly(proxies);
-  const down = pool.filter((p) => p.state === "down");
   // Упавший, но подменённый живым резервом - трафик идёт, это не «не отвечает».
-  const lost = down.filter((p) => p.coveredBy === undefined);
-  if (pool.length > 0 && lost.length === pool.length) {
+  if (pool.length > 0 && pool.every((p) => p.state === "down" && p.coveredBy === undefined)) {
     return pool.length > 1 ? "Прокси не отвечают" : "Прокси не отвечает";
   }
+  // Скрытые человеком («знаю, не оплатил») поломкой не считаем.
+  const down = pool.filter((p) => p.state === "down" && !p.muted);
+  const lost = down.filter((p) => p.coveredBy === undefined);
   if (lost.length > 1) return `${lost.length} прокси не отвечают`;
   if (lost.length === 1) return pool[0] === lost[0] ? "Основной прокси не отвечает" : "1 прокси не отвечает";
   if (down.length > 0) return "Работает резервный прокси";
-  if (pool.some((p) => p.state === "unstable")) return "Прокси нестабилен";
-  if (proxies.some((p) => p.backupOf !== undefined && p.state === "down")) return "Резервный прокси не отвечает";
+  if (pool.some((p) => p.state === "unstable" && !p.muted)) return "Прокси нестабилен";
+  if (proxies.some((p) => p.backupOf !== undefined && p.state === "down" && !p.muted)) return "Резервный прокси не отвечает";
   return null;
 }
 

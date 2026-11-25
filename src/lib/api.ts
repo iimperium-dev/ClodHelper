@@ -460,6 +460,16 @@ export async function proxyLabelsGet(): Promise<Record<string, string>> {
   return invoke<Record<string, string>>("proxy_labels_get");
 }
 
+/** URL прокси, о поломке которых не предупреждаем (человек скрыл). */
+export async function proxyAlertsMutedGet(): Promise<string[]> {
+  return invoke<string[]>("proxy_alerts_muted_get");
+}
+
+/** Скрыть (mute) или вернуть предупреждение «не отвечает» о прокси. */
+export async function proxyAlertMute(url: string, mute: boolean): Promise<string[]> {
+  return invoke<string[]>("proxy_alert_mute", { url, mute });
+}
+
 /** Проблема с файлом моста (удалён антивирусом); null - всё в порядке. */
 export async function bridgeFileIssue(): Promise<BridgeFileIssue | null> {
   return invoke<BridgeFileIssue | null>("bridge_file_issue");

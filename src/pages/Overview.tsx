@@ -172,6 +172,7 @@ export function Overview({ onOpenProxies }: Props) {
     refresh,
     refreshPoolPing,
     bridgeFile,
+    setAlertMuted,
   } = useStatus();
 
   const [busy, setBusy] = useState<"start" | "stop" | "restart" | "test" | null>(null);
@@ -206,9 +207,10 @@ export function Overview({ onOpenProxies }: Props) {
   const carriesClaude = (i: number) => (pins?.assign.anthropic ?? 0) === i;
   // Прокси с проблемами: каждый - отдельной строкой с последствиями.
   // Прокси в России работает, но Claude через него не откроется.
+  // Скрытое человеком предупреждение («знаю, не оплатил») здесь не висит.
   const issues = proxies
     .map((p, i) => ({ p, i, ru: p.backupOf === undefined && p.state !== "down" && inRussia(p) && carriesClaude(i) }))
-    .filter(({ p, ru }) => p.state === "down" || p.state === "unstable" || ru);
+    .filter(({ p, ru }) => (!p.muted && (p.state === "down" || p.state === "unstable")) || ru);
   const issueKey = proxies
     .map((p, i) => (p.state === "down" || p.state === "unstable" || inRussia(p) ? `${i}:${p.state}` : ""))
     .filter(Boolean)
@@ -225,6 +227,25 @@ export function Overview({ onOpenProxies }: Props) {
   // Раскрытая строка проблемы (URL прокси): причина и одна кнопка.
   const [openIssue, setOpenIssue] = useState<string | null>(null);
   const [causeBusy, setCauseBusy] = useState<string | null>(null);
+  // Только что скрытое предупреждение: строка «скрыто · Вернуть» на несколько секунд.
+  const [justMuted, setJustMuted] = useState<{ url: string; title: string } | null>(null);
+  useEffect(() => {
+    if (!justMuted) return;
+    const t = window.setTimeout(() => setJustMuted(null), 8000);
+    return () => window.clearTimeout(t);
+  }, [justMuted]);
+  const muteAlert = async (url: string, title: string, mute: boolean) => {
+    setCauseBusy(url);
+    try {
+      await setAlertMuted(url, mute);
+      setOpenIssue(null);
+      setJustMuted(mute ? { url, title } : null);
+    } catch (e) {
+      setActionError(String(e));
+    } finally {
+      setCauseBusy(null);
+    }
+  };
   const poolSize = proxies.filter((p) => p.backupOf === undefined).length;
   const bridgeOutdated = running && (versions?.outdated ?? false);
 
@@ -527,10 +548,14 @@ export function Overview({ onOpenProxies }: Props) {
                         )}
                       />
                       <span className="min-w-0 flex-1">
+                        {/* Имя - главным, адрес - тише второй строкой (как на «Прокси»).
+                            Имени нет - главным становится адрес. */}
                         <span className="flex items-baseline gap-2 text-[12px]">
-                          <span className="min-w-0 truncate">
-                            {name && <span className="text-vb-silver">{name} </span>}
-                            <span className="font-mono text-vb-silver-dim">{p.host}</span>
+                          <span
+                            data-testid="proxy-issue-title"
+                            className={cn("min-w-0 truncate", name ? "font-medium text-vb-silver" : "font-mono text-vb-silver")}
+                          >
+                            {name || p.host}
                           </span>
                           <span className={cn("ml-auto shrink-0", p.state === "down" && !ru ? "text-vb-loss/80" : "text-vb-warn/80")}>
                             {p.backupOf !== undefined ? "резерв " : ""}
@@ -543,6 +568,11 @@ export function Overview({ onOpenProxies }: Props) {
                             )}
                           />
                         </span>
+                        {name && (
+                          <span data-testid="proxy-issue-addr" className="mt-0.5 block truncate font-mono text-[11px] leading-snug text-vb-silver-faint">
+                            {p.host}
+                          </span>
+                        )}
                         {impact && (
                           <span
                             className={cn(
@@ -578,6 +608,20 @@ export function Overview({ onOpenProxies }: Props) {
                                 {busyHere && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                                 {ACTION_LABEL[cause.action]}
                               </Button>
+                              {/* Знаю, почему не работает (например, не оплачен) - не напоминать,
+                                  пока он снова не заработает. Проверки идут как раньше. */}
+                              {p.state === "down" && !ru && (
+                                <button
+                                  type="button"
+                                  data-testid="proxy-issue-mute"
+                                  onClick={() => void muteAlert(p.url, name || p.host, true)}
+                                  disabled={busyHere}
+                                  title="Не напоминать, пока прокси снова не заработает. Вернуть можно на странице «Прокси»"
+                                  className="rounded-md px-1.5 py-1 text-[12px] text-vb-silver-faint transition-colors hover:text-vb-silver disabled:opacity-40"
+                                >
+                                  Скрыть
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 onClick={onOpenProxies}
@@ -595,6 +639,23 @@ export function Overview({ onOpenProxies }: Props) {
                 );
               })}
             </ul>
+          )}
+          {justMuted && (
+            <p
+              data-testid="proxy-muted-note"
+              className="flex items-center gap-2 border-t border-vb-border/70 px-4 py-2 text-[12px] text-vb-silver-faint"
+            >
+              <span className="min-w-0 truncate">
+                Предупреждение о <span className="text-vb-silver-dim">{justMuted.title}</span> скрыто
+              </span>
+              <button
+                type="button"
+                onClick={() => void muteAlert(justMuted.url, justMuted.title, false)}
+                className="ml-auto shrink-0 rounded-md px-1.5 py-0.5 text-vb-silver transition-colors hover:text-vb-fg"
+              >
+                Вернуть
+              </button>
+            </p>
           )}
         </motion.section>
       )}
