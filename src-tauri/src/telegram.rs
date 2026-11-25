@@ -189,19 +189,105 @@ fn mark_prompted() {
 /// пользователем, но искать настройку ему не нужно. Дальше не навязываемся.
 /// Прав администратора (защита от утечек) здесь не просим: их окно - только
 /// по действию пользователя («Подключить»).
+///
+/// Монитор зовёт её раз в минуту. Проверки - от дешёвых к дорогим: полный
+/// статус (детект программ, перебор процессов, таблица соединений) - только
+/// когда Telegram установлен и запущен, а мост принимает SOCKS. Вопрос
+/// закрыт до конца работы программы, если окно уже показывали или Telegram
+/// уже ходит через мост. Telegram не найден - следующая проверка через
+/// NOT_FOUND_RECHECK (вдруг его поставят).
 pub fn auto_prompt_once() {
-    if crate::settings::load().telegram_prompted {
+    use std::sync::atomic::Ordering;
+    use std::time::Instant;
+    if AUTO_DONE.load(Ordering::Relaxed) {
+        return;
+    }
+    let mut next = AUTO_NEXT.lock().unwrap_or_else(|e| e.into_inner());
+    if next.is_some_and(|t| Instant::now() < t) {
+        return;
+    }
+    *next = None;
+    let s = crate::settings::load();
+    if s.telegram_prompted {
+        AUTO_DONE.store(true, Ordering::Relaxed);
+        return;
+    }
+    let Some(app_path) = installed_path(&s) else {
+        *next = Some(Instant::now() + NOT_FOUND_RECHECK);
+        return;
+    };
+    if !socks_listening() || !running_now() {
         return;
     }
     let st = status();
-    if st.app_path.is_none() || !st.running || !st.socks_ready || st.via_bridge > 0 || st.direct == 0
-    {
-        return;
+    match prompt_decision(&st) {
+        Prompt::Closed => AUTO_DONE.store(true, Ordering::Relaxed),
+        Prompt::Wait => {}
+        Prompt::Show => {
+            let path = st.app_path.unwrap_or(app_path);
+            if open_proxy_window(&path).is_ok() {
+                mark_prompted();
+                AUTO_DONE.store(true, Ordering::Relaxed);
+                tracing::info!("Telegram идёт мимо моста - показал окно «Добавить прокси»");
+            }
+        }
     }
-    if open_proxy_window(st.app_path.as_deref().unwrap_or_default()).is_ok() {
-        mark_prompted();
-        tracing::info!("Telegram идёт мимо моста - показал окно «Добавить прокси»");
+}
+
+/// Telegram не найден: искать снова не раньше чем через столько.
+const NOT_FOUND_RECHECK: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+/// Автопредложение больше не нужно (уже показывали / Telegram через мост).
+static AUTO_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Когда проверять снова (Telegram не найден).
+static AUTO_NEXT: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
+#[derive(Debug, PartialEq)]
+enum Prompt {
+    /// Показать окно «Добавить прокси».
+    Show,
+    /// Пока не о чем говорить (не запущен, нет соединений, мост без SOCKS).
+    Wait,
+    /// Telegram уже ходит через мост - предлагать больше нечего.
+    Closed,
+}
+
+fn prompt_decision(st: &TelegramStatus) -> Prompt {
+    if st.via_bridge > 0 {
+        Prompt::Closed
+    } else if st.app_path.is_none() || !st.running || !st.socks_ready || st.direct == 0 {
+        Prompt::Wait
+    } else {
+        Prompt::Show
     }
+}
+
+/// Путь к Telegram без детекта всех программ: профиль из настроек, иначе
+/// поиск самого Telegram (у него свой кэш).
+#[cfg(target_os = "windows")]
+fn installed_path(s: &crate::settings::Settings) -> Option<String> {
+    s.app_profiles
+        .iter()
+        .find(|p| p.id == crate::apps::TELEGRAM_ID)
+        .and_then(crate::apps::profile_file)
+        .or_else(|| crate::apps::find_telegram_exe().map(|p| p.to_string_lossy().to_string()))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn installed_path(_s: &crate::settings::Settings) -> Option<String> {
+    crate::macos::find_app(&["Telegram.app", "Telegram Desktop.app"])
+        .map(|p| p.to_string_lossy().to_string())
+}
+
+/// Запущен ли Telegram - по общему снимку процессов, без своего перебора.
+/// Имя то же, по которому его узнаёт полный статус: «Telegram» («.exe» на
+/// Windows).
+fn running_now() -> bool {
+    crate::apps::running_processes().iter().any(|p| is_telegram_process(&p.name))
+}
+
+fn is_telegram_process(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    n.strip_suffix(".exe").unwrap_or(&n) == "telegram"
 }
 
 #[cfg_attr(target_os = "windows", allow(dead_code))]
@@ -213,12 +299,8 @@ fn socks_listening() -> bool {
 /// (запущен?, соединений через мост, соединений мимо моста) по lsof.
 #[cfg(not(target_os = "windows"))]
 fn connections() -> (bool, u32, u32) {
-    let running = std::process::Command::new("/usr/bin/pgrep")
-        .args(["-x", "Telegram"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    if !running {
+    // Запущен ли - по общему снимку процессов (раньше - отдельный pgrep).
+    if !running_now() {
         return (false, 0, 0);
     }
     // -a: И между -c и -i; -Fn: только поле адреса («n127.0.0.1:5->127.0.0.1:8891»).
@@ -252,7 +334,37 @@ fn count_connections(lsof_fn: &str) -> (u32, u32) {
 
 #[cfg(test)]
 mod tests {
-    use super::count_connections;
+    use super::{count_connections, is_telegram_process, prompt_decision, Prompt, TelegramStatus};
+
+    #[test]
+    fn prompt_only_when_telegram_goes_around_the_bridge() {
+        let base = || TelegramStatus {
+            supported: true,
+            app_path: Some("Telegram.exe".into()),
+            running: true,
+            socks_ready: true,
+            via_bridge: 0,
+            direct: 3,
+            guarded: false,
+        };
+        assert_eq!(prompt_decision(&base()), Prompt::Show);
+        // Уже через мост - вопрос закрыт навсегда, даже если есть и прямые.
+        assert_eq!(prompt_decision(&TelegramStatus { via_bridge: 2, ..base() }), Prompt::Closed);
+        assert_eq!(prompt_decision(&TelegramStatus { direct: 0, ..base() }), Prompt::Wait);
+        assert_eq!(prompt_decision(&TelegramStatus { running: false, ..base() }), Prompt::Wait);
+        assert_eq!(prompt_decision(&TelegramStatus { socks_ready: false, ..base() }), Prompt::Wait);
+        assert_eq!(prompt_decision(&TelegramStatus { app_path: None, ..base() }), Prompt::Wait);
+    }
+
+    #[test]
+    fn telegram_process_names() {
+        for n in ["Telegram.exe", "telegram.exe", "Telegram"] {
+            assert!(is_telegram_process(n), "{n}");
+        }
+        for n in ["Telegram Helper", "Vtoroy-Acc.exe", "TelegramUpdater.exe", ""] {
+            assert!(!is_telegram_process(n), "{n}");
+        }
+    }
 
     #[test]
     fn counts_bridge_and_direct_connections() {
