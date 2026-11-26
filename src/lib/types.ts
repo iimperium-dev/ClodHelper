@@ -359,6 +359,19 @@ export interface BridgeHealth {
   strict_upstream_index?: number | null;
   /** Последние ошибки (мост 1.1.0+; у старых может отсутствовать). */
   last_errors?: BridgeErrorEntry[];
+  /** Обход VPN (мост 1.17+): null - VPN не забирает трафик. */
+  vpn_bypass?: BridgeVpnBypass | null;
+}
+
+/** Мост ходит к прокси мимо VPN-туннеля. */
+export interface BridgeVpnBypass {
+  /** Туннель VPN («utun4»). */
+  tunnel: string;
+  /** Через какой интерфейс идём мимо. */
+  via: string;
+  /** true - обошли, false - VPN не пускает, null - ещё не пробовали. */
+  ok: boolean | null;
+  ok_age_sec: number | null;
 }
 
 // ─── Прокси-пул ──────────────────────────────────────────────────

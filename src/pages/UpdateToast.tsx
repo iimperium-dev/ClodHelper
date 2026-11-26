@@ -16,10 +16,13 @@ const LIFETIME_MS = 12_000;
 */
 export function UpdateToast() {
   // Что показываем: «update-X» - вышло обновление, иначе id рассылки.
-  const id = new URLSearchParams(window.location.search).get("n") ?? "";
+  const q = new URLSearchParams(window.location.search);
+  const id = q.get("n") ?? "";
   const isUpdate = id === "" || id.startsWith("update-");
-  const [title, setTitle] = useState(isUpdate ? "Доступно обновление" : "");
-  const [sub, setSub] = useState(isUpdate ? "Нажмите, чтобы посмотреть, что нового" : "");
+  // Свои уведомления программы («vpn-…»): текст приходит в адресе.
+  const isOwn = id.startsWith("vpn-");
+  const [title, setTitle] = useState(isUpdate ? "Доступно обновление" : isOwn ? (q.get("t") ?? "") : "");
+  const [sub, setSub] = useState(isUpdate ? "Нажмите, чтобы посмотреть, что нового" : isOwn ? (q.get("s") ?? "") : "");
   const [shown, setShown] = useState(true);
   const [hover, setHover] = useState(false);
   const left = useRef(LIFETIME_MS);
@@ -27,6 +30,7 @@ export function UpdateToast() {
   const [, tick] = useState(0);
 
   useEffect(() => {
+    if (isOwn) return;
     if (isUpdate) {
       void updateLatest()
         .then((i) => i && setTitle(`Доступно обновление ${i.version}`))
@@ -40,7 +44,7 @@ export function UpdateToast() {
         })
         .catch(() => setTitle("Новое уведомление"));
     }
-  }, [id, isUpdate]);
+  }, [id, isUpdate, isOwn]);
 
   // Отсчёт до автоскрытия (стоит, пока курсор над карточкой).
   useEffect(() => {
@@ -109,7 +113,7 @@ export function UpdateToast() {
               onClick={(e) => {
                 e.stopPropagation();
                 // Закрыли крестиком (не само по таймеру) - в статистику рассылок.
-                if (!isUpdate) void noticeEvent(id, "dismissed").catch(() => {});
+                if (!isUpdate && !isOwn) void noticeEvent(id, "dismissed").catch(() => {});
                 dismiss("close");
               }}
               className="absolute right-2 top-2 rounded-full p-1 text-vb-silver-faint opacity-0 transition-opacity hover:bg-vb-surface-2 hover:text-vb-silver group-hover:opacity-100"

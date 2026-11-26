@@ -153,6 +153,29 @@ fn process_names() -> Vec<String> {
         .collect()
 }
 
+/// Ссылка, которая добавляет в Happ правило маршрутизации «к этим прокси -
+/// напрямую» и включает его. Happ заменяет им текущие правила (их видно и
+/// можно вернуть в его настройках). Адреса - IP в DirectIp, имена - в DirectSites.
+pub fn happ_routing_link(hosts: &[String]) -> String {
+    use base64::Engine;
+    let (ips, names): (Vec<&String>, Vec<&String>) =
+        hosts.iter().filter(|h| !h.trim().is_empty()).partition(|h| h.parse::<std::net::IpAddr>().is_ok());
+    let profile = serde_json::json!({
+        "Name": "Clod Helper",
+        "GlobalProxy": "true",
+        "DirectSites": names,
+        "DirectIp": ips,
+        "ProxySites": [],
+        "ProxyIp": [],
+        "BlockSites": [],
+        "BlockIp": [],
+        "DomainStrategy": "IPIfNonMatch",
+        "FakeDNS": "false",
+    });
+    let b64 = base64::engine::general_purpose::STANDARD.encode(profile.to_string());
+    format!("happ://routing/onadd/{b64}")
+}
+
 /// Проверить сейчас (блокирующий вызов: на Mac запускает netstat).
 pub fn status() -> VpnStatus {
     let tunnel = backend::tunnel();
@@ -293,6 +316,18 @@ fn mac_tunnel(netstat: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn happ_link_puts_ips_and_names_apart() {
+        use base64::Engine;
+        let link = super::happ_routing_link(&["203.0.113.7".into(), "proxy.example.com".into(), " ".into()]);
+        let b64 = link.strip_prefix("happ://routing/onadd/").unwrap();
+        let raw = base64::engine::general_purpose::STANDARD.decode(b64).unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+        assert_eq!(v["Name"], "Clod Helper");
+        assert_eq!(v["DirectIp"], serde_json::json!(["203.0.113.7"]));
+        assert_eq!(v["DirectSites"], serde_json::json!(["proxy.example.com"]));
+    }
+
     use super::*;
 
     fn ad(name: &str, desc: &str, if_type: u32, route: bool) -> Adapter {

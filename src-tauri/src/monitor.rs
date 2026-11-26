@@ -121,6 +121,40 @@ struct Health {
     upstreams: Vec<UpHealth>,
 }
 
+/// Обход VPN мостом (healthz «vpn_bypass», мост ≥1.17).
+#[derive(Deserialize, Debug, Clone)]
+struct BypassHealth {
+    tunnel: String,
+    /// None - к прокси через VPN ещё не подключались.
+    ok: Option<bool>,
+}
+
+/// Пора ли сказать про VPN: Some(true) - обошли, Some(false) - не пускает.
+/// Говорим один раз на туннель и итог; VPN выключили - забываем.
+fn vpn_toast_due(last: &mut Option<(String, bool)>, now: Option<BypassHealth>) -> Option<bool> {
+    let Some(s) = now else {
+        *last = None;
+        return None;
+    };
+    let ok = s.ok?;
+    let key = (s.tunnel, ok);
+    if last.as_ref() == Some(&key) {
+        return None;
+    }
+    *last = Some(key);
+    Some(ok)
+}
+
+/// Тексты уведомлений про VPN: заголовок и строка под ним.
+fn vpn_toast_text(ok: bool, name: Option<&str>) -> (String, &'static str) {
+    let vpn = name.map_or("VPN".to_string(), |n| format!("VPN {n}"));
+    if ok {
+        (format!("Заметили {vpn} и обошли его"), "Прокси работают как обычно")
+    } else {
+        (format!("{vpn} не пускает мимо себя"), "Нажмите, покажем, что делать")
+    }
+}
+
 #[derive(Deserialize)]
 struct UpHealth {
     url: String,
@@ -181,6 +215,9 @@ fn run(app: AppHandle, h: TrayHandles) {
     // Время работы основного входа на прошлом тике: уменьшилось - мост
     // перезапустился, прежние ответы остальных входов к нему не относятся.
     let mut last_uptime: Option<u64> = None;
+    // О каком туннеле и итоге обхода VPN уже сказали (vpn_toast_due).
+    let mut vpn_told: Option<(String, bool)> = None;
+    let mut nf_vpn = Debounce::new(Duration::from_secs(600));
 
     loop {
         let listening = port_listening();
@@ -195,6 +232,17 @@ fn run(app: AppHandle, h: TrayHandles) {
                 Some((x, raw)) => {
                     healthz_fail_streak = 0;
                     skip_healthz_until = None;
+                    let bypass = raw.get("vpn_bypass").and_then(|v| serde_json::from_value::<BypassHealth>(v.clone()).ok());
+                    if let Some(ok) = vpn_toast_due(&mut vpn_told, bypass) {
+                        // Чаще раза в 10 минут не говорим: VPN, который то
+                        // пускает, то нет, иначе сыпал бы уведомлениями.
+                        if nf_vpn.ready() {
+                            let name = crate::vpn::status().name;
+                            let (title, sub) = vpn_toast_text(ok, name.as_deref());
+                            let id = if ok { "vpn-ok" } else { "vpn-blocked" };
+                            crate::update_notify::show_toast_text(&app, id, &title, sub);
+                        }
+                    }
                     let uptime = raw.get("uptime_sec").and_then(|v| v.as_u64());
                     let restarted = matches!((last_uptime, uptime), (Some(a), Some(b)) if b < a);
                     last_uptime = uptime;
@@ -573,7 +621,26 @@ fn measure_connect_ms(addr: &str) -> Option<u128> {
 
 #[cfg(test)]
 mod tests {
-    use super::{extra_poll_due, merge_listener, HIDDEN_EXTRA_EVERY_TICKS};
+    use super::{extra_poll_due, merge_listener, vpn_toast_due, vpn_toast_text, BypassHealth, HIDDEN_EXTRA_EVERY_TICKS};
+
+    #[test]
+    fn vpn_toast_once_per_tunnel_and_outcome() {
+        let st = |t: &str, ok: Option<bool>| Some(BypassHealth { tunnel: t.into(), ok });
+        let mut last = None;
+        // Ещё не подключались - молчим.
+        assert_eq!(vpn_toast_due(&mut last, st("utun4", None)), None);
+        assert_eq!(vpn_toast_due(&mut last, st("utun4", Some(true))), Some(true));
+        assert_eq!(vpn_toast_due(&mut last, st("utun4", Some(true))), None);
+        assert_eq!(vpn_toast_due(&mut last, st("utun4", Some(false))), Some(false));
+        assert_eq!(vpn_toast_due(&mut last, st("utun4", Some(false))), None);
+        // Выключили и включили снова - скажем снова.
+        assert_eq!(vpn_toast_due(&mut last, None), None);
+        assert_eq!(vpn_toast_due(&mut last, st("utun4", Some(false))), Some(false));
+        // Другой туннель - тоже.
+        assert_eq!(vpn_toast_due(&mut last, st("utun7", Some(false))), Some(false));
+        assert_eq!(vpn_toast_text(true, Some("Happ")).0, "Заметили VPN Happ и обошли его");
+        assert_eq!(vpn_toast_text(false, None).0, "VPN не пускает мимо себя");
+    }
     use serde_json::json;
 
     #[test]

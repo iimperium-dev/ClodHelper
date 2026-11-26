@@ -435,6 +435,11 @@ export async function vpnStatus(): Promise<VpnStatus> {
   return invoke<VpnStatus>("vpn_status");
 }
 
+/** Открыть Happ ссылкой с правилом «к этим прокси - напрямую». */
+export async function vpnHappAdd(hosts: string[]): Promise<void> {
+  return invoke("vpn_happ_add", { hosts });
+}
+
 /** Блокируется ли телеметрия Claude (Sentry, Datadog). */
 export async function claudeTelemetryGet(): Promise<boolean> {
   return invoke<boolean>("claude_telemetry_get");

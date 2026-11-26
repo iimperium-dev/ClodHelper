@@ -346,6 +346,19 @@ pub async fn vpn_status() -> crate::vpn::VpnStatus {
     tokio::task::spawn_blocking(crate::vpn::status).await.unwrap_or_default()
 }
 
+/// «Добавить исключения в Happ»: открыть Happ ссылкой с правилом «к прокси -
+/// напрямую». Из Rust, а не из окна: окну разрешены только веб-ссылки.
+#[tauri::command]
+pub fn vpn_happ_add(app: AppHandle, hosts: Vec<String>) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    if hosts.iter().all(|h| h.trim().is_empty()) {
+        return Err("Нет адресов прокси".into());
+    }
+    app.opener()
+        .open_url(crate::vpn::happ_routing_link(&hosts), None::<&str>)
+        .map_err(|_| "Не получилось открыть Happ. Он установлен?".to_string())
+}
+
 /// Резервы прокси пула: URL прокси → его резервы по порядку.
 #[tauri::command]
 pub fn proxy_backups_get() -> std::collections::HashMap<String, Vec<String>> {

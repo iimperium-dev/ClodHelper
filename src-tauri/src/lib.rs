@@ -280,6 +280,7 @@ pub fn run() {
             commands::proxies_ping,
             commands::proxy_replace,
             commands::vpn_status,
+            commands::vpn_happ_add,
             commands::proxy_speedtest,
             // Окна (трей-попап)
             commands::show_main_window,

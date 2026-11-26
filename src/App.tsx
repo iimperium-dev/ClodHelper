@@ -4,6 +4,7 @@ import { Sidebar, NAV_ORDER } from "./components/Sidebar";
 import { WizardShell } from "./components/WizardShell";
 import { LoadingScreen, PageBoundary, useCalmLoading } from "./components/LoadingScreen";
 import { UpdateDialogHost } from "./components/UpdateDialogHost";
+import { VpnHelpHost } from "./components/VpnHelp";
 import {
   Apps,
   Overview,
@@ -587,6 +588,12 @@ function App() {
       {!isWizard && (
         <PageBoundary silent>
           <UpdateDialogHost />
+        </PageBoundary>
+      )}
+      {/* Как добавить прокси в исключения VPN (клик по уведомлению). */}
+      {!isWizard && (
+        <PageBoundary silent>
+          <VpnHelpHost />
         </PageBoundary>
       )}
     </StatusProvider>

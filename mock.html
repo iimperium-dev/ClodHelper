@@ -85,6 +85,8 @@
       { t: 26000, msg: "назначенный прокси http://185.68.187.138:8000 не отвечает (коннект: Network is unreachable (os error 51))" },
       { t: 26010, msg: "назначенный прокси x не отвечает (принял соединение, но молчит на CONNECT)" },
     ],
+    // ?bypass=ok|blocked - мост ходит к прокси мимо VPN (или VPN не пускает).
+    vpn_bypass: params.has("bypass") ? { tunnel: "utun4", via: "en0", ok: params.get("bypass") === "ok", ok_age_sec: 3 } : null,
   };
   // ?browsers - браузеры с иконками на «Сайтах» (выбор и «Не трогать»).
   const ICO = (c1, c2) =>
@@ -122,6 +124,7 @@
   }
   const VPN = {
     wg: { active: true, name: "WireGuard", sota: false },
+    happ: { active: true, name: "Happ", sota: false },
     tun: { active: true, name: null, sota: false },
     sota: { active: false, name: null, sota: true },
   };
@@ -556,6 +559,11 @@
       if (cmd === "notices_mark_read") {
         for (const i of R.notices_list) if (!args.ids.length || args.ids.includes(i.id)) i.read = true;
         return structuredClone(R.notices_list);
+      }
+      // «Добавить исключения в Happ»: запоминаем адреса вместо открытия Happ.
+      if (cmd === "vpn_happ_add") {
+        window.__happ = args.hosts;
+        return null;
       }
       if (cmd === "notices_quiet_get") return { ...(window.__quiet ||= { until: null, forever: false }) };
       if (cmd === "notices_quiet_set") {

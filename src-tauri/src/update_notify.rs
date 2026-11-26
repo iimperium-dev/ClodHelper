@@ -154,12 +154,29 @@ pub async fn refresh_notices(app: &AppHandle, toast: bool) {
 /// Показать уведомление `id` (обновление «update-X» или рассылка): Windows -
 /// справа внизу над панелью задач, macOS - справа вверху под строкой меню.
 pub fn show_toast(app: &AppHandle, id: &str) {
+    show_toast_with(app, id, &[]);
+}
+
+/// Уведомление со своим текстом (не из колокольчика): заголовок и строка
+/// под ним уходят в адрес страницы. Так показываются «vpn-…».
+pub fn show_toast_text(app: &AppHandle, id: &str, title: &str, sub: &str) {
+    show_toast_with(app, id, &[("t", title), ("s", sub)]);
+}
+
+fn show_toast_with(app: &AppHandle, id: &str, extra: &[(&str, &str)]) {
     // «Не беспокоить» в колокольчике: в углу ничего не всплывает, а сама
     // запись остаётся в колокольчике.
     if crate::settings::notices_quiet(&crate::settings::load(), crate::auto_update::now_secs()) {
         return;
     }
-    let query = format!("view=toast&n={}", url::form_urlencoded::byte_serialize(id.as_bytes()).collect::<String>());
+    let query = {
+        let mut q = url::form_urlencoded::Serializer::new(String::new());
+        q.append_pair("view", "toast").append_pair("n", id);
+        for (k, v) in extra {
+            q.append_pair(k, v);
+        }
+        q.finish()
+    };
     let (x, y) = corner(app);
     // macOS: окно уведомления - подменённая панель (mac_popup_window), и
     // уничтожать его нельзя: при удалении окна с подменённым классом AppKit
@@ -176,7 +193,7 @@ pub fn show_toast(app: &AppHandle, id: &str) {
                 let w2 = w.clone();
                 let _ = w.run_on_main_thread(move || crate::mac_order_front(&w2));
                 crate::sound::chime();
-                crate::telemetry::report_notice_event(id, "shown");
+                report_shown(id);
             }
             Err(e) => tracing::warn!("не удалось показать уведомление: {e}"),
         }
@@ -228,8 +245,15 @@ pub fn show_toast(app: &AppHandle, id: &str) {
         }
     }
     crate::sound::chime();
-    // Статистика рассылок: уведомление всплыло (для обновления - нет записи, пропускается).
-    crate::telemetry::report_notice_event(id, "shown");
+    report_shown(id);
+}
+
+/// Статистика рассылок: уведомление всплыло. Обновления и свои уведомления
+/// программы («vpn-…») - не рассылки, их не считаем.
+fn report_shown(id: &str) {
+    if !id.starts_with("vpn-") {
+        crate::telemetry::report_notice_event(id, "shown");
+    }
 }
 
 /// Левый верхний угол окна уведомления (логические px) на основном мониторе.
@@ -261,6 +285,14 @@ pub fn close_toast(app: &AppHandle) {
 pub fn open_from_toast(app: &AppHandle, id: &str) {
     close_toast(app);
     crate::show_main_window(app);
+    // Свои уведомления программы: VPN не пускает мимо себя - окно с тем,
+    // как добавить исключение; обошли - просто главное окно.
+    if id.starts_with("vpn-") {
+        if id == "vpn-blocked" {
+            let _ = app.emit_to("main", "vpn:help", ());
+        }
+        return;
+    }
     let _ = crate::settings::mark_notices_read(&[id.to_string()]);
     let _ = app.emit("notices:changed", crate::notices::unread());
     if id.starts_with("update-") {
