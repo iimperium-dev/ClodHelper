@@ -569,6 +569,21 @@ export function noticesMarkRead(ids: string[]): Promise<NoticeItem[]> {
   return invoke<NoticeItem[]>("notices_mark_read", { ids });
 }
 
+/** «Не беспокоить»: until - до какого момента (unix, с), forever - навсегда. */
+export interface NoticesQuiet {
+  until: number | null;
+  forever: boolean;
+}
+
+export function noticesQuietGet(): Promise<NoticesQuiet> {
+  return invoke<NoticesQuiet>("notices_quiet_get");
+}
+
+/** hours: число часов, 0 - навсегда, null - выключить. */
+export function noticesQuietSet(hours: number | null): Promise<NoticesQuiet> {
+  return invoke<NoticesQuiet>("notices_quiet_set", { hours });
+}
+
 /** Колокольчик, «Очистить»: убрать прочитанные. Возвращает оставшиеся. */
 export function noticesClearRead(): Promise<NoticeItem[]> {
   return invoke<NoticeItem[]>("notices_clear_read");

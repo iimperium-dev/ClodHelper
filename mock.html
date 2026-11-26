@@ -557,6 +557,12 @@
         for (const i of R.notices_list) if (!args.ids.length || args.ids.includes(i.id)) i.read = true;
         return structuredClone(R.notices_list);
       }
+      if (cmd === "notices_quiet_get") return { ...(window.__quiet ||= { until: null, forever: false }) };
+      if (cmd === "notices_quiet_set") {
+        const h = args.hours;
+        window.__quiet = h === null ? { until: null, forever: false } : h === 0 ? { until: null, forever: true } : { until: Math.floor(Date.now() / 1000) + h * 3600, forever: false };
+        return { ...window.__quiet };
+      }
       if (cmd === "notices_clear_read") {
         R.notices_list = R.notices_list.filter((i) => !i.read);
         return structuredClone(R.notices_list);

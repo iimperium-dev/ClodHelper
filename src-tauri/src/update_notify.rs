@@ -154,6 +154,11 @@ pub async fn refresh_notices(app: &AppHandle, toast: bool) {
 /// Показать уведомление `id` (обновление «update-X» или рассылка): Windows -
 /// справа внизу над панелью задач, macOS - справа вверху под строкой меню.
 pub fn show_toast(app: &AppHandle, id: &str) {
+    // «Не беспокоить» в колокольчике: в углу ничего не всплывает, а сама
+    // запись остаётся в колокольчике.
+    if crate::settings::notices_quiet(&crate::settings::load(), crate::auto_update::now_secs()) {
+        return;
+    }
     let query = format!("view=toast&n={}", url::form_urlencoded::byte_serialize(id.as_bytes()).collect::<String>());
     let (x, y) = corner(app);
     // macOS: окно уведомления - подменённая панель (mac_popup_window), и

@@ -290,6 +290,36 @@ pub async fn notices_mark_read(app: AppHandle, ids: Vec<String>) -> Result<Vec<c
     .map_err(|e| format!("Внутренняя ошибка: {e}"))?
 }
 
+/// «Не беспокоить»: до какого момента (unix, с) и навсегда ли.
+#[derive(serde::Serialize)]
+pub struct NoticesQuiet {
+    pub until: Option<u64>,
+    pub forever: bool,
+}
+
+fn quiet_view(s: &crate::settings::Settings) -> NoticesQuiet {
+    let now = crate::auto_update::now_secs();
+    match s.notices_quiet_until {
+        Some(u64::MAX) => NoticesQuiet { until: None, forever: true },
+        Some(t) if t > now => NoticesQuiet { until: Some(t), forever: false },
+        _ => NoticesQuiet { until: None, forever: false },
+    }
+}
+
+/// Колокольчик: действует ли «Не беспокоить».
+#[tauri::command]
+pub fn notices_quiet_get() -> NoticesQuiet {
+    quiet_view(&crate::settings::load())
+}
+
+/// Колокольчик: включить «Не беспокоить» на `hours` часов (0 - навсегда)
+/// или выключить (None).
+#[tauri::command]
+pub fn notices_quiet_set(hours: Option<u64>) -> Result<NoticesQuiet, String> {
+    let until = hours.map(|h| if h == 0 { u64::MAX } else { crate::auto_update::now_secs() + h * 3600 });
+    Ok(quiet_view(&crate::settings::set_notices_quiet(until)?))
+}
+
 /// Колокольчик, «Очистить»: убрать прочитанные. Возвращает оставшиеся.
 #[tauri::command]
 pub async fn notices_clear_read(app: AppHandle) -> Result<Vec<crate::notices::NoticeItem>, String> {

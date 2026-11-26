@@ -184,6 +184,10 @@ pub struct Settings {
     /// Убранные из колокольчика кнопкой «Очистить» (прочитанные).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notices_cleared: Vec<String>,
+    /// «Не беспокоить»: до какого момента (unix, с) не всплывать в углу
+    /// экрана. u64::MAX - навсегда. В колокольчике всё копится как обычно.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notices_quiet_until: Option<u64>,
     /// «Сайты» только в выбранных браузерах (PAC их политикой), а не во всех
     /// (системная автонастройка). Какие выбраны - видно по их политикам.
     #[serde(default)]
@@ -1010,6 +1014,19 @@ pub fn clear_notices(ids: &[String]) -> Result<Settings, String> {
         }
         Ok(())
     })
+}
+
+/// «Не беспокоить»: None - выключить, Some(u64::MAX) - навсегда.
+pub fn set_notices_quiet(until: Option<u64>) -> Result<Settings, String> {
+    with_settings_strict(|s| {
+        s.notices_quiet_until = until;
+        Ok(())
+    })
+}
+
+/// Сейчас действует «Не беспокоить»?
+pub fn notices_quiet(s: &Settings, now: u64) -> bool {
+    s.notices_quiet_until.is_some_and(|t| t > now)
 }
 
 pub fn mark_notices_toasted(ids: &[String]) -> Result<Settings, String> {

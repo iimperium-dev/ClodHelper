@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bell, CheckCheck, Download, ExternalLink, Trash2 } from "lucide-react";
+import { Bell, BellOff, CheckCheck, Download, ExternalLink, Trash2 } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
-import { noticeEvent, noticesClearRead, noticesList, noticesMarkRead, noticesRefresh, updateLatest } from "../lib/api";
+import { noticeEvent, noticesClearRead, noticesList, noticesMarkRead, noticesQuietGet, noticesQuietSet, type NoticesQuiet, noticesRefresh, updateLatest } from "../lib/api";
 import { openUpdateDialog } from "../lib/updateBus";
 import { cn } from "../lib/cn";
 import type { NoticeItem } from "../lib/types";
@@ -12,6 +12,26 @@ import type { NoticeItem } from "../lib/types";
 function formatDate(d: string): string {
   const [y, m, day] = d.split("-");
   return y && m && day ? `${day}.${m}.${y}` : d;
+}
+
+/** «Не беспокоить на»: часы (0 - навсегда) и подпись. */
+const QUIET_OPTIONS: [number, string][] = [
+  [1, "1 час"],
+  [6, "6 часов"],
+  [12, "12 часов"],
+  [24, "Сутки"],
+  [24 * 7, "Неделю"],
+  [0, "Навсегда"],
+];
+
+/** «Не беспокоить до 18:40» или «до 27.11, 18:40», если не сегодня. */
+function quietText(q: NoticesQuiet): string {
+  if (q.forever || q.until === null) return "Не беспокоить включено";
+  const d = new Date(q.until * 1000);
+  const time = d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  const today = new Date().toDateString() === d.toDateString();
+  const date = d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" });
+  return `Не беспокоить до ${today ? time : `${date}, ${time}`}`;
 }
 
 /*
@@ -24,11 +44,17 @@ export function NotificationBell() {
   const [items, setItems] = useState<NoticeItem[]>([]);
   const [open, setOpen] = useState(false);
   const [focusId, setFocusId] = useState<string | null>(null);
+  const [quiet, setQuiet] = useState<NoticesQuiet>({ until: null, forever: false });
+  const [quietMenu, setQuietMenu] = useState(false);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const bellRef = useRef<HTMLButtonElement | null>(null);
 
   // Пустой ответ (null) - пустой список: колокольчик не должен ронять окно.
-  const reload = useCallback(() => void noticesList().then((l) => setItems(l ?? [])).catch(() => {}), []);
+  const reload = useCallback(() => {
+    void noticesList().then((l) => setItems(l ?? [])).catch(() => {});
+    // Срок «Не беспокоить» мог выйти, пока панель была закрыта.
+    void noticesQuietGet().then((q) => q && setQuiet(q)).catch(() => {});
+  }, []);
 
   // Окно открыли - проверить рассылки сразу, не дожидаясь фоновой проверки.
   useEffect(() => {
@@ -75,6 +101,19 @@ export function NotificationBell() {
     setItems((await noticesMarkRead(ids).catch(() => items)) ?? items);
   };
 
+  const quietOn = quiet.forever || quiet.until !== null;
+  // Срок вышел, пока окно открыто, - колокольчик снова обычный.
+  useEffect(() => {
+    if (quiet.until === null) return;
+    const left = quiet.until * 1000 - Date.now();
+    const id = window.setTimeout(() => setQuiet({ until: null, forever: false }), Math.max(0, Math.min(left, 2 ** 31 - 1)));
+    return () => window.clearTimeout(id);
+  }, [quiet.until]);
+  const setQuietFor = async (hours: number | null) => {
+    setQuietMenu(false);
+    setQuiet(await noticesQuietSet(hours).catch(() => quiet));
+  };
+
   // Сразу убрать прочитанные на экране, затем взять список из программы.
   const clearRead = async () => {
     const before = items;
@@ -96,7 +135,7 @@ export function NotificationBell() {
       <button
         ref={bellRef}
         type="button"
-        aria-label={unread ? `Уведомления: ${unread} новых` : "Уведомления"}
+        aria-label={`${unread ? `Уведомления: ${unread} новых` : "Уведомления"}${quietOn ? ", не беспокоить" : ""}`}
         aria-expanded={open}
         onClick={() => {
           setFocusId(null);
@@ -108,7 +147,12 @@ export function NotificationBell() {
           open ? "text-vb-fg" : "text-vb-silver-dim hover:text-vb-fg",
         )}
       >
-        <Bell className="h-3.5 w-3.5" strokeWidth={2.25} />
+        {/* «Не беспокоить» - перечёркнутый колокольчик, чтобы режим было видно всегда. */}
+        {quietOn ? (
+          <BellOff className="h-3.5 w-3.5" strokeWidth={2.25} data-testid="bell-quiet" />
+        ) : (
+          <Bell className="h-3.5 w-3.5" strokeWidth={2.25} />
+        )}
         <AnimatePresence>
           {unread > 0 && (
             <motion.span
@@ -119,7 +163,10 @@ export function NotificationBell() {
               className="absolute right-1.5 top-1.5"
             >
               {/* Светящийся кружок: мягкая пульсация, чтобы новое заметили */}
-              <span className="absolute inset-0 animate-ping rounded-full bg-vb-emerald/60 [animation-duration:2s]" />
+              {/* В «Не беспокоить» без пульсации: число есть, но не зовёт. */}
+              {!quietOn && (
+                <span className="absolute inset-0 animate-ping rounded-full bg-vb-emerald/60 [animation-duration:2s]" />
+              )}
               <span className="tnum relative grid h-[15px] min-w-[15px] place-items-center rounded-full bg-vb-emerald px-1 text-[9px] font-bold leading-none text-black shadow-[0_0_8px_var(--color-vb-emerald-glow)]">
                 {unread > 9 ? "9+" : unread}
               </span>
@@ -165,8 +212,58 @@ export function NotificationBell() {
                       Очистить
                     </button>
                   )}
+                  <button
+                    type="button"
+                    aria-label="Не беспокоить"
+                    aria-expanded={quietMenu}
+                    title="Не беспокоить"
+                    onClick={() => setQuietMenu((v) => !v)}
+                    className={cn(
+                      "-mr-1 grid h-6 w-6 place-items-center rounded-md transition-colors hover:bg-white/[0.06]",
+                      quietOn || quietMenu ? "text-vb-fg" : "text-vb-silver-dim hover:text-vb-fg",
+                    )}
+                  >
+                    <BellOff className="h-3.5 w-3.5" />
+                  </button>
                 </div>
               </div>
+              {(quietMenu || quietOn) && (
+                <div className="shrink-0 border-b border-vb-border/70 bg-vb-surface-2/30 px-4 py-2.5">
+                  {quietOn && (
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[12px] text-vb-silver">{quietText(quiet)}</span>
+                      <button
+                        type="button"
+                        onClick={() => void setQuietFor(null)}
+                        className="text-[11px] text-vb-silver-dim transition-colors hover:text-vb-fg"
+                      >
+                        Выключить
+                      </button>
+                    </div>
+                  )}
+                  {quietMenu && (
+                    <div className={quietOn ? "mt-2" : ""}>
+                      {!quietOn && (
+                        <p className="text-[12px] leading-snug text-vb-silver-dim">
+                          Не показывать уведомления в углу экрана. В колокольчике всё сохранится.
+                        </p>
+                      )}
+                      <div className="mt-2 flex flex-wrap gap-1.5" role="group" aria-label="Не беспокоить на">
+                        {QUIET_OPTIONS.map(([hours, label]) => (
+                          <button
+                            key={label}
+                            type="button"
+                            onClick={() => void setQuietFor(hours)}
+                            className="rounded-md border border-vb-border px-2 py-1 text-[11px] text-vb-silver transition-colors hover:border-vb-border-strong hover:text-vb-fg"
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
               <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
                 {items.length === 0 ? (
                   <div className="px-4 py-8 text-center text-[12px] text-vb-silver-faint">Пока ничего нового</div>

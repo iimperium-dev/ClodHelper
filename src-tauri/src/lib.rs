@@ -175,6 +175,8 @@ pub fn run() {
             commands::notices_refresh,
             commands::notices_mark_read,
             commands::notices_clear_read,
+            commands::notices_quiet_get,
+            commands::notices_quiet_set,
             commands::browser_policy_status,
             commands::browser_policy_set,
             commands::leak_guard_status,
