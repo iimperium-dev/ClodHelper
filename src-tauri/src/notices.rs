@@ -552,7 +552,23 @@ pub fn list() -> Vec<NoticeItem> {
             read: s.notices_read.contains(&n.id),
         });
     }
+    without_cleared(items, &s)
+}
+
+/// Убранные кнопкой «Очистить» в колокольчике не показываем. Убирают только
+/// прочитанные, но и непрочитанное с тем же id (повтор рассылки) не вернётся.
+fn without_cleared(mut items: Vec<NoticeItem>, s: &crate::settings::Settings) -> Vec<NoticeItem> {
+    items.retain(|i| !s.notices_cleared.contains(&i.id));
     items
+}
+
+/// Кнопка «Очистить»: убрать из колокольчика все прочитанные.
+pub fn clear_read() -> Result<Vec<NoticeItem>, String> {
+    let read: Vec<String> = list().into_iter().filter(|i| i.read).map(|i| i.id).collect();
+    if !read.is_empty() {
+        crate::settings::clear_notices(&read)?;
+    }
+    Ok(list())
 }
 
 pub fn unread() -> usize {
@@ -794,5 +810,22 @@ mod tests {
         assert_eq!(got[0].banner.after_min, 24 * 60, "не дольше суток");
         assert_eq!(got[2].banner.when, "always", "старый баннер - всегда");
         assert!(!in_bell(v.iter().find(|n| n.id == "down").unwrap()), "баннер по ситуации не идёт в колокольчик");
+    }
+
+    #[test]
+    fn cleared_items_leave_the_bell() {
+        let item = |id: &str, read: bool| NoticeItem {
+            id: id.into(),
+            kind: "news",
+            date: String::new(),
+            title: id.into(),
+            body: String::new(),
+            link: None,
+            link_label: None,
+            read,
+        };
+        let s = crate::settings::Settings { notices_cleared: vec!["old".into()], ..Default::default() };
+        let left = without_cleared(vec![item("old", true), item("new", false)], &s);
+        assert_eq!(left.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), ["new"]);
     }
 }

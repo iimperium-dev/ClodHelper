@@ -290,6 +290,16 @@ pub async fn notices_mark_read(app: AppHandle, ids: Vec<String>) -> Result<Vec<c
     .map_err(|e| format!("Внутренняя ошибка: {e}"))?
 }
 
+/// Колокольчик, «Очистить»: убрать прочитанные. Возвращает оставшиеся.
+#[tauri::command]
+pub async fn notices_clear_read(app: AppHandle) -> Result<Vec<crate::notices::NoticeItem>, String> {
+    let items = tokio::task::spawn_blocking(crate::notices::clear_read)
+        .await
+        .map_err(|e| format!("Внутренняя ошибка: {e}"))??;
+    let _ = app.emit("notices:changed", crate::notices::unread());
+    Ok(items)
+}
+
 #[tauri::command]
 pub fn update_toast_close(app: AppHandle) {
     crate::update_notify::close_toast(&app);

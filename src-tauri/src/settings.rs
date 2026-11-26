@@ -181,6 +181,9 @@ pub struct Settings {
     /// Рассылки, уже всплывавшие в углу экрана (повторно не всплывают).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notices_toasted: Vec<String>,
+    /// Убранные из колокольчика кнопкой «Очистить» (прочитанные).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notices_cleared: Vec<String>,
     /// «Сайты» только в выбранных браузерах (PAC их политикой), а не во всех
     /// (системная автонастройка). Какие выбраны - видно по их политикам.
     #[serde(default)]
@@ -967,6 +970,7 @@ where
         s.notices_read
             .retain(|id| id.starts_with("update-") || alive.contains(id) || id.strip_prefix("banner:").is_some_and(|b| alive.iter().any(|a| a == b)));
         s.notices_toasted.retain(|id| alive.contains(id));
+        s.notices_cleared.retain(|id| id.starts_with("update-") || alive.contains(id));
         s.notices_cache = github;
         s.notices_cache_server = server;
         Ok(())
@@ -985,6 +989,24 @@ pub fn mark_notices_read(ids: &[String]) -> Result<Settings, String> {
         if updates.len() > 5 {
             let drop: Vec<String> = updates[..updates.len() - 5].iter().map(|&n| s.notices_read[n].clone()).collect();
             s.notices_read.retain(|i| !drop.contains(i));
+        }
+        Ok(())
+    })
+}
+
+/// Убрать из колокольчика: id попадают в notices_cleared. Записи об
+/// обновлениях («update-…») держим только о последних версиях, как прочтения.
+pub fn clear_notices(ids: &[String]) -> Result<Settings, String> {
+    with_settings_strict(|s| {
+        for id in ids {
+            if !s.notices_cleared.contains(id) {
+                s.notices_cleared.push(id.clone());
+            }
+        }
+        let updates: Vec<usize> = s.notices_cleared.iter().enumerate().filter(|(_, i)| i.starts_with("update-")).map(|(n, _)| n).collect();
+        if updates.len() > 10 {
+            let drop: Vec<String> = updates[..updates.len() - 10].iter().map(|&n| s.notices_cleared[n].clone()).collect();
+            s.notices_cleared.retain(|i| !drop.contains(i));
         }
         Ok(())
     })

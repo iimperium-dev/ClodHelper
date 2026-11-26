@@ -154,8 +154,32 @@ pub async fn refresh_notices(app: &AppHandle, toast: bool) {
 /// Показать уведомление `id` (обновление «update-X» или рассылка): Windows -
 /// справа внизу над панелью задач, macOS - справа вверху под строкой меню.
 pub fn show_toast(app: &AppHandle, id: &str) {
-    // Старое уведомление (о прошлой версии) - закрыть, новое создаётся с нуля:
-    // так анимация появления проигрывается каждый раз.
+    let query = format!("view=toast&n={}", url::form_urlencoded::byte_serialize(id.as_bytes()).collect::<String>());
+    let (x, y) = corner(app);
+    // macOS: окно уведомления - подменённая панель (mac_popup_window), и
+    // уничтожать его нельзя: при удалении окна с подменённым классом AppKit
+    // падает (KVO, «Cannot remove an observer», abort) - так 0.9.3 падал по
+    // клику на уведомление. Окно живёт до выхода, как меню значка: прячем
+    // и показываем заново с новой страницей - анимация проигрывается снова.
+    #[cfg(target_os = "macos")]
+    if let Some(w) = app.get_webview_window(TOAST_LABEL) {
+        match w.url() {
+            Ok(mut u) => {
+                u.set_query(Some(&query));
+                let _ = w.navigate(u);
+                let _ = w.set_position(tauri::LogicalPosition::new(x, y));
+                let w2 = w.clone();
+                let _ = w.run_on_main_thread(move || crate::mac_order_front(&w2));
+                crate::sound::chime();
+                crate::telemetry::report_notice_event(id, "shown");
+            }
+            Err(e) => tracing::warn!("не удалось показать уведомление: {e}"),
+        }
+        return;
+    }
+    // Windows: старое уведомление закрыть, новое создаётся с нуля - так
+    // анимация появления проигрывается каждый раз.
+    #[cfg(not(target_os = "macos"))]
     if let Some(old) = app.get_webview_window(TOAST_LABEL) {
         let _ = old.destroy();
     }
@@ -163,15 +187,7 @@ pub fn show_toast(app: &AppHandle, id: &str) {
     // через show() активировал его (ввод уходил из программы, где человек
     // печатал), а ShowWindow в обход Tauri ломал его состояние - окну
     // возвращались рамка и заголовок. Проверено вживую на Windows 11.
-    let (x, y) = corner(app);
-    match tauri::WebviewWindowBuilder::new(
-        app,
-        TOAST_LABEL,
-        tauri::WebviewUrl::App(
-            format!("index.html?view=toast&n={}", url::form_urlencoded::byte_serialize(id.as_bytes()).collect::<String>())
-                .into(),
-        ),
-    )
+    match tauri::WebviewWindowBuilder::new(app, TOAST_LABEL, tauri::WebviewUrl::App(format!("index.html?{query}").into()))
     .title("Clod Helper")
     .inner_size(TOAST_W, TOAST_H)
     .position(x, y)
@@ -227,6 +243,10 @@ fn corner(app: &AppHandle) -> (f64, f64) {
 
 pub fn close_toast(app: &AppHandle) {
     if let Some(w) = app.get_webview_window(TOAST_LABEL) {
+        // macOS: только спрятать - см. show_toast.
+        #[cfg(target_os = "macos")]
+        let _ = w.hide();
+        #[cfg(not(target_os = "macos"))]
         let _ = w.destroy();
     }
 }

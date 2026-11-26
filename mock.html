@@ -219,7 +219,8 @@
       ...(params.has("manual") ? { manual_only: true } : {}),
       handles_silently: !params.has("autooffer") && !params.has("manual") && !params.has("nosilent") },
     notices_list: params.has("notice")
-      ? [{ id: "whats-new-0-9-1", kind: "news", date: "2026-11-11", title: "Вышла версия 0.9.1", body: "Что изменилось в этой версии.", link: "https://example.com/new", link_label: "Что нового", read: false }]
+      ? [{ id: "whats-new-0-9-1", kind: "news", date: "2026-11-11", title: "Вышла версия 0.9.1", body: "Что изменилось в этой версии.", link: "https://example.com/new", link_label: "Что нового", read: false },
+         ...(params.get("notice") === "read" ? [{ id: "guide-old", kind: "news", date: "2026-11-01", title: "Свой прокси за 15 минут", body: "Пошаговая видеоинструкция.", link: null, link_label: null, read: true }] : [])]
       : [],
     proxy_backups_get: {},
     // ?promo - баннер на «Обзоре» (?promo=blue|violet|amber|rose|neutral - цвет).
@@ -232,7 +233,6 @@
           // &media - фото и видео с обложкой, &media=nocover - без обложки (кнопка «Посмотреть»).
           media: params.has("media") ? MOCK_MEDIA : [], cover: params.has("media") && params.get("media") !== "nocover" }]
       : [],
-    notices_mark_read: [],
     whats_new_take: params.has("whatsnew") ? "0.8.18" : null,
     bridge_file_issue: null,
     "plugin:app|version": "0.6.0",
@@ -552,6 +552,15 @@
         return null;
       }
       if (cmd === "reveal_in_folder") return null;
+      // Колокольчик: прочтение и «Очистить» меняют список, как в программе.
+      if (cmd === "notices_mark_read") {
+        for (const i of R.notices_list) if (!args.ids.length || args.ids.includes(i.id)) i.read = true;
+        return structuredClone(R.notices_list);
+      }
+      if (cmd === "notices_clear_read") {
+        R.notices_list = R.notices_list.filter((i) => !i.read);
+        return structuredClone(R.notices_list);
+      }
       if (cmd === "settings_get" && params.has("slowboot")) await wait(1500);
       if (cmd === "plugin:event|listen") {
         const id = listenId++;

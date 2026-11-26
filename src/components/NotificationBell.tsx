@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bell, CheckCheck, Download, ExternalLink } from "lucide-react";
+import { Bell, CheckCheck, Download, ExternalLink, Trash2 } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
-import { noticeEvent, noticesList, noticesMarkRead, noticesRefresh, updateLatest } from "../lib/api";
+import { noticeEvent, noticesClearRead, noticesList, noticesMarkRead, noticesRefresh, updateLatest } from "../lib/api";
 import { openUpdateDialog } from "../lib/updateBus";
 import { cn } from "../lib/cn";
 import type { NoticeItem } from "../lib/types";
@@ -75,6 +75,13 @@ export function NotificationBell() {
     setItems((await noticesMarkRead(ids).catch(() => items)) ?? items);
   };
 
+  // Сразу убрать прочитанные на экране, затем взять список из программы.
+  const clearRead = async () => {
+    const before = items;
+    setItems((prev) => prev.filter((i) => !i.read));
+    setItems((await noticesClearRead().catch(() => before)) ?? before);
+  };
+
   const openUpdate = async (item: NoticeItem) => {
     void markRead([item.id]);
     const info = await updateLatest().catch(() => null);
@@ -136,16 +143,29 @@ export function NotificationBell() {
             >
               <div className="flex shrink-0 items-center justify-between border-b border-vb-border/70 px-4 py-2.5">
                 <span className="text-[13px] font-semibold text-vb-fg">Уведомления</span>
-                {unread > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => void markRead([])}
-                    className="flex items-center gap-1 text-[11px] text-vb-silver-dim transition-colors hover:text-vb-emerald"
-                  >
-                    <CheckCheck className="h-3.5 w-3.5" />
-                    Прочитать все
-                  </button>
-                )}
+                <div className="flex items-center gap-3">
+                  {unread > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => void markRead([])}
+                      className="flex items-center gap-1 text-[11px] text-vb-silver-dim transition-colors hover:text-vb-emerald"
+                    >
+                      <CheckCheck className="h-3.5 w-3.5" />
+                      Прочитать все
+                    </button>
+                  )}
+                  {unread < items.length && (
+                    <button
+                      type="button"
+                      onClick={() => void clearRead()}
+                      title="Убрать прочитанные из списка"
+                      className="flex items-center gap-1 text-[11px] text-vb-silver-dim transition-colors hover:text-vb-fg"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      Очистить
+                    </button>
+                  )}
+                </div>
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
                 {items.length === 0 ? (

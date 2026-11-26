@@ -569,6 +569,11 @@ export function noticesMarkRead(ids: string[]): Promise<NoticeItem[]> {
   return invoke<NoticeItem[]>("notices_mark_read", { ids });
 }
 
+/** Колокольчик, «Очистить»: убрать прочитанные. Возвращает оставшиеся. */
+export function noticesClearRead(): Promise<NoticeItem[]> {
+  return invoke<NoticeItem[]>("notices_clear_read");
+}
+
 /** Событие уведомления для статистики: shown | clicked | dismissed (один раз, только при включённой статистике). */
 /** Действующие баннеры, свежие первыми. Какой показать - решает PromoBanner. */
 export function noticesBanners(): Promise<BannerView[]> {
