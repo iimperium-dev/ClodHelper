@@ -50,8 +50,11 @@ const POOL_RECHECK_MS = 20_000;
 /** Скан процессов (shimStatus) при живом /healthz - раз в N тиков (~30с):
     healthz и так доказывает, что мост жив, а скан - самый дорогой вызов. */
 const PROCESS_SCAN_EVERY_TICKS = 6;
-/** VPN рядом (адаптеры, маршруты, процессы) - раз в N тиков (~30с). */
-const VPN_CHECK_EVERY_TICKS = 6;
+/** VPN рядом (адаптеры, маршруты, процессы) - раз в N тиков (~10с): включённый
+    VPN часто и есть причина, что прокси перестал отвечать, и ждать полминуты
+    долго. Проверка дешёвая (таблица маршрутов, процессы из общего кэша) и идёт
+    только у окна на экране. */
+const VPN_CHECK_EVERY_TICKS = 2;
 /** Окно оценки стабильности прокси: последние N тиков (~1 мин). */
 const QUALITY_WINDOW = 12;
 /** «Нестабилен»: доля отказов в окне выше порога при ≥2 отказах. */
@@ -287,6 +290,9 @@ export function StatusProvider({ children }: { children: ReactNode }) {
   const tick = useRef(0);
   /** Когда пришло последнее событие bridge-health от монитора (мс). */
   const lastEvent = useRef(0);
+  /** Сколько прокси моста были живы в прошлом снимке; стало меньше - проверить VPN сразу. */
+  const lastHealthy = useRef<number | null>(null);
+  const vpnSoon = useRef(false);
   const [history, setHistory] = useState<TrafficSample[]>([]);
   /** История копится здесь и в скрытом окне; в состояние - при показе. */
   const historyBuf = useRef<TrafficSample[]>([]);
@@ -418,6 +424,9 @@ export function StatusProvider({ children }: { children: ReactNode }) {
       const json = JSON.stringify(h);
       if (json === lastHealthJson.current) return;
       lastHealthJson.current = json;
+      const healthy = h.upstreams.filter((u) => u.healthy).length;
+      if (lastHealthy.current !== null && healthy < lastHealthy.current) vpnSoon.current = true;
+      lastHealthy.current = healthy;
       const now = Date.now();
       const gap = lastSampleAt.current > 0 && now - lastSampleAt.current > SAMPLE_GAP_MS;
       lastSampleAt.current = now;
@@ -508,7 +517,9 @@ export function StatusProvider({ children }: { children: ReactNode }) {
       slow.push(systemPacStatus().then((v) => fresh() && setPac(v)).catch(() => {}));
     }
     // VPN включают и выключают в любой момент - смотрим раз в ~30 с.
-    if (full || t % VPN_CHECK_EVERY_TICKS === 0) {
+    // Прокси моста только что упал - VPN смотрим на этом же тике.
+    if (full || vpnSoon.current || t % VPN_CHECK_EVERY_TICKS === 0) {
+      vpnSoon.current = false;
       slow.push(vpnStatus().then((v) => fresh() && setVpn(v)).catch(() => {}));
     }
     // Мост не отвечает - не удалил ли его антивирус (событие могло прийти,
