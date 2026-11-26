@@ -26,6 +26,7 @@ mod macos;
 #[cfg(any(target_os = "windows", test))]
 mod lnk;
 mod monitor;
+mod net_bypass;
 mod proxy;
 mod regval;
 mod settings;

@@ -34,6 +34,8 @@ thiserror = "1"
 regex = "1"
 ed25519-dalek = "2"
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "socks"], default-features = false }
+# Привязка сокетов к физическому интерфейсу - проверки прокси мимо VPN.
+socket2 = { version = "0.6", features = ["all"] }
 url = "2"
 base64 = "0.22"
 tracing = "0.1"

@@ -50,13 +50,39 @@ async fn probe_through(url: &str) -> Result<(), String> {
         Some(rest) => format!("socks5h://{rest}"),
         None => url.to_string(),
     };
-    let proxy = reqwest::Proxy::all(&url).map_err(|e| format!("Неверный адрес прокси: {e}"))?;
-    let client = reqwest::Client::builder()
-        .proxy(proxy)
-        .connect_timeout(std::time::Duration::from_secs(5))
-        .timeout(std::time::Duration::from_secs(8))
-        .build()
-        .map_err(|e| format!("Внутренняя ошибка: {e}"))?;
+    let builder = || -> Result<reqwest::ClientBuilder, String> {
+        let proxy = reqwest::Proxy::all(&url).map_err(|e| format!("Неверный адрес прокси: {e}"))?;
+        Ok(reqwest::Client::builder()
+            .proxy(proxy)
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .timeout(std::time::Duration::from_secs(8)))
+    };
+    // VPN включён - проверяем мимо него, как ходит мост. Мимо не пустил -
+    // ещё раз обычным путём.
+    let (b, bound) = crate::net_bypass::apply(builder()?, &proxy_host(&url));
+    let r = probe_with(b.build().map_err(|e| format!("Внутренняя ошибка: {e}"))?).await;
+    if bound && r.is_err() {
+        let plain = probe_with(builder()?.build().map_err(|e| format!("Внутренняя ошибка: {e}"))?).await;
+        if plain.is_ok() {
+            crate::net_bypass::note_blocked();
+        }
+        return plain;
+    }
+    r
+}
+
+/// Хост прокси из адреса (для решения, обходить ли VPN).
+fn proxy_host(url: &str) -> String {
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    let rest = rest.rsplit_once('@').map_or(rest, |(_, r)| r);
+    let hostport = rest.split('/').next().unwrap_or(rest);
+    match hostport.rsplit_once(':') {
+        Some((h, p)) if p.chars().all(|c| c.is_ascii_digit()) => h.to_string(),
+        _ => hostport.to_string(),
+    }
+}
+
+async fn probe_with(client: reqwest::Client) -> Result<(), String> {
     let mut last = String::new();
     // Несколько целей: прокси (или сеть) иногда режет конкретный хост или
     // обычный http - тогда пробуем следующую, в том числе https (CONNECT).
@@ -111,11 +137,10 @@ async fn speed_through(url: &str, targets: &[&str]) -> Result<ProxySpeed, String
         None => url.to_string(),
     };
     let proxy = reqwest::Proxy::all(&url).map_err(|e| format!("Неверный адрес прокси: {e}"))?;
-    let client = reqwest::Client::builder()
-        .proxy(proxy)
-        .connect_timeout(std::time::Duration::from_secs(6))
-        .build()
-        .map_err(|e| format!("Внутренняя ошибка: {e}"))?;
+    let b = reqwest::Client::builder().proxy(proxy).connect_timeout(std::time::Duration::from_secs(6));
+    // Мимо VPN, если пинг не выяснил, что он туда не пускает.
+    let (b, _) = crate::net_bypass::apply(b, &proxy_host(&url));
+    let client = b.build().map_err(|e| format!("Внутренняя ошибка: {e}"))?;
     let mut last = "Не удалось начать замер".to_string();
     for target in targets {
         let resp = match tokio::time::timeout(std::time::Duration::from_secs(10), client.get(*target).send()).await {
@@ -475,12 +500,12 @@ pub async fn proxies_ping() -> Vec<ProxyPing> {
                 // провайдеров), иначе висел бы красным «нет связи», хотя
                 // мост через него работает. None - не ответил ни разу.
                 let probe = tokio::task::spawn_blocking(move || {
-                    use std::net::{TcpStream, ToSocketAddrs};
+                    use std::net::ToSocketAddrs;
                     let addr = format!("{h}:{p}").to_socket_addrs().ok()?.next()?;
                     (0..3)
                         .filter_map(|_| {
                             let t = std::time::Instant::now();
-                            TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(2500))
+                            crate::net_bypass::connect_timeout(&addr, std::time::Duration::from_millis(2500))
                                 .ok()
                                 .map(|_| t.elapsed().as_millis() as u64)
                         })

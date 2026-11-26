@@ -566,7 +566,8 @@ fn internet_ok() -> bool {
 fn measure_connect_ms(addr: &str) -> Option<u128> {
     let sock = addr.to_socket_addrs().ok()?.next()?;
     let start = Instant::now();
-    TcpStream::connect_timeout(&sock, Duration::from_secs(4)).ok()?;
+    // Мимо VPN, как ходит мост: иначе замер мерил бы путь через сервер VPN.
+    crate::net_bypass::connect_timeout(&sock, Duration::from_secs(4)).ok()?;
     Some(start.elapsed().as_millis())
 }
 
