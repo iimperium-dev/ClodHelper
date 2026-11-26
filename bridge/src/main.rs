@@ -33,6 +33,9 @@
 //! окна консоли нет ни у супервизора, ни у воркера.
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
+mod bypass;
+mod bypass_route;
+
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -1519,7 +1522,8 @@ async fn attempt_upstream(u: &Upstream, head: &[u8], is_connect: bool) -> Result
     let t0 = Instant::now();
     let tcp = timeout(
         UPSTREAM_CONNECT_TIMEOUT,
-        TcpStream::connect((u.host.as_str(), u.port)),
+        // Мимо VPN, если он забрал весь трафик (см. bypass).
+        bypass::connect(u.host.as_str(), u.port),
     )
     .await
     .map_err(|_| "нет ответа на TCP-коннект".to_string())?
@@ -1957,6 +1961,7 @@ fn healthz_json(state: &State) -> String {
         "via_direct": state.via_direct.load(Ordering::Relaxed),
         "errors": state.errors.load(Ordering::Relaxed),
         "upstreams": ups,
+        "vpn_bypass": bypass::status_json(),
         "last_errors": errors,
     })
     .to_string()
